@@ -1,0 +1,17 @@
+[package]
+name = "just-compare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.1", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.2", features = [] }
+serde = { version = "=1.0.229", features = ["derive"] }
+compare-text = { path = "../../../crates/compare-text" }
+compare-fs = { path = "../../../crates/compare-fs" }
+compare-merge = { path = "../../../crates/compare-merge" }
+tauri-plugin-dialog = "=2.8.2"

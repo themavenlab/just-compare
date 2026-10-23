@@ -1,0 +1,31 @@
+{
+  "name": "just-compare",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "packageManager": "npm@11.7.0",
+  "engines": {
+    "node": ">=22.17.0 <23",
+    "npm": ">=11 <12"
+  },
+  "workspaces": [
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/desktop",
+    "build": "npm run build --workspace apps/desktop",
+    "check": "npm run check --workspace apps/desktop",
+    "test": "npm run test --workspace apps/desktop",
+    "lint": "eslint apps/desktop/src",
+    "format:check": "prettier --check \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/scripts/*.mjs\" \"apps/desktop/*.{json,ts,html}\" \"apps/desktop/src-tauri/**/*.json\" package.json eslint.config.js",
+    "desktop:dev": "npm run tauri --workspace apps/desktop -- dev",
+    "desktop:build": "npm run tauri --workspace apps/desktop -- build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "prettier": "3.9.10",
+    "typescript-eslint": "8.71.1"
+  }
+}
