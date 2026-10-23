@@ -1,0 +1,4 @@
+[workspace]
+members = ["crates/compare-text", "crates/compare-fs", "crates/compare-merge", "crates/compare-cli"]
+resolver = "2"
+exclude = ["apps/desktop/src-tauri"]

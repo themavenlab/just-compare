@@ -1,0 +1,11 @@
+[package]
+name = "compare-text"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+similar = { version = "=3.2.0", default-features = false, features = ["std"] }
+encoding_rs = "=0.8.42"
+regex = "=1.13.1"
