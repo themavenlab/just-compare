@@ -1,500 +1,246 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { join } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { defaults, native, type Settings } from "./api";
+import { CommandMenu } from "./CommandMenu";
+import { errorMessage } from "./comparison";
+import { ComparisonWorkspace } from "./ComparisonWorkspace";
+import { ConfirmationDialog } from "./ConfirmationDialog";
 import {
-  alignmentGaps,
-  copyRange,
-  defaults,
-  native,
-  textLines,
-  type Block,
-  type DocumentView,
-  type FolderEntry,
-  type Preview,
-  type Settings,
-} from "./api";
-import { CodeEditor } from "./CodeEditor";
-import { errorMessage, type DiffSpan } from "./comparison";
-import { RefinedRegion } from "./RefinedRegion";
-import { VirtualList } from "./VirtualList";
+  sameSummary,
+  sessionWorkflow,
+  type SavedSession,
+  type Workflow,
+  type WorkspaceController,
+  type WorkspaceSummary,
+  type WorkspaceTab,
+} from "./workbench";
 
-type Side = "left" | "right" | "base";
-interface Editor {
-  text: string;
-  original: string;
-  document: DocumentView | null;
-  path: string;
-  history: string[];
-}
-const editor = (text = ""): Editor => ({
-  text,
-  original: text,
-  document: null,
-  path: "",
-  history: [],
-});
-type Editors = Record<Side, Editor>;
+const workflows = [
+  ["text", "Text Compare"],
+  ["folder", "Folder Compare"],
+  ["merge", "3-Way Merge"],
+] as const;
 
 export function App() {
-  const [editors, setEditors] = useState<Editors>({
-    left: editor("First line\nOriginal text\n"),
-    right: editor("First line\nUpdated text\n"),
-    base: editor(),
-  });
-  const [mode, setMode] = useState("text");
   const [settings, setSettings] = useState<Settings>(defaults);
-  const [settingsReady, setSettingsReady] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [spans, setSpans] = useState<DiffSpan[] | null>(null);
-  const [current, setCurrent] = useState(0);
-  const [refinement, setRefinement] = useState<DiffSpan[] | null>(null);
-  const [folders, setFolders] = useState<FolderEntry[]>([]);
-  const [folderRoots, setFolderRoots] = useState({ left: "", right: "" });
-  const [filter, setFilter] = useState("all");
-  const [criterion, setCriterion] = useState("content");
-  const [exclude, setExclude] = useState("");
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [blocks, setBlocks] = useState<Block[] | null>(null);
-  const [choices, setChoices] = useState<Record<number, string>>({});
-  const [output, setOutput] = useState("");
-  const [outputSaved, setOutputSaved] = useState("");
-  const [outputDocument, setOutputDocument] = useState<DocumentView | null>(
-    null,
+  const [settingsAvailable, setSettingsAvailable] = useState(!isTauri());
+  const [ready, setReady] = useState(!isTauri());
+  const [tabs, setTabs] = useState<WorkspaceTab[]>(() =>
+    isTauri()
+      ? []
+      : [
+          {
+            id: crypto.randomUUID(),
+            mode: "text",
+            left: "",
+            right: "",
+            base: "",
+            gitOutput: "",
+            parent: null,
+          },
+        ],
   );
-  const [gitOutput, setGitOutput] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [navigation, setNavigation] = useState(0);
-  const revision = useRef(0);
-  const activeJob = useRef<string | null>(null);
-  const [cancellableJob, setCancellableJob] = useState<string | null>(null);
-  function startJob(id: string) {
-    activeJob.current = id;
-    setCancellableJob(id);
-  }
-  const latest = useRef({
-    editors,
-    output,
-    outputSaved,
-    gitOutput,
-    mode,
-    busy,
-  });
+  const [active, setActive] = useState<string | null>(tabs[0]?.id ?? null);
+  const [owner, setOwner] = useState<string | null>(null);
+  const [summaries, setSummaries] = useState<Record<string, WorkspaceSummary>>(
+    {},
+  );
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [confirmation, setConfirmation] = useState<{
+    message: string;
+    decide: (approved: boolean) => void;
+  } | null>(null);
+  const approvalPending = useRef(false);
+  const confirmAction = useCallback((message: string): Promise<boolean> => {
+    if (approvalPending.current)
+      return Promise.reject(new Error("Another approval is already pending."));
+    approvalPending.current = true;
+    return new Promise((resolve) => {
+      setConfirmation({
+        message,
+        decide: (approved) => {
+          approvalPending.current = false;
+          setConfirmation(null);
+          resolve(approved);
+        },
+      });
+    });
+  }, []);
+  const controllers = useRef(new Map<string, WorkspaceController>());
+  const operation = useRef<string | null>(null);
+  const previewOwner = useRef<string | null>(null);
+  const tabStrip = useRef<HTMLDivElement>(null);
+  const latest = useRef({ active, tabs });
   useEffect(() => {
-    latest.current = { editors, output, outputSaved, gitOutput, mode, busy };
-  }, [editors, output, outputSaved, gitOutput, mode, busy]);
-
-  function invalidate() {
-    revision.current += 1;
-    setSpans(null);
-    setRefinement(null);
-    setBlocks(null);
-    setChoices({});
-    setError("");
-    setNotice("");
-  }
-  function invalidateFolders() {
-    setPreview(null);
-    setFolders([]);
-    setSelectedFiles([]);
-    setError("");
-    setNotice("");
-  }
-  function change(side: Side, text: string) {
-    invalidate();
-    setEditors((previous) => ({
-      ...previous,
-      [side]: {
-        ...previous[side],
-        text,
-        history: [...previous[side].history.slice(-49), previous[side].text],
-      },
-    }));
-  }
-  async function attempt(operation: () => Promise<void>) {
-    setError("");
-    setNotice("");
-    setBusy(true);
+    latest.current = { active, tabs };
+  }, [active, tabs]);
+  const acquire = useCallback((id: string) => {
+    if (operation.current) return false;
+    operation.current = id;
+    setOwner(id);
+    return true;
+  }, []);
+  const release = useCallback((id: string) => {
+    if (operation.current === id) {
+      operation.current = null;
+      setOwner(null);
+    }
+  }, []);
+  const register = useCallback(
+    (id: string, controller: WorkspaceController | null) => {
+      if (controller) controllers.current.set(id, controller);
+      else controllers.current.delete(id);
+    },
+    [],
+  );
+  const report = useCallback((id: string, summary: WorkspaceSummary) => {
+    setSummaries((prior) =>
+      sameSummary(prior[id], summary) ? prior : { ...prior, [id]: summary },
+    );
+  }, []);
+  const discardPreview = useCallback((id: string) => {
+    if (previewOwner.current === id) previewOwner.current = null;
+  }, []);
+  const claimPreview = useCallback(
+    async (id: string) => {
+      const previous = previewOwner.current;
+      if (
+        previous &&
+        !(await confirmAction(
+          "Replace the pending sync preview? The old preview will no longer be executable.",
+        ))
+      )
+        return false;
+      if (previous) controllers.current.get(previous)?.clearPreview();
+      previewOwner.current = id;
+      return true;
+    },
+    [confirmAction],
+  );
+  const diskChanged = useCallback((paths: string[]) => {
+    for (const [id, controller] of controllers.current)
+      if (id !== operation.current) controller.diskChanged(paths);
+  }, []);
+  const confirmGitExit = useCallback(
+    async (id: string) => {
+      if (
+        ![...controllers.current].some(
+          ([other, controller]) => other !== id && controller.dirty(),
+        )
+      )
+        return true;
+      return confirmAction(
+        "Save and accept the Git merge, then close the app? Unsaved edits in other tabs will be discarded.",
+      );
+    },
+    [confirmAction],
+  );
+  const openTab = useCallback(
+    (
+      mode: Workflow,
+      paths: Partial<
+        Pick<WorkspaceTab, "left" | "right" | "base" | "parent">
+      > = {},
+    ) => {
+      const tab: WorkspaceTab = {
+        id: crypto.randomUUID(),
+        mode,
+        left: "",
+        right: "",
+        base: "",
+        gitOutput: "",
+        parent: null,
+        ...paths,
+      };
+      setTabs((prior) => [...prior, tab]);
+      setActive(tab.id);
+    },
+    [],
+  );
+  const openSession = useCallback(
+    (session: SavedSession) => {
+      try {
+        const mode = sessionWorkflow(session.mode);
+        if (mode === "merge" && !session.base)
+          throw new Error(
+            "This merge session has no base path; open the base explicitly.",
+          );
+        openTab(mode, {
+          left: session.left,
+          right: session.right,
+          base: session.base ?? "",
+        });
+      } catch (failure) {
+        setError(errorMessage(failure));
+      }
+    },
+    [openTab],
+  );
+  async function closeWindow() {
+    const id = latest.current.active ?? "window-close";
+    if (!acquire(id)) {
+      setError(
+        "Wait for the active operation to finish or cancel it before closing.",
+      );
+      return;
+    }
     try {
-      await operation();
-    } catch (failure: unknown) {
+      if (
+        [...controllers.current.values()].some((controller) =>
+          controller.dirty(),
+        ) &&
+        !(await confirmAction("Discard unsaved edits in all tabs and close?"))
+      )
+        return;
+      await getCurrentWindow().destroy();
+    } finally {
+      release(id);
+    }
+  }
+  async function closeTab(id: string) {
+    const currentTabs = latest.current.tabs;
+    const tab = currentTabs.find((item) => item.id === id);
+    if (tab?.gitOutput) {
+      await closeWindow();
+      return;
+    }
+    if (!acquire(id)) {
+      setError(
+        "Wait for the active operation to finish or cancel it before closing a tab.",
+      );
+      return;
+    }
+    try {
+      const controller = controllers.current.get(id);
+      if (
+        controller?.dirty() &&
+        !(await confirmAction("Discard unsaved edits and close this tab?"))
+      )
+        return;
+      if (
+        previewOwner.current === id &&
+        !(await confirmAction(
+          "Discard this tab's pending sync preview and close?",
+        ))
+      )
+        return;
+      await controller?.dispose();
+      discardPreview(id);
+      controllers.current.delete(id);
+      const index = currentTabs.findIndex((tab) => tab.id === id);
+      setTabs((prior) => prior.filter((tab) => tab.id !== id));
+      if (latest.current.active === id)
+        setActive(
+          currentTabs[index + 1]?.id ?? currentTabs[index - 1]?.id ?? null,
+        );
+    } catch (failure) {
       setError(errorMessage(failure));
     } finally {
-      activeJob.current = null;
-      setCancellableJob(null);
-      setBusy(false);
+      release(id);
     }
   }
-  async function discard(side: Side) {
-    const e = latest.current.editors[side];
-    return (
-      e.text === e.original ||
-      (await confirm(`Discard unsaved ${side} edits?`, { kind: "warning" }))
-    );
-  }
-  async function load(
-    side: Side,
-    path: string,
-    encoding: string | null = null,
-    checkDiscard = true,
-  ) {
-    if (checkDiscard && !(await discard(side))) return;
-    const document = await native("open_document", {
-      path,
-      encoding,
-    });
-    const previous = latest.current.editors[side].document;
-    if (previous) {
-      try {
-        await native("close_document", { id: previous.id });
-      } catch (error) {
-        await native("close_document", { id: document.id });
-        throw error;
-      }
-    }
-    invalidate();
-    setEditors((prior) => ({
-      ...prior,
-      [side]: {
-        text: document.text,
-        original: document.text,
-        document,
-        path: document.path,
-        history: [],
-      },
-    }));
-    setSettings((prior) => ({
-      ...prior,
-      recent: [
-        document.path,
-        ...prior.recent.filter((p) => p !== document.path),
-      ].slice(0, 20),
-    }));
-  }
-  async function loadDialog(side: Side) {
-    const path = await open({ multiple: false, directory: mode === "folder" });
-    if (typeof path !== "string") return;
-    if (mode === "folder") {
-      invalidateFolders();
-      if (side !== "base")
-        setFolderRoots((prior) => ({ ...prior, [side]: path }));
-    } else await load(side, path);
-  }
-  async function openSide(side: Side, encoding: string | null = null) {
-    await load(side, editors[side].path, encoding);
-  }
-  function undoSide(side: Side) {
-    const text = editors[side].history.at(-1);
-    if (text === undefined) return;
-    invalidate();
-    setEditors((prior) => ({
-      ...prior,
-      [side]: {
-        ...prior[side],
-        text,
-        history: prior[side].history.slice(0, -1),
-      },
-    }));
-  }
-  async function saveSide(side: Side, asNew = false, convert = false) {
-    const e = editors[side];
-    let destination: string | null = null;
-    if (asNew || !e.document)
-      destination = await save({
-        title: "Save to a new file (existing files are not overwritten)",
-      });
-    if ((asNew || !e.document) && !destination) return;
-    const document = await native("save_document", {
-      id: e.document?.id ?? null,
-      text: e.text,
-      destination,
-      convertUtf8: convert,
-    });
-    setPreview(null);
-    invalidate();
-    setEditors((prior) => ({
-      ...prior,
-      [side]: {
-        ...prior[side],
-        text: document.text,
-        original: document.text,
-        document,
-        path: document.path,
-      },
-    }));
-    setNotice(`${side} saved.`);
-  }
-  async function compareInputs(inputs = editors, afterCopy?: DiffSpan) {
-    const request = ++revision.current;
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    if (!afterCopy) setSpans(null);
-    setRefinement(null);
-    const profile = settings.formats.find((f) =>
-      inputs.left.path.toLowerCase().endsWith(f.suffix.toLowerCase()),
-    );
-    const result = await native("compare_text", {
-      left: inputs.left.text,
-      right: inputs.right.text,
-      jobId,
-      options: {
-        ignoreCase: profile?.ignoreCase ?? settings.ignoreCase,
-        ignoreWhitespace:
-          profile?.ignoreWhitespace ?? settings.ignoreWhitespace,
-        ignoreLineEndings:
-          profile?.ignoreLineEndings ?? settings.ignoreLineEndings,
-        patterns: profile?.patterns ?? settings.unimportantPatterns,
-      },
-    });
-    if (request === revision.current) {
-      setSpans(result);
-      if (afterCopy) {
-        const remaining = result.filter((span) => span.kind !== "equal");
-        const next = remaining.findIndex(
-          (span) => span.leftStart >= afterCopy.leftStart,
-        );
-        setCurrent(next < 0 ? Math.max(0, remaining.length - 1) : next);
-      } else {
-        setCurrent(0);
-        setNavigation((value) => value + 1);
-      }
-    }
-  }
-  const changes = spans?.filter((s) => s.kind !== "equal") ?? [];
-  const editorGaps = useMemo(
-    () => ({
-      left: alignmentGaps(spans ?? [], "left"),
-      right: alignmentGaps(spans ?? [], "right"),
-    }),
-    [spans],
-  );
-  const selected = changes[current];
-  function selectDifference(index: number) {
-    setCurrent(index);
-    setRefinement(null);
-    setNavigation((value) => value + 1);
-  }
-  async function copyDifference(source: "left" | "right", span: DiffSpan) {
-    const destination = source === "left" ? "right" : "left";
-    const text = copyRange(
-      editors[source].text,
-      editors[destination].text,
-      source === "left" ? span.leftStart : span.rightStart,
-      source === "left" ? span.leftEnd : span.rightEnd,
-      destination === "left" ? span.leftStart : span.rightStart,
-      destination === "left" ? span.leftEnd : span.rightEnd,
-    );
-    const inputs = {
-      ...editors,
-      [destination]: {
-        ...editors[destination],
-        text,
-        history: [
-          ...editors[destination].history.slice(-49),
-          editors[destination].text,
-        ],
-      },
-    };
-    revision.current += 1;
-    setRefinement(null);
-    setBlocks(null);
-    setChoices({});
-    setEditors(inputs);
-    try {
-      await compareInputs(inputs, span);
-    } catch (failure) {
-      setSpans(null);
-      throw failure;
-    } finally {
-      document
-        .querySelector<HTMLElement>(
-          `.cm-content[aria-label="${destination === "left" ? "Left text" : "Right text"}"]`,
-        )
-        ?.focus({ preventScroll: true });
-    }
-    setNotice(
-      `Copied to ${destination} draft. Differences refreshed; Save writes the file.`,
-    );
-  }
-  const leftLines = textLines(editors.left.text);
-  const rightLines = textLines(editors.right.text);
-  const aligned =
-    spans?.flatMap((span) =>
-      Array.from(
-        {
-          length: Math.max(
-            span.leftEnd - span.leftStart,
-            span.rightEnd - span.rightStart,
-          ),
-        },
-        (_, offset) => ({
-          kind: span.kind,
-          left:
-            offset < span.leftEnd - span.leftStart
-              ? span.leftStart + offset
-              : null,
-          right:
-            offset < span.rightEnd - span.rightStart
-              ? span.rightStart + offset
-              : null,
-        }),
-      ),
-    ) ?? [];
-
-  async function scan() {
-    setPreview(null);
-    setFolders([]);
-    setSelectedFiles([]);
-    setProgress(0);
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const result = await native("scan_folders", {
-      left: folderRoots.left,
-      right: folderRoots.right,
-      options: folderOptions(),
-      jobId,
-    });
-    setFolders(result);
-    setNotice(`Scan complete: ${result.length} file entries.`);
-  }
-  function folderOptions() {
-    return { criterion, exclude: exclude.split("\n").filter(Boolean) };
-  }
-  async function createPreview(
-    syncMode: string,
-    selected: string[] | null = null,
-  ) {
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const result = await native("preview_sync", {
-      left: folderRoots.left,
-      right: folderRoots.right,
-      options: folderOptions(),
-      mode: syncMode,
-      selected,
-      jobId,
-    });
-    setPreview(result);
-  }
-  async function previewFile(relative: string, action: string) {
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const result = await native("preview_file_action", {
-      left: folderRoots.left,
-      right: folderRoots.right,
-      options: folderOptions(),
-      relative,
-      action,
-      jobId,
-    });
-    setPreview(result);
-  }
-  async function executePreview() {
-    if (
-      !preview ||
-      !(await confirm(
-        `Execute these ${preview.operations.length} operations from LEFT to RIGHT? Overwrites and recycle-bin deletions are included exactly as listed.`,
-        { kind: "warning" },
-      ))
-    )
-      return;
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const id = preview.id;
-    setPreview(null);
-    const results = await native("execute_sync", { id, jobId });
-    const failures = results.filter((r) => r.error);
-    setNotice(
-      `Completed ${results.length - failures.length} of ${results.length} operations.`,
-    );
-    if (failures.length)
-      throw new Error(
-        failures.map((f) => `${f.relative}: ${f.error}`).join("\n"),
-      );
-    await scan();
-  }
-  async function mergeInputs() {
-    if (
-      output !== outputSaved &&
-      !(await confirm("Replace unsaved merge output with a new merge?", {
-        kind: "warning",
-      }))
-    )
-      return;
-    const result = await native("merge_text", {
-      base: editors.base.text,
-      left: editors.left.text,
-      right: editors.right.text,
-    });
-    setBlocks(result);
-    setChoices({});
-    setOutput(
-      result
-        .filter(
-          (b): b is Extract<Block, { kind: "resolved" }> =>
-            b.kind === "resolved",
-        )
-        .map((b) => b.text)
-        .join(""),
-    );
-  }
-  async function resolve(index: number, text: string) {
-    const generated =
-      blocks
-        ?.map((b, i) => (b.kind === "resolved" ? b.text : (choices[i] ?? "")))
-        .join("") ?? "";
-    if (
-      output !== generated &&
-      !(await confirm(
-        "Replace manual output edits with this conflict resolution?",
-        { kind: "warning" },
-      ))
-    )
-      return;
-    const updated = { ...choices, [index]: text };
-    setChoices(updated);
-    setOutput(
-      blocks
-        ?.map((b, i) => (b.kind === "resolved" ? b.text : (updated[i] ?? "")))
-        .join("") ?? "",
-    );
-  }
-  const unresolved =
-    blocks?.filter((b, i) => b.kind === "conflict" && choices[i] === undefined)
-      .length ?? 0;
-  async function saveOutput() {
-    if (!blocks || unresolved)
-      throw new Error("Resolve all conflicts before saving output.");
-    const destination = outputDocument
-      ? null
-      : gitOutput || (await save({ title: "Save merge output to a new file" }));
-    if (!outputDocument && !destination) return;
-    const document = await native("save_document", {
-      id: outputDocument?.id ?? null,
-      text: output,
-      destination,
-      convertUtf8: false,
-    });
-    setOutputDocument(document);
-    setOutput(document.text);
-    setOutputSaved(document.text);
-    setNotice("Merge output saved.");
-    if (gitOutput)
-      await native("finish_git_merge", {
-        success: true,
-        outputId: document.id,
-        resolutions: blocks.map((b, i) =>
-          b.kind === "resolved" ? null : (choices[i] ?? null),
-        ),
-      });
-  }
-
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -505,91 +251,97 @@ export function App() {
           const initial = await native("read_settings");
           if (!disposed) {
             setSettings(initial);
-            setSettingsReady(true);
+            setSettingsAvailable(true);
           }
         } catch (failure) {
           if (!disposed) setError(errorMessage(failure));
         }
         const args = await native("launch_arguments");
         if (disposed) return;
-        if (args[0] === "git-diff" && args.length === 3) {
-          await load("left", args[1] ?? "");
-          await load("right", args[2] ?? "");
-        } else if (args[0] === "git-merge" && args.length === 5) {
-          setMode("merge");
-          setGitOutput(args[4] ?? "");
-          await load("base", args[1] ?? "");
-          await load("left", args[2] ?? "");
-          await load("right", args[3] ?? "");
-          const document = await native("open_git_output");
-          if (!disposed && document) {
-            setOutputDocument(document);
-            setOutput(document.text);
-            setOutputSaved(document.text);
-          }
-        } else if (args[0] === "gui" && args.length === 3) {
-          setMode("folder");
-          setFolderRoots({ left: args[1] ?? "", right: args[2] ?? "" });
-        } else if (args.length) {
-          throw new Error("Unsupported desktop arguments.");
-        }
+        let tab: WorkspaceTab = {
+          id: crypto.randomUUID(),
+          mode: "text",
+          left: "",
+          right: "",
+          base: "",
+          gitOutput: "",
+          parent: null,
+        };
+        if (args[0] === "git-diff" && args.length === 3)
+          tab = { ...tab, left: args[1] ?? "", right: args[2] ?? "" };
+        else if (args[0] === "git-merge" && args.length === 5)
+          tab = {
+            ...tab,
+            mode: "merge",
+            base: args[1] ?? "",
+            left: args[2] ?? "",
+            right: args[3] ?? "",
+            gitOutput: args[4] ?? "",
+          };
+        else if (args[0] === "gui" && args.length === 3)
+          tab = {
+            ...tab,
+            mode: "folder",
+            left: args[1] ?? "",
+            right: args[2] ?? "",
+          };
+        else if (args.length) throw new Error("Unsupported desktop arguments.");
+        setTabs([tab]);
+        setActive(tab.id);
+        setReady(true);
       } catch (failure) {
-        if (!disposed) setError(errorMessage(failure));
+        if (!disposed) {
+          setError(errorMessage(failure));
+          setReady(true);
+        }
       }
     })();
     void (async () => {
       try {
         const close = await getCurrentWindow().onCloseRequested(
           async (event) => {
-            const state = latest.current;
-            if (
-              Object.values(state.editors).some((e) => e.text !== e.original) ||
-              state.output !== state.outputSaved
-            ) {
-              event.preventDefault();
-              if (
-                await confirm("Discard unsaved edits and close?", {
-                  kind: "warning",
-                })
-              )
-                await getCurrentWindow().destroy();
+            event.preventDefault();
+            try {
+              await closeWindow();
+            } catch (failure) {
+              setError(errorMessage(failure));
             }
           },
         );
         if (disposed) close();
         else cleanup.push(close);
         const drop = await getCurrentWindow().onDragDropEvent((event) => {
-          if (event.payload.type === "drop") {
-            const paths = event.payload.paths;
-            if (latest.current.busy) {
-              setError("Wait for the active operation before dropping paths.");
-              return;
-            }
-            void attempt(async () => {
-              if (latest.current.mode === "folder") {
-                invalidateFolders();
-                setFolderRoots((prior) => ({
-                  left: paths[0] ?? prior.left,
-                  right: paths[1] ?? prior.right,
-                }));
-              } else {
-                if (paths[0]) await load("left", paths[0]);
-                if (paths[1]) await load("right", paths[1]);
-              }
-            });
+          if (event.payload.type !== "drop") return;
+          if (operation.current) {
+            setError("Wait for the active operation before dropping paths.");
+            return;
           }
+          const id = latest.current.active;
+          const controller = id ? controllers.current.get(id) : null;
+          if (controller)
+            void controller
+              .drop(event.payload.paths)
+              .catch((failure) => setError(errorMessage(failure)));
+          else
+            openTab("text", {
+              left: event.payload.paths[0] ?? "",
+              right: event.payload.paths[1] ?? "",
+            });
         });
         if (disposed) drop();
         else cleanup.push(drop);
-        const progressListener = await listen<[string, number]>(
+        const progress = await listen<[string, number]>(
           "operation-progress",
           (event) => {
-            if (event.payload[0] === activeJob.current)
-              setProgress(event.payload[1]);
+            const id = operation.current;
+            if (id)
+              controllers.current
+                .get(id)
+                ?.progress(event.payload[0], event.payload[1]);
           },
         );
-        if (disposed) progressListener();
-        else cleanup.push(progressListener);
+        if (disposed) progress();
+        else cleanup.push(progress);
       } catch (failure) {
         if (!disposed) setError(errorMessage(failure));
       }
@@ -598,1159 +350,438 @@ export function App() {
       disposed = true;
       for (const unlisten of cleanup) unlisten();
     };
-    // Initialization intentionally runs once; event callbacks use the latest state ref.
+    // Native listeners belong to the shell; they route through current tab/controller refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
   }, [settings.theme]);
-
-  function renderEditor(side: Side) {
-    const e = editors[side];
-    return (
-      <section className="editor" key={side}>
-        <div className="pane-heading">
-          <h3>
-            {side === "base"
-              ? "Base / common ancestor"
-              : side === "left"
-                ? "Left"
-                : "Right"}
-          </h3>
-          <span className={e.text !== e.original ? "badge unsaved" : "badge"}>
-            {mode === "folder"
-              ? "Folder"
-              : e.text !== e.original
-                ? "Unsaved"
-                : e.document
-                  ? "Saved"
-                  : "Draft"}
-          </span>
-        </div>
-        <label>
-          {mode === "folder" ? "Folder path" : "File path"}
-          <input
-            aria-label={`${side} path`}
-            name={`${side}-path`}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={
-              mode === "folder"
-                ? "Choose a folder or paste its path..."
-                : "Choose a file or paste its path..."
-            }
-            value={
-              mode === "folder" && side !== "base" ? folderRoots[side] : e.path
-            }
-            disabled={busy}
-            onChange={(event) => {
-              const path = event.target.value;
-              if (mode === "folder" && side !== "base") {
-                invalidateFolders();
-                setFolderRoots((prior) => ({ ...prior, [side]: path }));
-              } else {
-                setEditors((prior) => ({
-                  ...prior,
-                  [side]: { ...prior[side], path },
-                }));
-              }
-            }}
-          />
-        </label>
-        <div className="toolbar compact">
-          <button
-            aria-label={`Browse ${side}`}
-            disabled={busy}
-            onClick={() => void attempt(() => loadDialog(side))}
-          >
-            Browse
-          </button>
-          {mode !== "folder" && (
-            <>
-              <button
-                aria-label={`Open ${side}`}
-                disabled={busy || !e.path}
-                onClick={() => void attempt(() => openSide(side))}
-              >
-                Open
-              </button>
-              <button
-                aria-label={`Save ${side}`}
-                disabled={busy}
-                onClick={() => void attempt(() => saveSide(side))}
-              >
-                Save
-              </button>
-              <button
-                aria-label={`Save ${side} As`}
-                disabled={busy}
-                onClick={() => void attempt(() => saveSide(side, true))}
-              >
-                Save As
-              </button>
-              <button
-                aria-label={`Undo ${side}`}
-                disabled={busy || !e.history.length}
-                onClick={() => undoSide(side)}
-              >
-                Undo
-              </button>
-              <details className="file-options">
-                <summary>More</summary>
-                <div className="toolbar compact">
-                  <button
-                    disabled={busy || !e.path}
-                    onClick={() =>
-                      void attempt(async () => {
-                        const encoding = window.prompt(
-                          "Encoding label (for example windows-1252 or utf-16le):",
-                        );
-                        if (encoding) await openSide(side, encoding);
-                      })
-                    }
-                  >
-                    Encoding...
-                  </button>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      void attempt(async () => {
-                        if (
-                          await confirm(
-                            "Convert to UTF-8 and save to a new file?",
-                            { kind: "warning" },
-                          )
-                        )
-                          await saveSide(side, true, true);
-                      })
-                    }
-                  >
-                    UTF-8 copy
-                  </button>
-                </div>
-              </details>
-            </>
-          )}
-        </div>
-        {mode !== "folder" && (
-          <>
-            <p className="metadata">
-              {e.document?.encoding ?? "UTF-8 draft"}{" "}
-              {e.document?.bom ? "/ BOM" : ""}{" "}
-              {e.text !== e.original ? "/ unsaved" : ""}
-            </p>
-            <label>
-              {side === "left"
-                ? "Left text"
-                : side === "right"
-                  ? "Right text"
-                  : "Base text"}
-              <CodeEditor
-                text={e.text}
-                disabled={busy}
-                path={e.path}
-                label={
-                  side === "left"
-                    ? "Left text"
-                    : side === "right"
-                      ? "Right text"
-                      : "Base text"
-                }
-                onChange={(text) => change(side, text)}
-                differences={
-                  mode === "text" && side !== "base" ? (spans ?? []) : []
-                }
-                side={side === "right" ? "right" : "left"}
-                selectedDifference={mode === "text" ? selected : undefined}
-                onCopyDifference={
-                  mode === "text" && side !== "base"
-                    ? (span) => void attempt(() => copyDifference(side, span))
-                    : undefined
-                }
-                gaps={
-                  mode === "text" && side !== "base"
-                    ? editorGaps[side]
-                    : undefined
-                }
-                selectedLine={
-                  mode === "text" && side !== "base" && selected
-                    ? side === "left"
-                      ? selected.leftStart
-                      : selected.rightStart
-                    : undefined
-                }
-                navigation={navigation}
-                scrollTop={
-                  mode === "text" && side !== "base" ? scrollTop : undefined
-                }
-                onScroll={
-                  mode === "text" && side !== "base" ? setScrollTop : undefined
-                }
-              />
-            </label>
-          </>
-        )}
-      </section>
-    );
-  }
-  const visibleFolders = folders.filter(
-    (row) =>
-      filter === "all" ||
-      (filter === "differences"
-        ? row.status !== "same"
-        : row.status === filter),
-  );
-  function renderFolderSide(row: FolderEntry, side: "left" | "right") {
-    const size = side === "left" ? row.leftSize : row.rightSize;
-    const missing = row.status === (side === "left" ? "rightOnly" : "leftOnly");
-    const label = side === "left" ? "Left" : "Right";
-    return (
-      <div
-        className={`folder-file ${missing ? "missing" : row.status}`}
-        aria-label={`${label}: ${row.relative}`}
-      >
-        <span
-          className="file-name"
-          title={row.detail ? `${row.relative}: ${row.detail}` : row.relative}
-        >
-          {missing
-            ? "Not present"
-            : `${row.isDirectory ? "[dir] " : ""}${row.relative}`}
-        </span>
-        <span className="file-size">
-          {missing
-            ? "-"
-            : row.isDirectory
-              ? "Folder"
-              : size === null
-                ? "Size unavailable"
-                : `${size.toLocaleString()} bytes`}
-        </span>
-      </div>
-    );
-  }
-  const inputs = (
-    <section
-      className={`panes ${mode === "merge" ? "three" : mode === "folder" ? "folder-inputs" : ""}`}
-      aria-label={mode === "folder" ? "Folder inputs" : "Text inputs"}
-    >
-      {mode === "merge" && renderEditor("base")}
-      {renderEditor("left")}
-      {renderEditor("right")}
-    </section>
-  );
-  return (
-    <main
-      id="workbench"
-      onKeyDownCapture={(event) => {
-        if (busy) return;
-        if (
-          (event.ctrlKey || event.metaKey) &&
-          event.key === "Enter" &&
-          (mode === "text" || mode === "folder" || mode === "merge")
-        ) {
-          event.preventDefault();
-          void attempt(() =>
-            mode === "folder"
-              ? scan()
-              : mode === "merge"
-                ? mergeInputs()
-                : compareInputs(),
-          );
-        } else if (
-          (event.ctrlKey || event.metaKey) &&
-          event.key.toLowerCase() === "s"
-        ) {
-          event.preventDefault();
-          const label =
-            event.target instanceof HTMLElement
-              ? event.target.closest("[aria-label]")?.getAttribute("aria-label")
-              : null;
-          if (mode === "merge" && label === "Merge output")
-            void attempt(saveOutput);
-          else if (label === "Left text") void attempt(() => saveSide("left"));
-          else if (label === "Right text")
-            void attempt(() => saveSide("right"));
-          else if (label === "Base text") void attempt(() => saveSide("base"));
-        } else if (
-          mode === "text" &&
-          event.altKey &&
-          changes.length &&
-          (event.key === "ArrowDown" || event.key === "ArrowUp")
-        ) {
-          event.preventDefault();
-          selectDifference(
-            (current + (event.key === "ArrowDown" ? 1 : -1) + changes.length) %
-              changes.length,
-          );
+  useEffect(() => {
+    tabStrip.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active]);
+  useEffect(() => {
+    const keys = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.defaultPrevented) return;
+      const name = event.key.toLowerCase();
+      if (event.key !== "Tab" && name !== "w" && event.key !== "Enter") return;
+      event.preventDefault();
+      if (approvalPending.current) return;
+      const state = latest.current;
+      if (name === "w") {
+        if (state.active) void closeTab(state.active);
+      } else if (event.key === "Enter") {
+        if (state.active) controllers.current.get(state.active)?.command("run");
+      } else if (state.tabs.length) {
+        const index = state.tabs.findIndex((tab) => tab.id === state.active);
+        const next =
+          index < 0
+            ? event.shiftKey
+              ? state.tabs.length - 1
+              : 0
+            : (index + (event.shiftKey ? -1 : 1) + state.tabs.length) %
+              state.tabs.length;
+        const id = state.tabs[next]?.id;
+        if (id) {
+          setActive(id);
+          tabStrip.current
+            ?.querySelector<HTMLElement>(`[data-tab="${id}"]`)
+            ?.focus();
         }
-      }}
-    >
-      <a className="skip-link" href="#workspace">
-        Skip to comparison
-      </a>
-      <header className="app-header">
-        <div>
-          <p className="eyebrow">PHASE 1 WORKBENCH</p>
-          <h1>Compare Workbench</h1>
-        </div>
-        <span className="privacy-badge">Local files. No uploads.</span>
+      }
+    };
+    document.addEventListener("keydown", keys);
+    return () => document.removeEventListener("keydown", keys);
+    // Global shortcuts use the same current controllers as native shell events.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function command(name: string) {
+    if (active) controllers.current.get(active)?.command(name);
+  }
+  const blocked = !!owner;
+  return (
+    <div className="workbench-shell">
+      <header className="shell-header">
+        <h1>Just Compare</h1>
+        <span>Phase 1 / local files</span>
       </header>
-      <nav className="workflow-nav" aria-label="Workflows">
-        {(
-          [
-            ["text", "Text Compare", "Compare & edit two files"],
-            ["folder", "Folder Compare", "Review & sync two folders"],
-            ["merge", "3-Way Merge", "Resolve changes against a base"],
-          ] as const
-        ).map(([tab, title, description]) => (
-          <button
-            key={tab}
-            disabled={busy}
-            aria-pressed={mode === tab}
-            onClick={() => {
-              if (mode === tab) return;
-              setError("");
-              setNotice("");
-              setMode(tab);
-            }}
-          >
-            <strong>{title}</strong>
-            <span>{description}</span>
-          </button>
-        ))}
-      </nav>
-      <div className="workspace-heading" id="workspace" tabIndex={-1}>
-        <div>
-          <h2>
-            {mode === "folder"
-              ? "Compare folders"
-              : mode === "merge"
-                ? "Merge three files"
-                : "Compare text"}
-          </h2>
-          <p>
-            {mode === "folder"
-              ? "Choose two folders, scan for differences, then preview changes before syncing."
-              : mode === "merge"
-                ? "Open a common base and two versions. Generate a merge, resolve conflicts, then save the output."
-                : "Browse for two files or paste text below, then Compare. The starting text is an editable sample."}
-          </p>
-        </div>
-        <details className="preferences">
-          <summary>Preferences</summary>
-          <div className="toolbar compact">
-            <button
-              disabled={busy}
-              onClick={() =>
+      <nav className="menubar" aria-label="Application commands">
+        <CommandMenu
+          label="File"
+          commands={[
+            ...workflows.map(([mode, label]) => ({
+              label: `New ${label}`,
+              run: () => openTab(mode),
+              disabled: !ready || blocked,
+            })),
+            {
+              label: "Open left...",
+              run: () => command("browse:left"),
+              disabled: !active || blocked,
+            },
+            {
+              label: "Open right...",
+              run: () => command("browse:right"),
+              disabled: !active || blocked,
+            },
+            {
+              label: "Save left",
+              run: () => command("save:left"),
+              disabled:
+                !active ||
+                blocked ||
+                tabs.find((tab) => tab.id === active)?.mode === "folder",
+            },
+            {
+              label: "Save right",
+              run: () => command("save:right"),
+              disabled:
+                !active ||
+                blocked ||
+                tabs.find((tab) => tab.id === active)?.mode === "folder",
+            },
+            {
+              label: "Close tab",
+              run: () => {
+                if (active) void closeTab(active);
+              },
+              disabled: !active || blocked,
+            },
+            {
+              label: "Save merge output",
+              run: () => command("save-output"),
+              disabled: blocked || !active || !summaries[active]?.canSaveOutput,
+            },
+          ]}
+        />
+        <CommandMenu
+          label="Edit"
+          commands={[
+            {
+              label: "Undo left",
+              run: () => command("undo:left"),
+              disabled: !active || blocked || !summaries[active]?.undoLeft,
+            },
+            {
+              label: "Undo right",
+              run: () => command("undo:right"),
+              disabled: !active || blocked || !summaries[active]?.undoRight,
+            },
+          ]}
+        />
+        <CommandMenu
+          label="Session"
+          commands={[
+            {
+              label: "Sessions and recent files",
+              run: () => command("sessions"),
+              disabled: !active,
+            },
+            ...settings.sessions.map((session) => ({
+              label: `Open ${session.name}`,
+              run: () => openSession(session),
+              disabled: blocked,
+            })),
+          ]}
+        />
+        <CommandMenu
+          label="Actions"
+          commands={[
+            {
+              label: "Compare / scan / merge",
+              run: () => command("run"),
+              disabled: !active || blocked,
+            },
+            {
+              label: "Swap sides",
+              run: () => command("swap"),
+              disabled: !active || blocked,
+            },
+            {
+              label: "Previous difference",
+              run: () => command("previous"),
+              disabled: !active || blocked || !summaries[active]?.differences,
+            },
+            {
+              label: "Next difference",
+              run: () => command("next"),
+              disabled: !active || blocked || !summaries[active]?.differences,
+            },
+          ]}
+        />
+        <CommandMenu
+          label="View"
+          commands={[
+            {
+              label: "Aligned view and range details",
+              run: () => command("details"),
+              disabled: tabs.find((tab) => tab.id === active)?.mode !== "text",
+            },
+            {
+              label: "Difference legend",
+              run: () => command("legend"),
+              disabled: tabs.find((tab) => tab.id === active)?.mode !== "text",
+            },
+            {
+              label: "Comparison rules",
+              run: () => command("rules"),
+              disabled:
+                !active ||
+                tabs.find((tab) => tab.id === active)?.mode === "merge",
+            },
+            {
+              label: "Preferences",
+              run: () => command("preferences"),
+              disabled: !active,
+            },
+            {
+              label: "Toggle theme",
+              run: () =>
                 setSettings((prior) => ({
                   ...prior,
                   theme: prior.theme === "light" ? "dark" : "light",
-                }))
-              }
-            >
-              Toggle theme
-            </button>
+                })),
+            },
+          ]}
+        />
+        <CommandMenu
+          label="Help"
+          commands={[
+            {
+              label: "Keyboard shortcuts",
+              run: () =>
+                setInfo(
+                  "Shortcuts: Ctrl+Enter run; Ctrl+S save focused editor; Alt+Up/Down differences; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
+                ),
+            },
+            {
+              label: "About Phase 1",
+              run: () =>
+                setInfo(
+                  "Original local text/folder/merge workbench. Copies in text edit drafts; folder actions require previews. No uploads. Not complete Beyond Compare parity.",
+                ),
+            },
+          ]}
+        />
+        <div className="new-comparisons" aria-label="New comparison">
+          {workflows.map(([mode, label]) => (
             <button
-              disabled={busy || !settingsReady}
-              onClick={() =>
-                void attempt(async () => {
-                  await native("write_settings", { settings });
-                  setNotice("Preferences saved.");
-                })
-              }
+              key={mode}
+              disabled={!ready || blocked}
+              onClick={() => openTab(mode)}
             >
-              Save preferences
+              {label}
             </button>
-          </div>
-          <p className="metadata">
-            Save preferences to persist the theme, rules, profiles, and
-            sessions.
-          </p>
-        </details>
-      </div>
-      <div className="status-bar" role="status">
-        <span>
-          {notice ||
-            (busy ? `Working... ${progress} entries scanned` : "Ready")}
-        </span>
-        <span className="shortcut-hint">
-          Ctrl+Enter: run / Ctrl+S: save focused editor
-        </span>
-        {busy && cancellableJob && (
-          <button
-            onClick={() => {
-              const jobId = activeJob.current;
-              if (!jobId) return;
-              void native("cancel_job", { jobId }).catch((e) =>
-                setError(errorMessage(e)),
-              );
-            }}
-          >
-            Cancel
-          </button>
-        )}
+          ))}
+        </div>
+      </nav>
+      <div className="tabbar">
+        <button onClick={() => setActive(null)} aria-pressed={active === null}>
+          Home
+        </button>
+        <button
+          aria-label="Scroll tabs left"
+          onClick={() => tabStrip.current?.scrollBy({ left: -240 })}
+        >
+          {"\u2039"}
+        </button>
+        <div
+          className="tabstrip"
+          role="tablist"
+          aria-label="Comparisons"
+          ref={tabStrip}
+          onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+              return;
+            event.preventDefault();
+            const index = tabs.findIndex((tab) => tab.id === active);
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? tabs.length - 1
+                  : (index +
+                      (event.key === "ArrowRight" ? 1 : -1) +
+                      tabs.length) %
+                    tabs.length;
+            const id = tabs[next]?.id;
+            if (id) {
+              setActive(id);
+              tabStrip.current
+                ?.querySelector<HTMLElement>(`[data-tab="${id}"]`)
+                ?.focus();
+            }
+          }}
+        >
+          {tabs.map((tab) => (
+            <div
+              className={`tab ${active === tab.id ? "active-tab" : ""}`}
+              key={tab.id}
+            >
+              <button
+                role="tab"
+                id={`tab-${tab.id}`}
+                data-tab={tab.id}
+                aria-controls={`panel-${tab.id}`}
+                aria-selected={active === tab.id}
+                tabIndex={active === tab.id ? 0 : -1}
+                title={`${workflows.find(([mode]) => mode === tab.mode)?.[1]}: ${summaries[tab.id]?.title ?? "Loading"}`}
+                onClick={() => setActive(tab.id)}
+              >
+                <span className="tab-kind">
+                  {tab.mode === "folder"
+                    ? "Folder"
+                    : tab.mode === "merge"
+                      ? "Merge"
+                      : "Text"}
+                </span>
+                {summaries[tab.id]?.error ? "! " : ""}
+                {summaries[tab.id]?.dirty ? "* " : ""}
+                {summaries[tab.id]?.title ?? "Loading"}
+              </button>
+              <button
+                className="tab-close"
+                aria-label={`Close ${summaries[tab.id]?.title ?? "comparison"}`}
+                disabled={blocked}
+                onClick={() => void closeTab(tab.id)}
+              >
+                x
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          aria-label="Scroll tabs right"
+          onClick={() => tabStrip.current?.scrollBy({ left: 240 })}
+        >
+          {"\u203a"}
+        </button>
       </div>
       {error && (
-        <p className="error" role="alert">
+        <div className="shell-message" role="alert">
           {error}
-        </p>
+          <button onClick={() => setError("")}>Dismiss</button>
+        </div>
       )}
-      <details className="session-panel">
-        <summary>
-          Sessions and recent files{" "}
-          <span className="metadata">
-            ({settings.sessions.length} saved sessions)
-          </span>
-        </summary>
-        <button
-          disabled={!settingsReady || busy}
-          onClick={() => {
-            const name = window.prompt("Session name");
-            if (!name) return;
-            setSettings((prior) => ({
-              ...prior,
-              sessions: [
-                ...prior.sessions,
-                {
-                  name,
-                  left:
-                    mode === "folder" ? folderRoots.left : editors.left.path,
-                  right:
-                    mode === "folder" ? folderRoots.right : editors.right.path,
-                  mode,
-                  base: mode === "merge" ? editors.base.path : "",
-                },
-              ],
-            }));
-          }}
-        >
-          Add current session
-        </button>
-        <p>Save preferences to persist changes.</p>
-        {!settings.sessions.length && !settings.recent.length && (
-          <p className="empty-state">
-            No saved sessions yet. Open your files, add the current session,
-            then save preferences to use it again.
-          </p>
-        )}
-        <button
-          disabled={!settingsReady || busy}
-          onClick={() => {
-            const suffix = window.prompt(
-              "File suffix for current compare rules (for example .txt):",
-            );
-            if (!suffix) return;
-            setSettings((prior) => ({
-              ...prior,
-              formats: [
-                ...prior.formats.filter((f) => f.suffix !== suffix),
-                {
-                  suffix,
-                  ignoreCase: prior.ignoreCase,
-                  ignoreWhitespace: prior.ignoreWhitespace,
-                  ignoreLineEndings: prior.ignoreLineEndings,
-                  patterns: prior.unimportantPatterns,
-                },
-              ],
-            }));
-          }}
-        >
-          Save current rules as file-format profile
-        </button>
-        {settings.formats.map((format, index) => (
-          <div key={index}>
-            <span>
-              Profile {format.suffix} (overrides global options for matching
-              left-file suffix)
-            </span>
-            <button
-              onClick={() =>
-                setSettings((prior) => ({
-                  ...prior,
-                  formats: prior.formats.filter((_, i) => i !== index),
-                }))
-              }
-            >
-              Remove profile {format.suffix}
-            </button>
-          </div>
-        ))}
-        {settings.sessions.map((session, index) => (
-          <div key={index}>
-            <button
-              disabled={busy}
-              onClick={() =>
-                void attempt(async () => {
-                  if (session.mode === "folder") {
-                    setMode("folder");
-                    invalidateFolders();
-                    setFolderRoots({
-                      left: session.left,
-                      right: session.right,
-                    });
-                  } else {
-                    if (session.mode === "merge" && !session.base)
-                      throw new Error(
-                        "This merge session has no base path; open the base explicitly.",
-                      );
-                    setMode(session.mode);
-                    if (session.mode === "merge")
-                      await load("base", session.base ?? "");
-                    await load("left", session.left);
-                    await load("right", session.right);
-                  }
-                })
-              }
-            >
-              {session.name}
-            </button>
-            <button
-              onClick={() =>
-                setSettings((prior) => ({
-                  ...prior,
-                  sessions: prior.sessions.filter((_, i) => i !== index),
-                }))
-              }
-            >
-              Remove session {index + 1}
-            </button>
-          </div>
-        ))}
-        {settings.recent.map((path) => (
+      {owner && owner !== active && (
+        <div className="background-job" role="status">
+          {summaries[owner]?.title}: {summaries[owner]?.status ?? "Working..."}
           <button
-            key={path}
-            disabled={busy}
-            onClick={() => void attempt(() => load("left", path))}
-          >
-            {path}
-          </button>
-        ))}
-      </details>
-      {mode === "text" && (
-        <section className="toolbar" aria-label="Comparison options">
-          <span className="toolbar-label">Compare rules</span>
-          {(
-            [
-              ["ignoreCase", "Ignore case"],
-              ["ignoreWhitespace", "Ignore whitespace"],
-              ["ignoreLineEndings", "Ignore EOL style"],
-            ] as const
-          ).map(([key, label]) => (
-            <label key={key}>
-              <input
-                type="checkbox"
-                checked={settings[key]}
-                disabled={busy}
-                onChange={(event) => {
-                  invalidate();
-                  setSettings((prior) => ({
-                    ...prior,
-                    [key]: event.target.checked,
-                  }));
-                }}
-              />
-              {label}
-            </label>
-          ))}
-          <details className="advanced-rules">
-            <summary>Advanced rules</summary>
-            <label>
-              Unimportant regex rules (one per line)
-              <textarea
-                className="rules"
-                value={settings.unimportantPatterns.join("\n")}
-                disabled={busy}
-                onChange={(event) => {
-                  invalidate();
-                  setSettings((prior) => ({
-                    ...prior,
-                    unimportantPatterns: event.target.value
-                      .split("\n")
-                      .filter(Boolean),
-                  }));
-                }}
-              />
-            </label>
-            <p className="metadata">
-              File-format profiles override these rules for matching left-file
-              suffixes.
-            </p>
-          </details>
-        </section>
-      )}
-      {mode === "text" && (
-        <>
-          <div
-            className="toolbar command-bar"
-            aria-label="Text comparison actions"
-          >
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() => void attempt(() => compareInputs())}
-            >
-              {busy ? "Comparing..." : "Compare"}
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => {
-                invalidate();
-                setEditors((prior) => ({
-                  ...prior,
-                  left: prior.right,
-                  right: prior.left,
-                }));
-              }}
-            >
-              Swap sides
-            </button>
-            <button
-              aria-label="Previous difference"
-              title="Previous difference (Alt+Up)"
-              disabled={busy || !changes.length}
-              onClick={() =>
-                selectDifference(
-                  (current - 1 + changes.length) % changes.length,
-                )
-              }
-            >
-              Previous
-            </button>
-            <button
-              aria-label="Next difference"
-              title="Next difference (Alt+Down)"
-              disabled={busy || !changes.length}
-              onClick={() => selectDifference((current + 1) % changes.length)}
-            >
-              Next
-            </button>
-            <span className="difference-count">
-              {spans
-                ? changes.length
-                  ? `${current + 1} / ${changes.length} differences`
-                  : "No differences"
-                : "Not compared"}
-            </span>
-            {selected && (
-              <>
-                <button
-                  aria-label="Copy region to right"
-                  disabled={busy}
-                  onClick={() =>
-                    void attempt(() => copyDifference("left", selected))
-                  }
-                >
-                  Copy to right
-                </button>
-                <button
-                  aria-label="Copy region to left"
-                  disabled={busy}
-                  onClick={() =>
-                    void attempt(() => copyDifference("right", selected))
-                  }
-                >
-                  Copy to left
-                </button>
-                <button
-                  aria-label="Refine selected region"
-                  disabled={busy}
-                  onClick={() =>
-                    void attempt(async () =>
-                      setRefinement(
-                        await native("refine_text", {
-                          left: leftLines
-                            .slice(selected.leftStart, selected.leftEnd)
-                            .map((l) => l.full)
-                            .join(""),
-                          right: rightLines
-                            .slice(selected.rightStart, selected.rightEnd)
-                            .map((l) => l.full)
-                            .join(""),
-                        }),
-                      ),
-                    )
-                  }
-                >
-                  Intraline detail
-                </button>
-              </>
-            )}
-          </div>
-          {inputs}
-          {spans && (
-            <p className="diff-legend">
-              <span className="legend-replace">Changed</span>
-              <span className="legend-insert">Added on right</span>
-              <span className="legend-delete">Removed from right</span>
-              <span>Blue edge: selected difference</span>
-              <span>Gutter arrows: copy that region to the other draft</span>
-            </p>
-          )}
-          {!spans && (
-            <p className="empty-state">
-              Run Compare to highlight changed lines. Copies refresh differences
-              automatically; compare again after manual edits.
-            </p>
-          )}
-          {spans && (
-            <section aria-live="polite">
-              <h2>{changes.length} changed regions</h2>
-              <p className="result-summary">
-                {changes.length
-                  ? `Difference ${current + 1} of ${changes.length}. Use Previous / Next or Alt+Up / Alt+Down to navigate.`
-                  : "No differences under the current comparison rules."}
-              </p>
-              <div className="overview">
-                {changes.map((span, index) => (
-                  <button
-                    key={index}
-                    aria-label={`Go to difference ${index + 1}`}
-                    aria-pressed={index === current}
-                    disabled={busy}
-                    onClick={() => selectDifference(index)}
-                  >
-                    {span.leftStart + 1}
-                  </button>
-                ))}
-              </div>
-              <details className="comparison-details">
-                <summary>Aligned read-only view &amp; range details</summary>
-                <VirtualList
-                  count={aligned.length}
-                  label="Aligned line comparison"
-                  render={(index) => {
-                    const row = aligned[index];
-                    if (!row) return null;
-                    return (
-                      <div className={`aligned ${row.kind}`}>
-                        <code>
-                          {row.left === null
-                            ? ""
-                            : `${row.left + 1}  ${leftLines[row.left]?.content ?? ""}`}
-                        </code>
-                        <code>
-                          {row.right === null
-                            ? ""
-                            : `${row.right + 1}  ${rightLines[row.right]?.content ?? ""}`}
-                        </code>
-                      </div>
-                    );
-                  }}
-                />
-                <table>
-                  <caption>
-                    Line ranges use zero-based, end-exclusive offsets.
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th>Kind</th>
-                      <th>Left lines</th>
-                      <th>Right lines</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {spans.slice(0, 100).map((span, index) => (
-                      <tr key={index}>
-                        <td>{span.kind}</td>
-                        <td>
-                          {span.leftStart}..{span.leftEnd}
-                        </td>
-                        <td>
-                          {span.rightStart}..{span.rightEnd}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {spans.length > 100 && (
-                  <p>
-                    Range table shows first 100 regions; aligned view and
-                    navigation cover all regions.
-                  </p>
-                )}
-              </details>
-              {refinement && selected && (
-                <RefinedRegion
-                  left={leftLines
-                    .slice(selected.leftStart, selected.leftEnd)
-                    .map((l) => l.full)
-                    .join("")}
-                  right={rightLines
-                    .slice(selected.rightStart, selected.rightEnd)
-                    .map((l) => l.full)
-                    .join("")}
-                  spans={refinement}
-                />
-              )}
-              {refinement && (
-                <p>
-                  Intraline changed byte ranges:{" "}
-                  {refinement
-                    .filter((s) => s.kind !== "equal")
-                    .map(
-                      (s) =>
-                        `${s.kind}: left ${s.leftStart}..${s.leftEnd}, right ${s.rightStart}..${s.rightEnd}`,
-                    )
-                    .join("; ")}
-                </p>
-              )}
-            </section>
-          )}
-        </>
-      )}
-      {mode === "folder" && (
-        <>
-          <div
-            className="toolbar command-bar"
-            aria-label="Folder comparison actions"
-          >
-            <label>
-              Criterion
-              <select
-                aria-label="Criterion"
-                value={criterion}
-                disabled={busy}
-                onChange={(event) => {
-                  setCriterion(event.target.value);
-                  setPreview(null);
-                  setFolders([]);
-                  setSelectedFiles([]);
-                }}
-              >
-                <option value="content">Content hash</option>
-                <option value="size">Size</option>
-                <option value="modified">Size and timestamp</option>
-              </select>
-            </label>
-            <label>
-              Exclusions (glob per line)
-              <textarea
-                aria-label="Exclusions (glob per line)"
-                className="rules"
-                value={exclude}
-                disabled={busy}
-                onChange={(event) => {
-                  setExclude(event.target.value);
-                  setPreview(null);
-                  setFolders([]);
-                  setSelectedFiles([]);
-                }}
-              />
-            </label>
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() => void attempt(scan)}
-            >
-              Scan folders
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => void attempt(() => createPreview("update"))}
-            >
-              Preview update left to right
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => void attempt(() => createPreview("mirror"))}
-            >
-              Preview mirror left to right
-            </button>
-            <button
-              disabled={busy || !selectedFiles.length}
-              onClick={() =>
-                void attempt(() => createPreview("update", selectedFiles))
-              }
-            >
-              Preview selected copies
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => {
-                invalidateFolders();
-                setFolderRoots((prior) => ({
-                  left: prior.right,
-                  right: prior.left,
-                }));
-              }}
-            >
-              Swap folder roots
-            </button>
-            <label>
-              Show
-              <select
-                aria-label="Show"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-              >
-                {[
-                  ["all", "All entries"],
-                  ["differences", "Differences"],
-                  ["same", "Same"],
-                  ["leftOnly", "Left only"],
-                  ["rightOnly", "Right only"],
-                  ["error", "Errors"],
-                ].map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {inputs}
-          <p className="result-summary">
-            {notice.startsWith("Scan complete")
-              ? `${visibleFolders.length} visible entries / ${selectedFiles.length} selected.`
-              : "Scan folders to list their contents. Sync always runs from left to right; swap roots to reverse direction."}
-          </p>
-          <div className="folder-legend" aria-label="Folder status legend">
-            <span className="same">Same</span>
-            <span className="different">Different</span>
-            <span className="leftOnly">Left only</span>
-            <span className="rightOnly">Right only</span>
-            <span className="error-state">Error / unavailable</span>
-          </div>
-          <div className="folder-row folder-head" aria-hidden="true">
-            <span />
-            <span>Status</span>
-            <span>Left name / size</span>
-            <span>Right name / size</span>
-            <span>Compare</span>
-            <span>Move</span>
-            <span>Recycle</span>
-          </div>
-          <VirtualList
-            count={visibleFolders.length}
-            label="Folder comparison entries"
-            render={(index) => {
-              const row = visibleFolders[index];
-              if (!row) return null;
-              return (
-                <div className="folder-row" data-status={row.status}>
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${row.relative}`}
-                    checked={selectedFiles.includes(row.relative)}
-                    disabled={
-                      busy ||
-                      row.status === "same" ||
-                      row.status === "rightOnly" ||
-                      row.status === "error"
-                    }
-                    onChange={(event) =>
-                      setSelectedFiles((prior) =>
-                        event.target.checked
-                          ? [...prior, row.relative]
-                          : prior.filter((name) => name !== row.relative),
-                      )
-                    }
-                  />
-                  <span className={`file-status ${row.status}`}>
-                    {row.status === "leftOnly"
-                      ? "Left only"
-                      : row.status === "rightOnly"
-                        ? "Right only"
-                        : row.status === "same"
-                          ? "Same"
-                          : row.status === "different"
-                            ? "Different"
-                            : row.status === "error"
-                              ? "Error"
-                              : row.status}
-                  </span>
-                  {renderFolderSide(row, "left")}
-                  {renderFolderSide(row, "right")}
-                  <button
-                    disabled={
-                      busy ||
-                      row.status === "error" ||
-                      row.isDirectory ||
-                      row.leftSize === null ||
-                      row.rightSize === null
-                    }
-                    onClick={() =>
-                      void attempt(async () => {
-                        if (
-                          !(await discard("left")) ||
-                          !(await discard("right"))
-                        )
-                          return;
-                        const segments = row.relative.split("/");
-                        const leftPath = await join(
-                          folderRoots.left,
-                          ...segments,
-                        );
-                        const rightPath = await join(
-                          folderRoots.right,
-                          ...segments,
-                        );
-                        await load("left", leftPath, null, false);
-                        await load("right", rightPath, null, false);
-                        setMode("text");
-                      })
-                    }
-                  >
-                    Open pair
-                  </button>
-                  <button
-                    disabled={
-                      busy ||
-                      row.isDirectory ||
-                      row.leftSize === null ||
-                      row.status === "error" ||
-                      row.status === "same"
-                    }
-                    onClick={() =>
-                      void attempt(() => previewFile(row.relative, "move"))
-                    }
-                  >
-                    Move
-                  </button>
-                  <button
-                    disabled={
-                      busy ||
-                      row.isDirectory ||
-                      row.leftSize === null ||
-                      row.status === "error"
-                    }
-                    onClick={() =>
-                      void attempt(() => previewFile(row.relative, "trashLeft"))
-                    }
-                  >
-                    Recycle left
-                  </button>
-                </div>
-              );
+            onClick={() => {
+              setActive(owner);
             }}
-          />
-          {preview && (
-            <section>
-              <h2>Sync preview: {preview.operations.length} operations</h2>
-              <p>
-                No changes have been made. Execution revalidates this preview;
-                no permanent deletion is used.
-              </p>
-              <VirtualList
-                count={preview.operations.length}
-                label="Planned operations"
-                render={(index) => {
-                  const operation = preview.operations[index];
-                  return (
-                    operation && (
-                      <div>
-                        {operation.action}: {operation.relative}
-                      </div>
-                    )
-                  );
-                }}
-              />
-              <button
-                disabled={busy}
-                onClick={() => void attempt(executePreview)}
-              >
-                Confirm and execute preview
-              </button>
-            </section>
-          )}
-        </>
+          >
+            Show operation
+          </button>
+          <button
+            onClick={() =>
+              void controllers.current
+                .get(owner)
+                ?.cancel()
+                .catch((failure) => setError(errorMessage(failure)))
+            }
+          >
+            Cancel operation
+          </button>
+        </div>
       )}
-      {mode === "merge" && (
-        <>
-          <div className="toolbar command-bar">
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() => void attempt(mergeInputs)}
-            >
-              Merge three inputs
+      {info && (
+        <div className="shell-message" role="status">
+          {info}
+          <button onClick={() => setInfo("")}>Dismiss help</button>
+        </div>
+      )}
+      {tabs
+        .filter((tab) => tab.id !== active && summaries[tab.id]?.error)
+        .map((tab) => (
+          <div className="shell-message" role="alert" key={tab.id}>
+            {summaries[tab.id]?.title}: {summaries[tab.id]?.error}
+            <button onClick={() => setActive(tab.id)}>
+              Show failed operation
             </button>
-            <span className="metadata">
-              Saving stays disabled until every conflict is resolved.
-            </span>
           </div>
-          {inputs}
-          {(blocks || output || outputDocument) && (
-            <section>
-              {blocks ? (
-                <h2>{unresolved} unresolved conflicts</h2>
-              ) : (
-                <p>
-                  Inputs changed. Generate a new merge before saving; previous
-                  output is retained below.
-                </p>
-              )}
-              {blocks?.map(
-                (block, index) =>
-                  block.kind === "conflict" && (
-                    <article className="conflict" key={index}>
-                      <h3>
-                        Conflict {index + 1}
-                        {choices[index] !== undefined ? " (resolved)" : ""}
-                      </h3>
-                      <pre>BASE: {block.base}</pre>
-                      <pre>LEFT: {block.left}</pre>
-                      <pre>RIGHT: {block.right}</pre>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void attempt(() => resolve(index, block.left))
-                        }
-                      >
-                        Use left {index + 1}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void attempt(() => resolve(index, block.right))
-                        }
-                      >
-                        Use right {index + 1}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void attempt(() => resolve(index, block.base))
-                        }
-                      >
-                        Use base {index + 1}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() => void attempt(() => resolve(index, ""))}
-                      >
-                        Delete conflict {index + 1}
-                      </button>
-                    </article>
-                  ),
-              )}
-              <label>
-                Merge output
-                <CodeEditor
-                  text={output}
-                  label="Merge output"
-                  disabled={busy}
-                  onChange={setOutput}
-                />
-              </label>
+        ))}
+      <div className="workspace-host">
+        {active === null && (
+          <section className="home-screen">
+            <h2>New comparison</h2>
+            <p>
+              Open local files or folders. Each comparison keeps its own
+              workspace.
+            </p>
+            {workflows.map(([mode, label]) => (
               <button
-                disabled={busy || !blocks || !!unresolved}
-                onClick={() => void attempt(saveOutput)}
+                key={mode}
+                disabled={!ready || blocked}
+                onClick={() => openTab(mode)}
               >
-                Save merge output
+                {label}
               </button>
-              {gitOutput && (
-                <p>
-                  Git output: {gitOutput}. Closing without saving a resolved
-                  merge reports cancellation.
-                </p>
-              )}
-            </section>
-          )}
-        </>
+            ))}
+            <h3>Saved sessions</h3>
+            {settings.sessions.length ? (
+              settings.sessions.map((session, index) => (
+                <button
+                  key={index}
+                  disabled={blocked}
+                  onClick={() => openSession(session)}
+                >
+                  {session.name}
+                </button>
+              ))
+            ) : (
+              <p>No saved sessions.</p>
+            )}
+          </section>
+        )}
+        {tabs.map((tab) => (
+          <section
+            key={tab.id}
+            id={`panel-${tab.id}`}
+            role="tabpanel"
+            aria-labelledby={`tab-${tab.id}`}
+            className="workspace-slot"
+            aria-hidden={active !== tab.id}
+            inert={active !== tab.id}
+            style={{ visibility: active === tab.id ? "visible" : "hidden" }}
+          >
+            {tab.parent && tabs.some((parent) => parent.id === tab.parent) && (
+              <button
+                className="return-folder"
+                onClick={() => setActive(tab.parent)}
+              >
+                Return to folder comparison
+              </button>
+            )}
+            <ComparisonWorkspace
+              tab={tab}
+              confirmGitExit={confirmGitExit}
+              sharedSettings={settings}
+              settingsReady={settingsAvailable}
+              updateSettings={setSettings}
+              globalBusy={blocked}
+              active={active === tab.id}
+              acquire={acquire}
+              release={release}
+              register={register}
+              report={report}
+              openTab={openTab}
+              openSession={openSession}
+              claimPreview={claimPreview}
+              discardPreview={discardPreview}
+              diskChanged={diskChanged}
+              confirmAction={confirmAction}
+            />
+          </section>
+        ))}
+      </div>
+      {confirmation && (
+        <ConfirmationDialog
+          message={confirmation.message}
+          decide={confirmation.decide}
+        />
       )}
-    </main>
+    </div>
   );
 }

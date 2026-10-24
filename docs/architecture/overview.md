@@ -51,12 +51,12 @@ React UI  ──>  Tauri IPC Commands  ──>  Rust Domain Engine  ──>  Fil
 
 ## Desktop Architecture
 
-- **State Coordination:** `App.tsx` coordinates high-level workflow state (text diff, folder sync, 3-way merge, preferences).
+- **State Coordination & Tab Ownership:** `App.tsx` coordinates top-level tab ownership, shared preferences, native listeners, and confirmation dialogs. Each mounted `ComparisonWorkspace` independently manages its own drafts, document handles, comparison rules, results, and scroll viewports. Inactive workspaces remain mounted to preserve layout and state but are inert and hidden from assistive tools.
 - **Editor Surfaces:** `CodeEditor.tsx` lazy-loads the CodeMirror surface (`EditorSurface.tsx`) and handles loading failures gracefully without losing text edits.
 - **Line Alignment:** Diff-derived block widgets align editable lines visually without adding phantom text content to documents.
-- **Folder Navigation & Region Copies:** Folder roots are independent of opened document paths; file-pair navigation does not replace roots or the scanned listing. Region copies recompare the edited snapshot through Rust, retaining the viewport and updating remaining actions. Only explicit navigation scrolls to a selected region.
-- **DOM Virtualization:** A virtualized read-only overview and folder list bound DOM size when dealing with large files or deep trees.
-- **Session Handles:** Rust document handles retain original bytes/encoding and reject stale saves. Sync operations use single-use preview handles; the backend never trusts an arbitrary frontend-authored operation list.
+- **Folder Navigation & Region Copies:** Folder roots are independent of opened document paths; opening file pairs creates separate text tabs without altering folder roots or scanned directory listings. Region copies recompare the edited snapshot through Rust, retaining the viewport and updating remaining actions.
+- **DOM Virtualization:** A virtualized folder tree and read-only overview bound DOM size when dealing with large files or deep trees. Synthetic tree ancestors provide visual hierarchy but cannot trigger filesystem actions directly.
+- **Session Handles & Previews:** Rust document handles retain original bytes/encoding and reject stale saves. Across all tabs, exactly one pending folder preview is retained; replacing it requires explicit confirmation, and execution requires user approval.
 
 ---
 

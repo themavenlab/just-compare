@@ -38,6 +38,36 @@ try {
     .getByText("UTF-8 draft", { exact: false })
     .last()
     .waitFor({ state: "hidden" });
+  const gitTabId = await session.page
+    .getByRole("tab", { selected: true })
+    .getAttribute("id");
+  const unrelated = join(root, "unrelated.txt");
+  await writeFile(unrelated, "unrelated\n");
+  await session.page
+    .getByRole("button", { name: "Text Compare", exact: true })
+    .click();
+  await session.page
+    .getByRole("textbox", { name: "left path", exact: true })
+    .fill(unrelated);
+  await session.page
+    .getByRole("button", { name: "Open left", exact: true })
+    .click();
+  await session.page
+    .getByRole("textbox", { name: "Left text", exact: true })
+    .fill("unrelated saved\n");
+  await session.page
+    .getByRole("button", { name: "Save left", exact: true })
+    .click();
+  await session.page.getByText("left saved.", { exact: true }).waitFor();
+  assert.equal(await readFile(unrelated, "utf8"), "unrelated saved\n");
+  assert.equal(
+    await session.page
+      .getByRole("heading", { name: "Just Compare", exact: true })
+      .count(),
+    1,
+    "Saving an unrelated tab must not accept or terminate the Git merge.",
+  );
+  await session.page.locator(`#${gitTabId}`).click();
   await session.page
     .getByRole("button", { name: "Merge three inputs", exact: true })
     .click();
@@ -45,8 +75,45 @@ try {
     .getByRole("heading", { name: "0 unresolved conflicts", exact: true })
     .waitFor();
   await session.page
+    .getByRole("button", { name: "3-Way Merge", exact: true })
+    .click();
+  await session.page
+    .getByRole("textbox", { name: "Base text", exact: true })
+    .fill("a\n");
+  await session.page
+    .getByRole("textbox", { name: "Left text", exact: true })
+    .fill("L\n");
+  await session.page
+    .getByRole("textbox", { name: "Right text", exact: true })
+    .fill("R\n");
+  await session.page
+    .getByRole("button", { name: "Merge three inputs", exact: true })
+    .click();
+  await session.page
+    .getByRole("heading", { name: "1 unresolved conflicts", exact: true })
+    .waitFor();
+  await session.page.locator(`#${gitTabId}`).click();
+  assert.equal(
+    await session.page
+      .getByRole("button", { name: "Save merge output", exact: true })
+      .isEnabled(),
+    true,
+  );
+  await session.page
     .getByRole("button", { name: "Save merge output", exact: true })
     .click();
+  assert.match(
+    await session.respondToDialog("Cancel"),
+    /Unsaved edits in other tabs/,
+  );
+  assert.equal(await readFile(output, "utf8"), "a\nb\n");
+  await session.page
+    .getByRole("button", { name: "Save merge output", exact: true })
+    .click();
+  assert.match(
+    await session.respondToDialog("Confirm"),
+    /Save and accept the Git merge/,
+  );
   assert.equal(await session.waitExit(), 0);
   assert.equal(await readFile(output, "utf8"), "A\nB\n");
   await session.close();
@@ -121,6 +188,12 @@ try {
     true,
   );
   const outputDocument = await session.call("open_git_output");
+  await session.call("merge_text", {
+    base: "same\n",
+    left: "same\n",
+    right: "same\n",
+    gitSession: false,
+  });
   await assert.rejects(
     session.call("finish_git_merge", {
       success: true,

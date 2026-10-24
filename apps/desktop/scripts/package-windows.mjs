@@ -17,7 +17,7 @@ import { launchNative } from "./native-harness.mjs";
 if (process.platform !== "win32")
   throw new Error("This portable packaging target requires Windows.");
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const label = `compare-workbench-0.1.0-windows-x64-${Date.now()}`;
+const label = `just-compare-0.1.0-windows-x64-${Date.now()}`;
 const destination = join(root, "artifacts", label);
 const host = /^host: (.+)$/m.exec(
   execFileSync("rustc", ["-vV"], { encoding: "utf8" }),

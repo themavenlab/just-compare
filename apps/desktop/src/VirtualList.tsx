@@ -1,4 +1,10 @@
-import { useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEventHandler,
+  type ReactNode,
+} from "react";
 
 export function VirtualList({
   count,
@@ -6,26 +12,65 @@ export function VirtualList({
   rowHeight = 36,
   render,
   label,
+  fill = false,
+  activeIndex = -1,
+  onKeyDown,
+  activeDescendant,
+  role = "region",
 }: {
   count: number;
   height?: number;
   rowHeight?: number;
   render: (index: number) => ReactNode;
   label: string;
+  fill?: boolean;
+  activeIndex?: number;
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  activeDescendant?: string | undefined;
+  role?: "region" | "tree";
 }) {
   const [scroll, setScroll] = useState(0);
+  const [measuredHeight, setMeasuredHeight] = useState(height);
+  const element = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!fill || !element.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setMeasuredHeight(entry.contentRect.height);
+    });
+    observer.observe(element.current);
+    return () => observer.disconnect();
+  }, [fill]);
+  useEffect(() => {
+    const viewport = element.current;
+    if (!viewport || activeIndex < 0) return;
+    const top = activeIndex * rowHeight;
+    if (top < viewport.scrollTop) viewport.scrollTop = top;
+    else if (top + rowHeight > viewport.scrollTop + viewport.clientHeight)
+      viewport.scrollTop = top + rowHeight - viewport.clientHeight;
+  }, [activeIndex, rowHeight]);
   const start = Math.min(
     Math.max(0, Math.floor(scroll / rowHeight) - 5),
     Math.max(0, count - 1),
   );
-  const end = Math.min(count, start + Math.ceil(height / rowHeight) + 10);
+  const end = Math.min(
+    count,
+    start + Math.ceil((fill ? measuredHeight : height) / rowHeight) + 10,
+  );
   return (
     <div
       className="virtual"
-      role="region"
+      ref={element}
+      role={role}
       aria-label={label}
+      aria-activedescendant={activeDescendant}
       tabIndex={0}
-      style={{ height, overflow: "auto" }}
+      style={{
+        height: fill ? undefined : height,
+        flex: fill ? 1 : undefined,
+        minHeight: fill ? 0 : undefined,
+        overflow: "auto",
+      }}
+      onKeyDown={onKeyDown}
       onScroll={(e) => setScroll(e.currentTarget.scrollTop)}
     >
       <div style={{ height: count * rowHeight, position: "relative" }}>

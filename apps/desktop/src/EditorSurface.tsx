@@ -141,7 +141,7 @@ export function EditorSurface({
           alignment.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": label }),
           EditorView.theme({
-            "&": { height: "320px" },
+            "&": { height: "100%" },
             ".cm-scroller": { overflow: "auto", fontFamily: "monospace" },
             ".cm-line": { lineHeight: "21px" },
           }),

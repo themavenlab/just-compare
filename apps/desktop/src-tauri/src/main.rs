@@ -17,6 +17,7 @@ fn main() {
       commands::save_document,
       commands::merge_text,
       commands::scan_folders,
+      commands::normalize_folder_roots,
       commands::preview_sync,
       commands::preview_file_action,
       commands::execute_sync,

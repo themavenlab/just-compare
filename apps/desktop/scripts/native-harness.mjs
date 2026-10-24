@@ -6,6 +6,45 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
+export async function selectWorkspace(page, mode) {
+  const kind = { text: "Text", folder: "Folder", merge: "Merge" }[mode];
+  if (!kind) throw new Error(`Unsupported test workspace: ${mode}`);
+  const tabs = page.locator(".tab").filter({
+    has: page.locator(".tab-kind", { hasText: new RegExp(`^${kind}$`) }),
+  });
+  if (await tabs.count()) await tabs.last().getByRole("tab").click();
+  else
+    await page
+      .getByRole("button", {
+        name: {
+          text: "Text Compare",
+          folder: "Folder Compare",
+          merge: "3-Way Merge",
+        }[mode],
+        exact: true,
+      })
+      .click();
+}
+
+export async function togglePanel(page, panel) {
+  const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
+  const element = workspace.locator(`[data-panel="${panel}"]`);
+  if ((await element.getAttribute("open")) !== null) {
+    await element.locator("summary").click();
+    return;
+  }
+  const menu = panel === "sessions" ? "Session" : "View";
+  const command = {
+    sessions: "Sessions and recent files",
+    preferences: "Preferences",
+    details: "Aligned view and range details",
+    rules: "Comparison rules",
+  }[panel];
+  if (!command) throw new Error(`Unsupported test panel: ${panel}`);
+  await page.getByRole("button", { name: menu, exact: true }).click();
+  await page.getByRole("menuitem", { name: command, exact: true }).click();
+}
+
 export async function launchNative(config, args = [], options = {}) {
   if (process.platform !== "win32")
     throw new Error("Native harness requires Windows WebView2.");
@@ -126,6 +165,21 @@ export async function launchNative(config, args = [], options = {}) {
           )
             throw error;
         }
+      },
+      respondToDialog: async (buttonName) => {
+        if (!["Confirm", "Cancel"].includes(buttonName))
+          throw new Error("Unsupported workbench dialog response.");
+        const dialog = page.getByRole("dialog", {
+          name: "Confirm action",
+          exact: true,
+        });
+        await dialog.waitFor();
+        const message = await dialog.innerText();
+        await dialog
+          .getByRole("button", { name: buttonName, exact: true })
+          .click();
+        await dialog.waitFor({ state: "hidden" });
+        return message;
       },
     };
   } catch (error) {

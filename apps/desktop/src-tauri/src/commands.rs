@@ -280,11 +280,17 @@ pub async fn merge_text(
   base: String,
   left: String,
   right: String,
+  git_session: bool,
   state: State<'_, Arc<Resources>>,
 ) -> Result<Vec<Block>, String> {
+  if git_session && std::env::args().nth(1).as_deref() != Some("git-merge") {
+    return Err("This app was not launched as a Git merge tool.".into());
+  }
   let resources = state.inner().clone();
-  *resources.merge_blocks.lock().map_err(|e| e.to_string())? = None;
-  *resources.saved_output.lock().map_err(|e| e.to_string())? = None;
+  if git_session {
+    *resources.merge_blocks.lock().map_err(|e| e.to_string())? = None;
+    *resources.saved_output.lock().map_err(|e| e.to_string())? = None;
+  }
   worker(move || {
     let blocks: Vec<Block> = compare_merge::merge(&base, &left, &right)
       .map(|blocks| {
@@ -299,10 +305,42 @@ pub async fn merge_text(
           .collect()
       })
       .map_err(|e| e.to_string())?;
-    *resources.merge_blocks.lock().map_err(|e| e.to_string())? = Some(blocks.clone());
+    if git_session {
+      *resources.merge_blocks.lock().map_err(|e| e.to_string())? = Some(blocks.clone());
+    }
     Ok(blocks)
   })
   .await
+}
+
+#[tauri::command]
+pub async fn normalize_folder_roots(left: String, right: String) -> Result<FolderRoots, String> {
+  worker(move || {
+    let normalize = |path: &str| {
+      let path = compare_fs::checked_path(Path::new(path), false).map_err(|e| e.to_string())?;
+      if !std::fs::metadata(&path)
+        .map_err(|e| e.to_string())?
+        .is_dir()
+      {
+        return Err("Folder roots must be directories.".to_string());
+      }
+      path
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "Non-Unicode folder roots are unsupported.".to_string())
+    };
+    Ok(FolderRoots {
+      left: normalize(&left)?,
+      right: normalize(&right)?,
+    })
+  })
+  .await
+}
+
+#[derive(Serialize)]
+pub struct FolderRoots {
+  left: String,
+  right: String,
 }
 
 #[tauri::command]

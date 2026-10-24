@@ -652,6 +652,561 @@ mark {
   main {
     padding: 0 10px 16px;
   }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+.workbench-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  padding: 3px 10px;
+  min-height: 28px;
+  flex-shrink: 0;
+}
+.shell-header h1 {
+  font-size: 14px;
+  letter-spacing: 0;
+}
+.shell-header span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.menubar {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  background: var(--surface);
+  gap: 2px;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+.workbench-shell button {
+  min-height: 26px;
+  border-radius: 2px;
+  padding: 3px 7px;
+  font-size: 12px;
+}
+.new-comparisons {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.command-menu {
+  position: relative;
+}
+.menubar > .command-menu > button {
+  background: transparent;
+  border-color: transparent;
+}
+.menu-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  max-height: 60vh;
+  overflow: auto;
+  z-index: 40;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 4px 16px #0003;
+}
+.menu-popup button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+}
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  background: var(--surface-alt);
+  padding: 3px 4px 0;
+  border-bottom: 1px solid var(--border);
+  min-height: 32px;
+  flex-shrink: 0;
+}
+.tabstrip {
+  display: flex;
+  overflow-x: auto;
+  min-width: 0;
+  flex: 1;
+  scrollbar-width: thin;
+}
+.tab {
+  display: flex;
+  min-width: 140px;
+  max-width: 320px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  margin-right: 3px;
+}
+.tab button[role="tab"] {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+  min-width: 0;
+  border: 0;
+  flex: 1;
+  background: transparent;
+}
+.tab .tab-close {
+  border: 0;
+  background: transparent;
+  flex-shrink: 0;
+}
+.active-tab {
+  background: var(--surface);
+  border-top: 2px solid var(--accent);
+}
+.tab-kind {
+  color: var(--muted);
+  font-size: 10px;
+  margin-right: 6px;
+}
+.workspace-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.workspace-slot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.comparison-workspace {
+  padding: 4px 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.comparison-workspace .workspace-heading {
+  position: absolute;
+  right: 8px;
+  bottom: 2px;
+  z-index: 3;
+  padding: 0;
+}
+.comparison-workspace .toolbar {
+  margin: 0;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.comparison-workspace .command-bar {
+  border-radius: 0;
+  padding: 3px;
+  min-height: 32px;
+}
+.comparison-workspace .status-bar {
+  order: 50;
+  min-height: 26px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding: 2px 110px 2px 4px;
+  flex-shrink: 0;
+}
+.comparison-workspace .status-bar > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 72%;
+}
+.comparison-workspace .shortcut-hint {
+  display: none;
+}
+.comparison-workspace .session-panel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  order: 40;
+  flex-shrink: 0;
+}
+.comparison-workspace summary {
+  padding: 2px 5px;
+  font-size: 11px;
+}
+.comparison-workspace .floating-panel[open] {
+  position: absolute;
+  z-index: 20;
+  left: 10px;
+  bottom: 34px;
+  width: min(600px, calc(100% - 20px));
+  max-height: 70%;
+  overflow: auto;
+  background: var(--surface);
+  padding: 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 3px 20px #0003;
+}
+.comparison-workspace .preferences {
+  min-width: 0;
+  max-width: none;
+}
+.comparison-workspace .preferences[open] {
+  left: auto;
+  right: 0;
+  bottom: 28px;
+  width: 380px;
+  max-height: 65vh;
+}
+.comparison-workspace .error {
+  margin: 0;
+  padding: 5px 8px;
+  max-height: 100px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.comparison-workspace .panes {
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+  grid-template-columns: minmax(0, var(--pane-left, 50%)) 6px minmax(0, 1fr);
+  grid-template-rows: 22px 28px 28px 18px minmax(0, 1fr);
+}
+.comparison-workspace .editor {
+  grid-row: 1 / span 5;
+  padding: 0 5px;
+  border-radius: 0;
+  gap: 0;
+  border-top: 0;
+  border-bottom: 0;
+  overflow: hidden;
+}
+.comparison-workspace .pane-heading {
+  min-height: 22px;
+}
+.comparison-workspace .pane-heading h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.comparison-workspace .badge {
+  padding: 0 4px;
+  font-size: 10px;
+}
+.comparison-workspace .editor > label {
+  gap: 0;
+  font-size: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.comparison-workspace .editor > label > input {
+  padding: 3px 5px;
+  height: 26px;
+  font-size: 12px;
+}
+.comparison-workspace .editor > label:last-child {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.comparison-workspace .code-editor {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+}
+.comparison-workspace .editor .metadata {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-divider {
+  grid-row: 1 / span 5;
+  cursor: col-resize;
+  touch-action: none;
+  background: var(--border);
+}
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--accent);
+}
+.comparison-workspace .diff-legend {
+  margin: 0;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.comparison-workspace .empty-state {
+  margin: 0;
+  font-size: 11px;
+}
+.text-workspace > section[aria-live] {
+  flex-shrink: 0;
+}
+.comparison-workspace .session-panel:not([open]),
+.comparison-workspace .comparison-details:not([open]),
+.comparison-workspace .preferences:not([open]),
+.text-workspace > .diff-legend:not(.show-legend) {
+  display: none;
+}
+.comparison-workspace .file-options[open] {
+  position: absolute;
+  z-index: 12;
+  top: 78px;
+  background: var(--surface);
+  padding: 8px;
+  border: 1px solid var(--border);
+}
+.text-workspace > section[aria-live] > h2 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.text-workspace > section[aria-live] > .result-summary {
+  display: none;
+}
+.text-workspace .overview {
+  min-height: 26px;
+  max-height: 32px;
+  flex-wrap: nowrap;
+}
+.text-workspace .overview button {
+  min-width: 26px;
+}
+.comparison-workspace .comparison-details {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.comparison-details[open] {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 60px;
+  z-index: 10;
+  background: var(--surface);
+  max-height: 55%;
+  overflow: auto;
+}
+.text-workspace > .panes {
+  order: 10;
+}
+.text-workspace > .diff-legend,
+.text-workspace > .empty-state {
+  order: 11;
+}
+.text-workspace > section[aria-live] {
+  order: 12;
+}
+.folder-workspace .panes {
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: 22px 28px 28px;
+}
+.folder-workspace .editor {
+  grid-row: 1 / span 3;
+}
+.folder-workspace .command-bar textarea {
+  height: 26px;
+  min-height: 26px;
+  width: 130px;
+  font-size: 11px;
+}
+.folder-workspace .command-bar label {
+  font-size: 11px;
+}
+.folder-workspace .command-bar select {
+  padding: 3px;
+  font-size: 11px;
+}
+.folder-workspace .result-summary {
+  margin: 0;
+  font-size: 11px;
+}
+.folder-legend {
+  margin: 0;
+  gap: 10px;
+  font-size: 11px;
+}
+.folder-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.folder-view-bar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+}
+.folder-view-bar span {
+  margin-left: auto;
+}
+.folder-browser .virtual {
+  margin: 0;
+}
+.folder-tree {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--surface);
+}
+.folder-browser .folder-row {
+  grid-template-columns:
+    22px 72px minmax(90px, 1fr) minmax(70px, 1fr) minmax(70px, 1fr)
+    220px;
+  gap: 4px;
+  padding: 0 4px;
+}
+.folder-head > button {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.tree-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-name button,
+.tree-spacer {
+  flex-shrink: 0;
+  width: 24px;
+}
+.folder-browser .row-actions {
+  display: flex;
+  gap: 2px;
+}
+.row-actions .command-menu > button {
+  width: 26px;
+  font-size: 0;
+}
+.row-actions .command-menu > button::after {
+  content: "...";
+  font-size: 12px;
+}
+.focused-row {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--accent);
+}
+.sync-preview {
+  position: absolute;
+  z-index: 15;
+  top: 6px;
+  bottom: 32px;
+  left: 10%;
+  right: 10%;
+  padding: 12px;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  overflow: auto;
+  box-shadow: 0 5px 30px #0005;
+}
+.sync-preview p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.sync-preview .virtual {
+  height: min(35vh, 300px) !important;
+}
+.shell-message,
+.background-job {
+  padding: 4px 8px;
+  background: var(--changed);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.shell-message button,
+.background-job button {
+  margin-left: 8px;
+}
+.home-screen {
+  padding: 24px;
+  overflow: auto;
+  height: 100%;
+}
+.home-screen p,
+.home-screen h3 {
+  margin: 12px 0;
+}
+.home-screen button {
+  margin: 4px;
+}
+.confirmation-dialog {
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  color: var(--text);
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  padding: 20px;
+}
+.confirmation-dialog p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.confirmation-dialog::backdrop {
+  background: #0007;
+}
+.return-folder {
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin: 2px 6px;
+}
+.merge-workspace {
+  overflow-y: auto;
+}
+.merge-workspace .panes {
+  flex: 0 0 50%;
+  min-height: 260px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.merge-workspace > section > label {
+  display: flex;
+  flex-direction: column;
+  height: 220px;
+}
+@media (max-width: 1100px) {
+  .folder-browser .folder-row {
+    grid-template-columns:
+      20px 65px minmax(80px, 1fr) minmax(65px, 1fr)
+      minmax(65px, 1fr) 180px;
+  }
+  .folder-browser .row-actions > button {
+    padding: 2px 4px;
+  }
+  .new-comparisons button {
+    font-size: 11px;
+  }
+}
+@media (max-width: 700px) {
   .panes {
     grid-template-columns: 1fr;
   }

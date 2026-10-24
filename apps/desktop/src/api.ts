@@ -127,6 +127,10 @@ interface Commands {
     };
     result: FolderEntry[];
   };
+  normalize_folder_roots: {
+    args: { left: string; right: string };
+    result: { left: string; right: string };
+  };
   preview_sync: {
     args: {
       left: string;
@@ -152,7 +156,7 @@ interface Commands {
   execute_sync: { args: { id: string; jobId: string }; result: Outcome[] };
   cancel_job: { args: { jobId: string }; result: void };
   merge_text: {
-    args: { base: string; left: string; right: string };
+    args: { base: string; left: string; right: string; gitSession: boolean };
     result: Block[];
   };
   read_settings: { args: undefined; result: Settings };

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchNative } from "./native-harness.mjs";
+import { launchNative, selectWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-workflows-"));
 let session;
@@ -19,6 +19,7 @@ try {
     await writeFile(join(left, name), a);
     await writeFile(join(right, name), b);
   }
+  await mkdir(join(root, "config"));
   session = await launchNative(join(root, "config"));
   const { page } = session;
   const failures = [];
@@ -30,7 +31,7 @@ try {
     await page.getByRole("button", { name: "Compare", exact: true }).click();
     await page.getByRole("heading", { name: /changed regions/ }).waitFor();
   };
-  await page.getByRole("button", { name: /Folder Compare/ }).click();
+  await selectWorkspace(page, "folder");
   const leftRoot = `\\\\?\\${left}`;
   const rightRoot = `\\\\?\\${right}`;
   await page
@@ -63,7 +64,7 @@ try {
   try {
     await openPair("first.txt");
     await text("Left").waitFor({ timeout: 5000 });
-    await page.getByRole("button", { name: /Folder Compare/ }).click();
+    await selectWorkspace(page, "folder");
     assert.equal(
       await page
         .getByRole("textbox", { name: "left path", exact: true })
@@ -87,7 +88,7 @@ try {
     assert.equal(await content("Left"), "second left\n");
     assert.equal(await content("Right"), "second right\n");
     assert.equal(await page.getByRole("alert").count(), 0);
-    await page.getByRole("button", { name: /Folder Compare/ }).click();
+    await selectWorkspace(page, "folder");
     await page
       .getByRole("button", { name: "Scan folders", exact: true })
       .click();
@@ -104,6 +105,7 @@ try {
       .getByRole("heading", { name: "Sync preview: 2 operations", exact: true })
       .waitFor();
     assert.equal(await page.getByRole("alert").count(), 0);
+    await page.getByRole("button", { name: "Dismiss preview" }).click();
     await page
       .getByRole("button", { name: "Swap folder roots", exact: true })
       .click();
@@ -122,10 +124,10 @@ try {
     await page
       .getByRole("button", { name: "Swap folder roots", exact: true })
       .click();
-    await page.getByRole("button", { name: /Text Compare/ }).click();
+    await selectWorkspace(page, "text");
   } catch (error) {
     failures.push(`Folder round-trip: ${error.message}`);
-    await page.getByRole("button", { name: /Text Compare/ }).click();
+    await selectWorkspace(page, "text");
   }
 
   const shared = Array.from(
@@ -147,7 +149,11 @@ try {
   const scrolls = () =>
     page.evaluate(() => ({
       page: window.scrollY,
-      editors: [...document.querySelectorAll(".cm-scroller")].map((node) => ({
+      editors: [
+        ...document.querySelectorAll(
+          '.workspace-slot[aria-hidden="false"] .cm-scroller',
+        ),
+      ].map((node) => ({
         top: node.scrollTop,
         left: node.scrollLeft,
       })),
@@ -158,7 +164,9 @@ try {
   });
   await arrow.scrollIntoViewIfNeeded();
   await page.evaluate(() => {
-    for (const scroller of document.querySelectorAll(".cm-scroller"))
+    for (const scroller of document.querySelectorAll(
+      '.workspace-slot[aria-hidden="false"] .cm-scroller',
+    ))
       scroller.scrollLeft = 120;
   });
   const before = await scrolls();
@@ -167,7 +175,11 @@ try {
     await page
       .getByRole("heading", { name: "1 changed regions", exact: true })
       .waitFor({ timeout: 5000 });
-    await page.locator(".copy-arrow:not(:disabled)").first().waitFor();
+    await page
+      .locator('.workspace-slot[aria-hidden="false"]')
+      .locator(".copy-arrow:not(:disabled)")
+      .first()
+      .waitFor();
     const after = await scrolls();
     assert.ok(
       Math.abs(after.page - before.page) <= 2,
@@ -183,12 +195,20 @@ try {
         `Editor ${index} moved horizontally ${position.left - before.editors[index].left}px`,
       );
     });
-    assert.equal(await page.locator(".diff-replace").count(), 2);
+    assert.equal(
+      await page
+        .locator('.workspace-slot[aria-hidden="false"]')
+        .locator(".diff-replace")
+        .count(),
+      2,
+    );
     await page
       .getByRole("button", { name: "Next difference", exact: true })
       .click();
     await page.waitForFunction(() => {
-      const node = document.querySelector(".diff-selected");
+      const node = document.querySelector(
+        '.workspace-slot[aria-hidden="false"] .diff-selected',
+      );
       const viewport = node?.closest(".cm-scroller");
       if (!node || !viewport) return false;
       const line = node.getBoundingClientRect(),
@@ -201,7 +221,13 @@ try {
     await page
       .getByRole("heading", { name: "0 changed regions", exact: true })
       .waitFor();
-    assert.equal(await page.locator(".copy-arrow").count(), 0);
+    assert.equal(
+      await page
+        .locator('.workspace-slot[aria-hidden="false"]')
+        .locator(".copy-arrow")
+        .count(),
+      0,
+    );
     assert.equal(
       await readFile(join(right, "first.txt"), "utf8"),
       "first right\n",
@@ -217,11 +243,44 @@ try {
     await text("Left").fill(source.join("\n") + "\n");
     await text("Right").fill(target.join("\n") + "\n");
     await compare();
+    await page
+      .getByRole("button", { name: "Go to difference 1", exact: true })
+      .click();
     const copy = page.getByRole("button", {
       name: `Copy difference 1 to ${direction}`,
       exact: true,
     });
-    await copy.scrollIntoViewIfNeeded();
+    await page.waitForFunction((label) => {
+      const workspace = document.querySelector(
+        '.workspace-slot[aria-hidden="false"]',
+      );
+      const arrow = [...workspace.querySelectorAll(".copy-arrow")].find(
+        (node) => node.getAttribute("aria-label") === label,
+      );
+      if (!arrow) return false;
+      const viewport = arrow.closest(".cm-scroller");
+      if (!viewport) return false;
+      const box = arrow.getBoundingClientRect(),
+        bounds = viewport.getBoundingClientRect();
+      return box.top >= bounds.top && box.bottom <= bounds.bottom;
+    }, `Copy difference 1 to ${direction}`);
+    await page.waitForFunction(() => {
+      const panes = [
+        ...document.querySelectorAll(
+          '.workspace-slot[aria-hidden="false"] .cm-scroller',
+        ),
+      ];
+      return (
+        panes.length === 2 &&
+        Math.abs(panes[0].scrollTop - panes[1].scrollTop) <= 1
+      );
+    });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    );
     const initial = await scrolls();
     await copy.click();
     await page
@@ -270,7 +329,10 @@ try {
     "Refresh failure must retain the copied draft.",
   );
   assert.equal(
-    await page.locator(".copy-arrow").count(),
+    await page
+      .locator('.workspace-slot[aria-hidden="false"]')
+      .locator(".copy-arrow")
+      .count(),
     0,
     "Failed refresh must not leave stale actionable ranges.",
   );
