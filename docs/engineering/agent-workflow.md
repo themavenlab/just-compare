@@ -1,6 +1,8 @@
 # Engineering Workflow and Context Preservation
 
-This guide defines how tasks are scoped, approved, executed, and handed off.
+This guide defines how tasks are scoped, approved, executed, and handed off within Just Compare.
+
+---
 
 ## Task Intake
 
@@ -12,6 +14,8 @@ Every engineering task should define:
 
 Use the [Engineering Task Template](../../.github/ISSUE_TEMPLATE/engineering-task.md) when filing tasks.
 
+---
+
 ## Approval Gates
 
 Human approval is required before:
@@ -22,6 +26,8 @@ Human approval is required before:
 
 When requesting approval, present the concrete change, rationale, alternatives, and validation plan.
 
+---
+
 ## Execution Steps
 
 1. **Inspect:** Examine current code, related documentation, and requirements.
@@ -30,6 +36,8 @@ When requesting approval, present the concrete change, rationale, alternatives, 
 4. **Validate:** Verify functionality, edge cases, error handling, and cancellation paths.
 5. **Document:** Keep documentation and code in sync within the same change.
 6. **Report:** Report completion against the acceptance criteria, or provide a handoff if unfinished.
+
+---
 
 ## Authoritative Sources of Truth
 
@@ -43,11 +51,15 @@ When requesting approval, present the concrete change, rationale, alternatives, 
 
 Do not commit ad-hoc status files, chat logs, or scratch notes to the repository.
 
+---
+
 ## Documentation & Markdown Formatting
 
 - **No Mid-Sentence Line Breaks:** Write full sentences on continuous lines. Do not introduce arbitrary hard line breaks or break lines mid-sentence at artificial column limits (e.g., 72 or 80 characters).
 - **Soft Wrapping:** Allow text editors and Markdown renderers to handle soft wrapping. Only insert line breaks between distinct paragraphs, bullet points, headings, or table rows.
 - **Diff Cleanliness:** Keeping complete sentences intact on single lines prevents ragged wrapping and minimizes noisy Git diffs during edits.
+
+---
 
 <a id="handoff"></a>
 ## Handoff Template

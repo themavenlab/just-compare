@@ -1,75 +1,70 @@
 # Architecture Overview
 
-This document outlines the system architecture, component boundaries, and technical conventions for Just Compare.
+This document outlines the system architecture, component boundaries, directory layout, and technical conventions for Just Compare.
 
 ## Technology Stack
 
 - **Desktop Shell:** [Tauri v2](https://v2.tauri.app/) (native window management, system permissions, and desktop capabilities)
-- **Core Engine:** Rust (headless diffing, three-way merge, encoding detection, and file operations)
-- **Frontend UI:** TypeScript, React, and modern CSS
-- **Target Platforms:** Windows, macOS, and Linux
-
-Specific editor components, diff algorithms, and support libraries will be selected during initial prototyping and scaffolding.
+- **Core Engine:** Rust (headless diffing, three-way merge, encoding detection, and filesystem operations)
+- **Frontend UI:** TypeScript, React, modern CSS, and [CodeMirror 6](https://codemirror.net/) (virtualized text editing and alignment)
+- **Target Platforms:** Windows, macOS, and Linux (Phase 1 currently verified on Windows x64)
 
 ---
 
-## Intended Directory Structure
+## Directory Structure
 
 ```text
 apps/
   desktop/
-    src/                          React UI components, hooks, and presentation state
-    src-tauri/                    Tauri configuration, plugins, and command handlers
+    src/                          React UI components, hooks, CodeMirror surfaces, and presentation state
+    src-tauri/                    Tauri configuration, plugins, window capabilities, and IPC commands
+    scripts/                      Native smoke tests, Git integration tests, acceptance benchmarks, packaging
 crates/
-  compare-text/                   Headless text diff, line alignment, and 3-way merge engine
+  compare-text/                   Headless text diff, line alignment, and encoding detection
+  compare-fs/                     Safe document I/O, folder comparison scanning, sync planning/execution, settings
+  compare-merge/                  Conservative three-way merge engine and conflict resolution
+  compare-cli/                    Headless CLI and waiting desktop/Git difftool/mergetool adapter
 docs/
   architecture/                   System design and IPC contracts
-  engineering/                    Engineering practices, data safety, and validation
-  product/                        Roadmap and milestone definitions
-tests/
-  fixtures/                       Synthetic test files and sample comparisons
-  integration/                    Cross-component integration tests
+  engineering/                    Engineering practices, data safety, validation, and dependencies
+  product/                        Usage guide, roadmap, and milestone definitions
 .agents/
   skills/                         Agent workflows and task skills
 ```
-
-*Note: Code directories will be created as components are implemented.*
 
 ---
 
 ## Component Boundaries & Dependency Flow
 
 ```text
-React UI  ──>  Tauri IPC Commands  ──>  Rust Domain Engine  ──>  Filesystem / Providers
+React UI  ──>  Tauri IPC Commands  ──>  Rust Domain Engine  ──>  Filesystem / OS
 ```
 
-- **Rust Domain Crates (`crates/*`):** Own line and intraline diffing, merge resolution, encoding detection, and operation planning. They are headless libraries with zero UI dependencies, allowing future CLI reuse.
-- **Filesystem & IO:** Operations are planned before they are executed. Planning is strictly decoupled from filesystem writes to allow safe previews and testability without touching user files.
+- **Rust Domain Crates (`crates/*`):** Own line and intraline diffing, merge resolution, encoding detection, and operation planning. They are headless libraries with zero UI dependencies, allowing CLI reuse.
+- **Filesystem & IO (`crates/compare-fs`):** Operations are planned before they are executed. Planning is strictly decoupled from filesystem writes to allow safe previews and testability without touching user files.
 - **Tauri Bridge (`apps/desktop/src-tauri`):** Thin adapter layer translating UI invocations into domain calls and managing native desktop capabilities. It does not duplicate diff algorithms.
 - **Frontend (`apps/desktop/src`):** Owns UI state, keyboard navigation, viewport virtualization, and user interactions. No duplicate diff engine is implemented in TypeScript.
-- **Dependency Rule:** Adapters depend on Domain APIs. Domain crates never import desktop or frontend adapters.
+- **CLI (`crates/compare-cli`):** Reuses the domain crates directly for headless diff/merge/folder operations, and launches/waits on the desktop app when invoked as a Git difftool or mergetool.
+- **Dependency Direction:** Adapters depend on Domain APIs. Domain crates never import desktop or frontend adapters.
+
+---
+
+## Desktop Architecture
+
+- **State Coordination:** `App.tsx` coordinates high-level workflow state (text diff, folder sync, 3-way merge, preferences).
+- **Editor Surfaces:** `CodeEditor.tsx` lazy-loads the CodeMirror surface (`EditorSurface.tsx`) and handles loading failures gracefully without losing text edits.
+- **Line Alignment:** Diff-derived block widgets align editable lines visually without adding phantom text content to documents.
+- **DOM Virtualization:** A virtualized read-only overview and folder list bound DOM size when dealing with large files or deep trees.
+- **Session Handles:** Rust document handles retain original bytes/encoding and reject stale saves. Sync operations use single-use preview handles; the backend never trusts an arbitrary frontend-authored operation list.
 
 ---
 
 ## IPC and Transport Conventions
 
-Communication between the Tauri backend and React frontend follows these guidelines:
-
-### Typed Contracts
-- All requests, responses, events, and errors have explicit schemas.
-- Validation is performed strictly at the Rust boundary; frontend validation alone is never assumed sufficient.
-- Return structured domain errors rather than empty successful responses. Diagnostics must never log user credentials or private paths.
-- Avoid transporting arbitrary 64-bit integers as JavaScript numbers where precision could be lost.
-
-### Long-Running Operations & Streaming
-- Heavy comparison and scan operations run asynchronously off the UI thread and carry stable session/operation IDs.
-- Results for large files or folder trees must be paged or streamed with bounded buffers—never serialize an entire massive comparison into a single payload.
-- Progress events are throttled to preserve UI responsiveness.
-- Cancellation is explicit and acknowledged; cancelling an operation must never be reported as a successful completion.
-
-### Mutation Safety
-- Comparison and scan requests are strictly read-only.
-- Modifying, saving, or deleting files requires separate explicit commands backed by the [Data Safety Contract](../engineering/data-safety.md).
+- **Typed Contracts:** Requests, responses, events, and errors have explicit schemas defined and validated at the Rust boundary.
+- **Asynchronous Execution:** Heavy comparison and scan operations run asynchronously off the UI thread and carry stable operation IDs.
+- **Streaming & Cancellation:** Long-running operations support cooperative cancellation via `cancel_job`. Cancelling an operation is never reported as a success.
+- **Mutation Safety:** Diff and scan commands are strictly read-only. File modifications require explicit write commands backed by the [Data Safety Contract](../engineering/data-safety.md).
 
 ---
 

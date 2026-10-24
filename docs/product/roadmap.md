@@ -2,6 +2,8 @@
 
 Just Compare is an open-source, local-first file and folder comparison and merge utility built for Windows, macOS, and Linux.
 
+---
+
 ## Vision and Core Principles
 
 - **Local-First & Private:** Comparison happens entirely on your machine. No telemetry, background analytics, or cloud dependencies.
@@ -11,27 +13,28 @@ Just Compare is an open-source, local-first file and folder comparison and merge
 
 ---
 
-## MVP Scope
+## MVP Scope (Phase 1 Status: Implemented)
 
 The Minimum Viable Product focuses on delivering rock-solid core comparison and merge features:
 
-1. **Text Comparison:** Side-by-side and inline diffing with intraline (character/word-level) highlighting, syntax preservation, and original line-ending (CRLF/LF) handling.
+1. **Text Comparison:** Side-by-side and inline diffing with intraline highlighting, syntax preservation, and original line-ending (CRLF/LF) handling.
 2. **Three-Way Merge:** Base/Left/Right comparison with interactive conflict resolution and merge output generation.
 3. **Folder Comparison & Safe Sync:** Fast directory scanning with size/timestamp/content criteria, ignore filters, dry-run previews, and safe file synchronization.
-4. **Git Integration:** Seamless invocation as a `git difftool` and `git mergetool`.
+4. **Git Integration:** Seamless invocation as a `git difftool`, `git difftool --dir-diff`, and `git mergetool`.
 5. **App Preferences & Sessions:** Configurable diff algorithms, color schemes, font sizing, and saved comparison sessions.
+6. **Command Line Interface:** Headless `compare diff`, `compare folder`, and `compare merge` commands.
+
+*Note: Phase 1 local Windows acceptance and portable packaging are verified in [Validation & Testing](../engineering/validation.md).*
 
 ---
 
-## Milestones
+## Future Milestones
 
 | Milestone | Key Deliverables | Verification / Done Criteria |
 | :--- | :--- | :--- |
-| **1. Foundation** | Repository setup, architectural boundaries, data safety rules, contributor workflow | Clear documentation and standards |
-| **2. Scaffold & Prototypes** | Tauri v2 desktop shell, headless Rust crate, IPC bridge, editor/alignment prototype | Runnable desktop shell with native test execution |
-| **3. Text Comparison** | Headless diff engine, line alignment, side-by-side React viewer, safe file saving | Text reconstruction tests, encoding/EOL preservation |
-| **4. Folder Compare & Sync** | Directory scanner, filtering rules, dry-run operation previews, safe sync | Stale-preview detection, atomic replacement, error recovery |
-| **5. Merge & Git Integration** | 3-way merge engine, conflict resolution UI, CLI flags for git difftool/mergetool | Merge invariant test suite, CLI exit-code verification |
-| **6. MVP Hardening** | Settings management, session restore, keyboard navigation, packaging for Win/macOS/Linux | Release packaging and platform verification |
-| **7. Specialized Viewers** | Hex diff, image comparison, CSV/tabular data diffs | Format-specific correctness and edge-case tests |
-| **8. Remote Sources** | Remote filesystem providers (e.g. SFTP, S3, archives) | Credential safety in OS keychain, network timeout resilience |
+| **Phase 1: MVP Core** *(Completed)* | Text diffing, folder sync, 3-way merge, Git difftool/mergetool, settings, CLI, and portable Windows package | Automated acceptance test suite and native Windows verification |
+| **Phase 2: Platform Expansion** | macOS and Linux native packaging, code signing, and distribution automation | Multi-platform CI runners and verified native desktop packages |
+| **Phase 3: Specialized Viewers** | Hex diffing, image comparison, and CSV/tabular data comparison | Format-specific correctness tests and large dataset handling |
+| **Phase 4: Remote Sources** | Remote filesystem providers (e.g. SFTP, S3, WebDAV, archives) | Credential security in OS keychains and network timeout resilience |
+| **Phase 5: Advanced Automation** | Shell integration, batch comparison scripting, and exported diff reports | Platform-specific shell extensions and report generator tests |
+| **Phase 6: Scale & Polish** | Handling even larger inputs, deeper accessibility auditing, and localization | Memory benchmarks and screen-reader accessibility certifications |
