@@ -1,11 +1,20 @@
-import { Compartment, EditorState } from "@codemirror/state";
-import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { Compartment, EditorState, RangeSet } from "@codemirror/state";
+import {
+  Decoration,
+  EditorView,
+  gutter,
+  GutterMarker,
+  WidgetType,
+} from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { useEffect, useRef, useState } from "react";
-import { errorMessage } from "./comparison";
+import { errorMessage, type DiffSpan } from "./comparison";
 
 class Gap extends WidgetType {
-  constructor(private readonly lines: number) {
+  constructor(
+    private readonly lines: number,
+    readonly copyMarker: CopyArrow | null = null,
+  ) {
     super();
   }
   toDOM() {
@@ -18,6 +27,53 @@ class Gap extends WidgetType {
   get estimatedHeight() {
     return this.lines * 21;
   }
+  eq(other: Gap) {
+    return (
+      this.lines === other.lines &&
+      (this.copyMarker === other.copyMarker ||
+        (this.copyMarker !== null &&
+          other.copyMarker !== null &&
+          this.copyMarker.eq(other.copyMarker)))
+    );
+  }
+}
+
+class CopyArrow extends GutterMarker {
+  constructor(
+    private readonly destination: "left" | "right",
+    private readonly index: number,
+    private readonly deletes: boolean,
+    private readonly disabled: boolean,
+    private readonly span: DiffSpan,
+    private readonly copy: () => void,
+  ) {
+    super();
+  }
+  eq(other: GutterMarker) {
+    return (
+      other instanceof CopyArrow &&
+      this.destination === other.destination &&
+      this.index === other.index &&
+      this.deletes === other.deletes &&
+      this.disabled === other.disabled &&
+      this.span.leftStart === other.span.leftStart &&
+      this.span.leftEnd === other.span.leftEnd &&
+      this.span.rightStart === other.span.rightStart &&
+      this.span.rightEnd === other.span.rightEnd
+    );
+  }
+  toDOM() {
+    const button = document.createElement("button");
+    const label = `Copy difference ${this.index + 1} to ${this.destination}`;
+    button.type = "button";
+    button.className = "copy-arrow";
+    button.textContent = this.destination === "right" ? "\u2192" : "\u2190";
+    button.setAttribute("aria-label", label);
+    button.title = `${label}${this.deletes ? " (remove this region from the destination)" : ""}. Changes the draft only; Save writes the file.`;
+    button.disabled = this.disabled;
+    button.addEventListener("click", this.copy);
+    return button;
+  }
 }
 
 export function EditorSurface({
@@ -28,8 +84,13 @@ export function EditorSurface({
   path = "",
   gaps = [],
   selectedLine,
+  navigation = 0,
   scrollTop,
   onScroll,
+  differences = [],
+  side = "left",
+  selectedDifference,
+  onCopyDifference,
 }: {
   text: string;
   onChange: (text: string) => void;
@@ -38,8 +99,13 @@ export function EditorSurface({
   path?: string;
   gaps?: { line: number; count: number }[] | undefined;
   selectedLine?: number | undefined;
+  navigation?: number;
   scrollTop?: number | undefined;
   onScroll?: ((top: number) => void) | undefined;
+  differences?: DiffSpan[];
+  side?: "left" | "right";
+  selectedDifference?: DiffSpan | undefined;
+  onCopyDifference?: ((span: DiffSpan) => void) | undefined;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const [syntaxError, setSyntaxError] = useState("");
@@ -50,6 +116,12 @@ export function EditorSurface({
   const language = useRef(new Compartment());
   const alignment = useRef(new Compartment());
   const scrollCallback = useRef(onScroll);
+  const copyCallback = useRef(onCopyDifference);
+  const copyEnabled = onCopyDifference !== undefined;
+  const lastNavigation = useRef(-1);
+  useEffect(() => {
+    copyCallback.current = onCopyDifference;
+  }, [onCopyDifference]);
   useEffect(() => {
     scrollCallback.current = onScroll;
   }, [onScroll]);
@@ -93,10 +165,18 @@ export function EditorSurface({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
+    view.current?.dispatch({
+      effects: readonly.current.reconfigure(EditorState.readOnly.of(disabled)),
+    });
+  }, [disabled]);
+  useEffect(() => {
     const instance = view.current;
     if (!instance) return;
+    const top = instance.scrollDOM.scrollTop;
+    const left = instance.scrollDOM.scrollLeft;
     const normalized = text.replace(/\r\n|\r/g, "\n");
-    if (instance.state.doc.toString() !== normalized) {
+    const documentChanged = instance.state.doc.toString() !== normalized;
+    if (documentChanged) {
       updating.current = true;
       try {
         instance.dispatch({
@@ -105,40 +185,134 @@ export function EditorSurface({
             to: instance.state.doc.length,
             insert: normalized,
           },
+          selection: {
+            anchor: Math.min(
+              instance.state.selection.main.anchor,
+              normalized.length,
+            ),
+            head: Math.min(
+              instance.state.selection.main.head,
+              normalized.length,
+            ),
+          },
         });
       } finally {
         updating.current = false;
       }
     }
-  }, [text]);
-  useEffect(() => {
-    view.current?.dispatch({
-      effects: readonly.current.reconfigure(EditorState.readOnly.of(disabled)),
-    });
-  }, [disabled]);
-  useEffect(() => {
-    const instance = view.current;
-    if (!instance) return;
+    const copyMarkers = differences
+      .filter((span) => span.kind !== "equal")
+      .map((span, index) => ({
+        start: side === "left" ? span.leftStart : span.rightStart,
+        end: side === "left" ? span.leftEnd : span.rightEnd,
+        marker: new CopyArrow(
+          side === "left" ? "right" : "left",
+          index,
+          side === "left"
+            ? span.leftStart === span.leftEnd
+            : span.rightStart === span.rightEnd,
+          disabled,
+          span,
+          () => copyCallback.current?.(span),
+        ),
+      }));
     const decorations = gaps.map(({ line, count }) => {
       const position =
         line < instance.state.doc.lines
           ? instance.state.doc.line(line + 1).from
           : instance.state.doc.length;
       return Decoration.widget({
-        widget: new Gap(count),
+        widget: new Gap(
+          count,
+          copyEnabled
+            ? (copyMarkers.find(
+                (entry) => entry.start === line && entry.start === entry.end,
+              )?.marker ?? null)
+            : null,
+        ),
         block: true,
         side: line < instance.state.doc.lines ? -1 : 1,
       }).range(position);
     });
+    for (const span of differences) {
+      if (span.kind === "equal") continue;
+      const start = side === "left" ? span.leftStart : span.rightStart;
+      const end = side === "left" ? span.leftEnd : span.rightEnd;
+      for (
+        let line = start;
+        line < end && line < instance.state.doc.lines;
+        line++
+      ) {
+        decorations.push(
+          Decoration.line({
+            attributes: {
+              class: `diff-line diff-${span.kind}${span === selectedDifference ? " diff-selected" : ""}`,
+            },
+          }).range(instance.state.doc.line(line + 1).from),
+        );
+      }
+    }
+    const markers = RangeSet.of(
+      copyMarkers
+        .filter(
+          (entry) =>
+            entry.start < entry.end && entry.start < instance.state.doc.lines,
+        )
+        .map((entry) =>
+          entry.marker.range(instance.state.doc.line(entry.start + 1).from),
+        ),
+      true,
+    );
     instance.dispatch({
-      effects: alignment.current.reconfigure(
+      effects: alignment.current.reconfigure([
         EditorView.decorations.of(Decoration.set(decorations, true)),
-      ),
+        ...(copyEnabled
+          ? [
+              gutter({
+                class: "cm-copy-gutter",
+                side: side === "left" ? "after" : "before",
+                markers: () => markers,
+                widgetMarker: (_view, widget) =>
+                  widget instanceof Gap ? widget.copyMarker : null,
+              }),
+            ]
+          : []),
+      ]),
     });
-  }, [gaps, text]);
+    instance.requestMeasure({
+      read: () => instance.scrollDOM.querySelectorAll(".cm-gutters"),
+      write: (containers) => {
+        instance.scrollDOM.scrollTop = top;
+        instance.scrollDOM.scrollLeft = left;
+        // CodeMirror hides gutter containers by default; only copy actions are interactive.
+        for (const container of containers) {
+          const hasCopyActions =
+            container.querySelector(".cm-copy-gutter") !== null;
+          container.setAttribute("aria-hidden", String(!hasCopyActions));
+          for (const child of container.children) {
+            if (!child.classList.contains("cm-copy-gutter"))
+              child.setAttribute("aria-hidden", "true");
+          }
+        }
+      },
+    });
+  }, [
+    gaps,
+    text,
+    differences,
+    side,
+    selectedDifference,
+    disabled,
+    copyEnabled,
+  ]);
   useEffect(() => {
     const instance = view.current;
-    if (instance && selectedLine !== undefined)
+    if (
+      instance &&
+      selectedLine !== undefined &&
+      lastNavigation.current !== navigation
+    ) {
+      lastNavigation.current = navigation;
       instance.dispatch({
         effects: EditorView.scrollIntoView(
           instance.state.doc.line(
@@ -147,7 +321,8 @@ export function EditorSurface({
           { y: "center" },
         ),
       });
-  }, [selectedLine]);
+    }
+  }, [selectedLine, navigation]);
   useEffect(() => {
     if (
       view.current &&

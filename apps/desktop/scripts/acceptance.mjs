@@ -200,6 +200,7 @@ try {
     .click();
   await session.page
     .getByRole("region", { name: "Folder comparison entries" })
+    .getByLabel("Left: file.txt", { exact: true })
     .getByText("file.txt", { exact: true })
     .waitFor();
   await session.destroy();

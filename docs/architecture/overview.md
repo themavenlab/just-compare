@@ -54,6 +54,7 @@ React UI  ──>  Tauri IPC Commands  ──>  Rust Domain Engine  ──>  Fil
 - **State Coordination:** `App.tsx` coordinates high-level workflow state (text diff, folder sync, 3-way merge, preferences).
 - **Editor Surfaces:** `CodeEditor.tsx` lazy-loads the CodeMirror surface (`EditorSurface.tsx`) and handles loading failures gracefully without losing text edits.
 - **Line Alignment:** Diff-derived block widgets align editable lines visually without adding phantom text content to documents.
+- **Folder Navigation & Region Copies:** Folder roots are independent of opened document paths; file-pair navigation does not replace roots or the scanned listing. Region copies recompare the edited snapshot through Rust, retaining the viewport and updating remaining actions. Only explicit navigation scrolls to a selected region.
 - **DOM Virtualization:** A virtualized read-only overview and folder list bound DOM size when dealing with large files or deep trees.
 - **Session Handles:** Rust document handles retain original bytes/encoding and reject stale saves. Sync operations use single-use preview handles; the backend never trusts an arbitrary frontend-authored operation list.
 
@@ -64,7 +65,7 @@ React UI  ──>  Tauri IPC Commands  ──>  Rust Domain Engine  ──>  Fil
 - **Typed Contracts:** Requests, responses, events, and errors have explicit schemas defined and validated at the Rust boundary.
 - **Asynchronous Execution:** Heavy comparison and scan operations run asynchronously off the UI thread and carry stable operation IDs.
 - **Streaming & Cancellation:** Long-running operations support cooperative cancellation via `cancel_job`. Cancelling an operation is never reported as a success.
-- **Mutation Safety:** Diff and scan commands are strictly read-only. File modifications require explicit write commands backed by the [Data Safety Contract](../engineering/data-safety.md).
+- **Mutation Safety:** Diff and scan commands are strictly read-only. File modifications require explicit write commands backed by the [Data Safety Contract](../engineering/data-safety.md). The desktop grants `core:path:allow-join` only for native, platform-aware folder-entry path composition; this does not grant general filesystem I/O permissions.
 
 ---
 

@@ -1,8 +1,9 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { join } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   alignmentGaps,
   copyRange,
@@ -53,6 +54,7 @@ export function App() {
   const [current, setCurrent] = useState(0);
   const [refinement, setRefinement] = useState<DiffSpan[] | null>(null);
   const [folders, setFolders] = useState<FolderEntry[]>([]);
+  const [folderRoots, setFolderRoots] = useState({ left: "", right: "" });
   const [filter, setFilter] = useState("all");
   const [criterion, setCriterion] = useState("content");
   const [exclude, setExclude] = useState("");
@@ -68,6 +70,7 @@ export function App() {
   const [gitOutput, setGitOutput] = useState("");
   const [progress, setProgress] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
+  const [navigation, setNavigation] = useState(0);
   const revision = useRef(0);
   const activeJob = useRef<string | null>(null);
   const [cancellableJob, setCancellableJob] = useState<string | null>(null);
@@ -91,9 +94,15 @@ export function App() {
     revision.current += 1;
     setSpans(null);
     setRefinement(null);
-    setPreview(null);
     setBlocks(null);
     setChoices({});
+    setError("");
+    setNotice("");
+  }
+  function invalidateFolders() {
+    setPreview(null);
+    setFolders([]);
+    setSelectedFiles([]);
     setError("");
     setNotice("");
   }
@@ -133,8 +142,9 @@ export function App() {
     side: Side,
     path: string,
     encoding: string | null = null,
+    checkDiscard = true,
   ) {
-    if (!(await discard(side))) return;
+    if (checkDiscard && !(await discard(side))) return;
     const document = await native("open_document", {
       path,
       encoding,
@@ -171,9 +181,9 @@ export function App() {
     const path = await open({ multiple: false, directory: mode === "folder" });
     if (typeof path !== "string") return;
     if (mode === "folder") {
-      invalidate();
-      setFolders([]);
-      setEditors((prior) => ({ ...prior, [side]: { ...prior[side], path } }));
+      invalidateFolders();
+      if (side !== "base")
+        setFolderRoots((prior) => ({ ...prior, [side]: path }));
     } else await load(side, path);
   }
   async function openSide(side: Side, encoding: string | null = null) {
@@ -206,6 +216,7 @@ export function App() {
       destination,
       convertUtf8: convert,
     });
+    setPreview(null);
     invalidate();
     setEditors((prior) => ({
       ...prior,
@@ -219,18 +230,18 @@ export function App() {
     }));
     setNotice(`${side} saved.`);
   }
-  async function compareInputs() {
+  async function compareInputs(inputs = editors, afterCopy?: DiffSpan) {
     const request = ++revision.current;
     const jobId = crypto.randomUUID();
     startJob(jobId);
-    setSpans(null);
+    if (!afterCopy) setSpans(null);
     setRefinement(null);
     const profile = settings.formats.find((f) =>
-      editors.left.path.toLowerCase().endsWith(f.suffix.toLowerCase()),
+      inputs.left.path.toLowerCase().endsWith(f.suffix.toLowerCase()),
     );
     const result = await native("compare_text", {
-      left: editors.left.text,
-      right: editors.right.text,
+      left: inputs.left.text,
+      right: inputs.right.text,
       jobId,
       options: {
         ignoreCase: profile?.ignoreCase ?? settings.ignoreCase,
@@ -243,14 +254,73 @@ export function App() {
     });
     if (request === revision.current) {
       setSpans(result);
-      setCurrent(0);
+      if (afterCopy) {
+        const remaining = result.filter((span) => span.kind !== "equal");
+        const next = remaining.findIndex(
+          (span) => span.leftStart >= afterCopy.leftStart,
+        );
+        setCurrent(next < 0 ? Math.max(0, remaining.length - 1) : next);
+      } else {
+        setCurrent(0);
+        setNavigation((value) => value + 1);
+      }
     }
   }
   const changes = spans?.filter((s) => s.kind !== "equal") ?? [];
+  const editorGaps = useMemo(
+    () => ({
+      left: alignmentGaps(spans ?? [], "left"),
+      right: alignmentGaps(spans ?? [], "right"),
+    }),
+    [spans],
+  );
   const selected = changes[current];
   function selectDifference(index: number) {
     setCurrent(index);
     setRefinement(null);
+    setNavigation((value) => value + 1);
+  }
+  async function copyDifference(source: "left" | "right", span: DiffSpan) {
+    const destination = source === "left" ? "right" : "left";
+    const text = copyRange(
+      editors[source].text,
+      editors[destination].text,
+      source === "left" ? span.leftStart : span.rightStart,
+      source === "left" ? span.leftEnd : span.rightEnd,
+      destination === "left" ? span.leftStart : span.rightStart,
+      destination === "left" ? span.leftEnd : span.rightEnd,
+    );
+    const inputs = {
+      ...editors,
+      [destination]: {
+        ...editors[destination],
+        text,
+        history: [
+          ...editors[destination].history.slice(-49),
+          editors[destination].text,
+        ],
+      },
+    };
+    revision.current += 1;
+    setRefinement(null);
+    setBlocks(null);
+    setChoices({});
+    setEditors(inputs);
+    try {
+      await compareInputs(inputs, span);
+    } catch (failure) {
+      setSpans(null);
+      throw failure;
+    } finally {
+      document
+        .querySelector<HTMLElement>(
+          `.cm-content[aria-label="${destination === "left" ? "Left text" : "Right text"}"]`,
+        )
+        ?.focus({ preventScroll: true });
+    }
+    setNotice(
+      `Copied to ${destination} draft. Differences refreshed; Save writes the file.`,
+    );
   }
   const leftLines = textLines(editors.left.text);
   const rightLines = textLines(editors.right.text);
@@ -280,12 +350,13 @@ export function App() {
   async function scan() {
     setPreview(null);
     setFolders([]);
+    setSelectedFiles([]);
     setProgress(0);
     const jobId = crypto.randomUUID();
     startJob(jobId);
     const result = await native("scan_folders", {
-      left: editors.left.path,
-      right: editors.right.path,
+      left: folderRoots.left,
+      right: folderRoots.right,
       options: folderOptions(),
       jobId,
     });
@@ -302,8 +373,8 @@ export function App() {
     const jobId = crypto.randomUUID();
     startJob(jobId);
     const result = await native("preview_sync", {
-      left: editors.left.path,
-      right: editors.right.path,
+      left: folderRoots.left,
+      right: folderRoots.right,
       options: folderOptions(),
       mode: syncMode,
       selected,
@@ -315,8 +386,8 @@ export function App() {
     const jobId = crypto.randomUUID();
     startJob(jobId);
     const result = await native("preview_file_action", {
-      left: editors.left.path,
-      right: editors.right.path,
+      left: folderRoots.left,
+      right: folderRoots.right,
       options: folderOptions(),
       relative,
       action,
@@ -458,11 +529,7 @@ export function App() {
           }
         } else if (args[0] === "gui" && args.length === 3) {
           setMode("folder");
-          setEditors((prior) => ({
-            ...prior,
-            left: { ...prior.left, path: args[1] ?? "" },
-            right: { ...prior.right, path: args[2] ?? "" },
-          }));
+          setFolderRoots({ left: args[1] ?? "", right: args[2] ?? "" });
         } else if (args.length) {
           throw new Error("Unsupported desktop arguments.");
         }
@@ -500,12 +567,10 @@ export function App() {
             }
             void attempt(async () => {
               if (latest.current.mode === "folder") {
-                invalidate();
-                setFolders([]);
-                setEditors((prior) => ({
-                  ...prior,
-                  left: { ...prior.left, path: paths[0] ?? prior.left.path },
-                  right: { ...prior.right, path: paths[1] ?? prior.right.path },
+                invalidateFolders();
+                setFolderRoots((prior) => ({
+                  left: paths[0] ?? prior.left,
+                  right: paths[1] ?? prior.right,
                 }));
               } else {
                 if (paths[0]) await load("left", paths[0]);
@@ -545,84 +610,126 @@ export function App() {
     const e = editors[side];
     return (
       <section className="editor" key={side}>
+        <div className="pane-heading">
+          <h3>
+            {side === "base"
+              ? "Base / common ancestor"
+              : side === "left"
+                ? "Left"
+                : "Right"}
+          </h3>
+          <span className={e.text !== e.original ? "badge unsaved" : "badge"}>
+            {mode === "folder"
+              ? "Folder"
+              : e.text !== e.original
+                ? "Unsaved"
+                : e.document
+                  ? "Saved"
+                  : "Draft"}
+          </span>
+        </div>
         <label>
-          {side} path
+          {mode === "folder" ? "Folder path" : "File path"}
           <input
             aria-label={`${side} path`}
-            value={e.path}
+            name={`${side}-path`}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={
+              mode === "folder"
+                ? "Choose a folder or paste its path..."
+                : "Choose a file or paste its path..."
+            }
+            value={
+              mode === "folder" && side !== "base" ? folderRoots[side] : e.path
+            }
             disabled={busy}
             onChange={(event) => {
-              setPreview(null);
-              setFolders([]);
-              setEditors((prior) => ({
-                ...prior,
-                [side]: { ...prior[side], path: event.target.value },
-              }));
+              const path = event.target.value;
+              if (mode === "folder" && side !== "base") {
+                invalidateFolders();
+                setFolderRoots((prior) => ({ ...prior, [side]: path }));
+              } else {
+                setEditors((prior) => ({
+                  ...prior,
+                  [side]: { ...prior[side], path },
+                }));
+              }
             }}
           />
         </label>
         <div className="toolbar compact">
           <button
+            aria-label={`Browse ${side}`}
             disabled={busy}
             onClick={() => void attempt(() => loadDialog(side))}
           >
-            Browse {side}
+            Browse
           </button>
           {mode !== "folder" && (
             <>
               <button
-                disabled={busy}
+                aria-label={`Open ${side}`}
+                disabled={busy || !e.path}
                 onClick={() => void attempt(() => openSide(side))}
               >
-                Open {side}
+                Open
               </button>
               <button
-                disabled={busy}
-                onClick={() =>
-                  void attempt(async () => {
-                    const encoding = window.prompt(
-                      "Encoding label (for example windows-1252 or utf-16le):",
-                    );
-                    if (encoding) await openSide(side, encoding);
-                  })
-                }
-              >
-                Encoding...
-              </button>
-              <button
+                aria-label={`Save ${side}`}
                 disabled={busy}
                 onClick={() => void attempt(() => saveSide(side))}
               >
-                Save {side}
+                Save
               </button>
               <button
+                aria-label={`Save ${side} As`}
                 disabled={busy}
                 onClick={() => void attempt(() => saveSide(side, true))}
               >
-                Save {side} As
+                Save As
               </button>
               <button
-                disabled={busy}
-                onClick={() =>
-                  void attempt(async () => {
-                    if (
-                      await confirm(
-                        "Convert to UTF-8 and save to a new file?",
-                        { kind: "warning" },
-                      )
-                    )
-                      await saveSide(side, true, true);
-                  })
-                }
-              >
-                UTF-8 copy
-              </button>
-              <button
+                aria-label={`Undo ${side}`}
                 disabled={busy || !e.history.length}
                 onClick={() => undoSide(side)}
               >
-                Undo {side}
+                Undo
               </button>
+              <details className="file-options">
+                <summary>More</summary>
+                <div className="toolbar compact">
+                  <button
+                    disabled={busy || !e.path}
+                    onClick={() =>
+                      void attempt(async () => {
+                        const encoding = window.prompt(
+                          "Encoding label (for example windows-1252 or utf-16le):",
+                        );
+                        if (encoding) await openSide(side, encoding);
+                      })
+                    }
+                  >
+                    Encoding...
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      void attempt(async () => {
+                        if (
+                          await confirm(
+                            "Convert to UTF-8 and save to a new file?",
+                            { kind: "warning" },
+                          )
+                        )
+                          await saveSide(side, true, true);
+                      })
+                    }
+                  >
+                    UTF-8 copy
+                  </button>
+                </div>
+              </details>
             </>
           )}
         </div>
@@ -651,9 +758,19 @@ export function App() {
                       : "Base text"
                 }
                 onChange={(text) => change(side, text)}
+                differences={
+                  mode === "text" && side !== "base" ? (spans ?? []) : []
+                }
+                side={side === "right" ? "right" : "left"}
+                selectedDifference={mode === "text" ? selected : undefined}
+                onCopyDifference={
+                  mode === "text" && side !== "base"
+                    ? (span) => void attempt(() => copyDifference(side, span))
+                    : undefined
+                }
                 gaps={
                   mode === "text" && side !== "base"
-                    ? alignmentGaps(spans ?? [], side)
+                    ? editorGaps[side]
                     : undefined
                 }
                 selectedLine={
@@ -663,6 +780,7 @@ export function App() {
                       : selected.rightStart
                     : undefined
                 }
+                navigation={navigation}
                 scrollTop={
                   mode === "text" && side !== "base" ? scrollTop : undefined
                 }
@@ -683,17 +801,63 @@ export function App() {
         ? row.status !== "same"
         : row.status === filter),
   );
+  function renderFolderSide(row: FolderEntry, side: "left" | "right") {
+    const size = side === "left" ? row.leftSize : row.rightSize;
+    const missing = row.status === (side === "left" ? "rightOnly" : "leftOnly");
+    const label = side === "left" ? "Left" : "Right";
+    return (
+      <div
+        className={`folder-file ${missing ? "missing" : row.status}`}
+        aria-label={`${label}: ${row.relative}`}
+      >
+        <span
+          className="file-name"
+          title={row.detail ? `${row.relative}: ${row.detail}` : row.relative}
+        >
+          {missing
+            ? "Not present"
+            : `${row.isDirectory ? "[dir] " : ""}${row.relative}`}
+        </span>
+        <span className="file-size">
+          {missing
+            ? "-"
+            : row.isDirectory
+              ? "Folder"
+              : size === null
+                ? "Size unavailable"
+                : `${size.toLocaleString()} bytes`}
+        </span>
+      </div>
+    );
+  }
+  const inputs = (
+    <section
+      className={`panes ${mode === "merge" ? "three" : mode === "folder" ? "folder-inputs" : ""}`}
+      aria-label={mode === "folder" ? "Folder inputs" : "Text inputs"}
+    >
+      {mode === "merge" && renderEditor("base")}
+      {renderEditor("left")}
+      {renderEditor("right")}
+    </section>
+  );
   return (
     <main
+      id="workbench"
       onKeyDownCapture={(event) => {
         if (busy) return;
         if (
           (event.ctrlKey || event.metaKey) &&
           event.key === "Enter" &&
-          mode === "text"
+          (mode === "text" || mode === "folder" || mode === "merge")
         ) {
           event.preventDefault();
-          void attempt(compareInputs);
+          void attempt(() =>
+            mode === "folder"
+              ? scan()
+              : mode === "merge"
+                ? mergeInputs()
+                : compareInputs(),
+          );
         } else if (
           (event.ctrlKey || event.metaKey) &&
           event.key.toLowerCase() === "s"
@@ -710,6 +874,7 @@ export function App() {
             void attempt(() => saveSide("right"));
           else if (label === "Base text") void attempt(() => saveSide("base"));
         } else if (
+          mode === "text" &&
           event.altKey &&
           changes.length &&
           (event.key === "ArrowDown" || event.key === "ArrowUp")
@@ -722,46 +887,97 @@ export function App() {
         }
       }}
     >
-      <header>
-        <p className="eyebrow">Local comparison / no uploads</p>
-        <h1>Just Compare</h1>
+      <a className="skip-link" href="#workspace">
+        Skip to comparison
+      </a>
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">PHASE 1 WORKBENCH</p>
+          <h1>Compare Workbench</h1>
+        </div>
+        <span className="privacy-badge">Local files. No uploads.</span>
       </header>
-      <nav className="toolbar" aria-label="Workflows">
-        {["text", "folder", "merge"].map((tab) => (
+      <nav className="workflow-nav" aria-label="Workflows">
+        {(
+          [
+            ["text", "Text Compare", "Compare & edit two files"],
+            ["folder", "Folder Compare", "Review & sync two folders"],
+            ["merge", "3-Way Merge", "Resolve changes against a base"],
+          ] as const
+        ).map(([tab, title, description]) => (
           <button
             key={tab}
             disabled={busy}
             aria-pressed={mode === tab}
             onClick={() => {
-              invalidate();
+              if (mode === tab) return;
+              setError("");
+              setNotice("");
               setMode(tab);
             }}
           >
-            {tab}
+            <strong>{title}</strong>
+            <span>{description}</span>
           </button>
         ))}
-        <button
-          disabled={busy}
-          onClick={() =>
-            setSettings((prior) => ({
-              ...prior,
-              theme: prior.theme === "light" ? "dark" : "light",
-            }))
-          }
-        >
-          Toggle theme
-        </button>
-        <button
-          disabled={busy || !settingsReady}
-          onClick={() =>
-            void attempt(async () => {
-              await native("write_settings", { settings });
-              setNotice("Preferences saved.");
-            })
-          }
-        >
-          Save preferences
-        </button>
+      </nav>
+      <div className="workspace-heading" id="workspace" tabIndex={-1}>
+        <div>
+          <h2>
+            {mode === "folder"
+              ? "Compare folders"
+              : mode === "merge"
+                ? "Merge three files"
+                : "Compare text"}
+          </h2>
+          <p>
+            {mode === "folder"
+              ? "Choose two folders, scan for differences, then preview changes before syncing."
+              : mode === "merge"
+                ? "Open a common base and two versions. Generate a merge, resolve conflicts, then save the output."
+                : "Browse for two files or paste text below, then Compare. The starting text is an editable sample."}
+          </p>
+        </div>
+        <details className="preferences">
+          <summary>Preferences</summary>
+          <div className="toolbar compact">
+            <button
+              disabled={busy}
+              onClick={() =>
+                setSettings((prior) => ({
+                  ...prior,
+                  theme: prior.theme === "light" ? "dark" : "light",
+                }))
+              }
+            >
+              Toggle theme
+            </button>
+            <button
+              disabled={busy || !settingsReady}
+              onClick={() =>
+                void attempt(async () => {
+                  await native("write_settings", { settings });
+                  setNotice("Preferences saved.");
+                })
+              }
+            >
+              Save preferences
+            </button>
+          </div>
+          <p className="metadata">
+            Save preferences to persist the theme, rules, profiles, and
+            sessions.
+          </p>
+        </details>
+      </div>
+      <div className="status-bar" role="status">
+        <span>
+          {notice ||
+            (busy ? `Working... ${progress} entries scanned` : "Ready")}
+        </span>
+        <span className="shortcut-hint">
+          Ctrl+Enter: run / Ctrl+S: save focused editor
+        </span>
         {busy && cancellableJob && (
           <button
             onClick={() => {
@@ -775,17 +991,19 @@ export function App() {
             Cancel
           </button>
         )}
-      </nav>
+      </div>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      <p role="status">
-        {notice || (busy ? `Working... ${progress} entries scanned` : "")}
-      </p>
-      <details>
-        <summary>Sessions and recent files</summary>
+      <details className="session-panel">
+        <summary>
+          Sessions and recent files{" "}
+          <span className="metadata">
+            ({settings.sessions.length} saved sessions)
+          </span>
+        </summary>
         <button
           disabled={!settingsReady || busy}
           onClick={() => {
@@ -797,8 +1015,10 @@ export function App() {
                 ...prior.sessions,
                 {
                   name,
-                  left: editors.left.path,
-                  right: editors.right.path,
+                  left:
+                    mode === "folder" ? folderRoots.left : editors.left.path,
+                  right:
+                    mode === "folder" ? folderRoots.right : editors.right.path,
                   mode,
                   base: mode === "merge" ? editors.base.path : "",
                 },
@@ -809,6 +1029,12 @@ export function App() {
           Add current session
         </button>
         <p>Save preferences to persist changes.</p>
+        {!settings.sessions.length && !settings.recent.length && (
+          <p className="empty-state">
+            No saved sessions yet. Open your files, add the current session,
+            then save preferences to use it again.
+          </p>
+        )}
         <button
           disabled={!settingsReady || busy}
           onClick={() => {
@@ -859,12 +1085,11 @@ export function App() {
                 void attempt(async () => {
                   if (session.mode === "folder") {
                     setMode("folder");
-                    invalidate();
-                    setEditors((prior) => ({
-                      ...prior,
-                      left: { ...prior.left, path: session.left },
-                      right: { ...prior.right, path: session.right },
-                    }));
+                    invalidateFolders();
+                    setFolderRoots({
+                      left: session.left,
+                      right: session.right,
+                    });
                   } else {
                     if (session.mode === "merge" && !session.base)
                       throw new Error(
@@ -903,8 +1128,9 @@ export function App() {
           </button>
         ))}
       </details>
-      {mode !== "folder" && (
+      {mode === "text" && (
         <section className="toolbar" aria-label="Comparison options">
+          <span className="toolbar-label">Compare rules</span>
           {(
             [
               ["ignoreCase", "Ignore case"],
@@ -928,37 +1154,43 @@ export function App() {
               {label}
             </label>
           ))}
-          <label>
-            Unimportant regex rules (one per line)
-            <textarea
-              className="rules"
-              value={settings.unimportantPatterns.join("\n")}
-              disabled={busy}
-              onChange={(event) => {
-                invalidate();
-                setSettings((prior) => ({
-                  ...prior,
-                  unimportantPatterns: event.target.value
-                    .split("\n")
-                    .filter(Boolean),
-                }));
-              }}
-            />
-          </label>
+          <details className="advanced-rules">
+            <summary>Advanced rules</summary>
+            <label>
+              Unimportant regex rules (one per line)
+              <textarea
+                className="rules"
+                value={settings.unimportantPatterns.join("\n")}
+                disabled={busy}
+                onChange={(event) => {
+                  invalidate();
+                  setSettings((prior) => ({
+                    ...prior,
+                    unimportantPatterns: event.target.value
+                      .split("\n")
+                      .filter(Boolean),
+                  }));
+                }}
+              />
+            </label>
+            <p className="metadata">
+              File-format profiles override these rules for matching left-file
+              suffixes.
+            </p>
+          </details>
         </section>
       )}
-      <section
-        className={`panes ${mode === "merge" ? "three" : ""}`}
-        aria-label="Text inputs"
-      >
-        {mode === "merge" && renderEditor("base")}
-        {renderEditor("left")}
-        {renderEditor("right")}
-      </section>
       {mode === "text" && (
         <>
-          <div className="toolbar">
-            <button disabled={busy} onClick={() => void attempt(compareInputs)}>
+          <div
+            className="toolbar command-bar"
+            aria-label="Text comparison actions"
+          >
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => void attempt(() => compareInputs())}
+            >
               {busy ? "Comparing..." : "Compare"}
             </button>
             <button
@@ -975,6 +1207,8 @@ export function App() {
               Swap sides
             </button>
             <button
+              aria-label="Previous difference"
+              title="Previous difference (Alt+Up)"
               disabled={busy || !changes.length}
               onClick={() =>
                 selectDifference(
@@ -982,53 +1216,45 @@ export function App() {
                 )
               }
             >
-              Previous difference
+              Previous
             </button>
             <button
+              aria-label="Next difference"
+              title="Next difference (Alt+Down)"
               disabled={busy || !changes.length}
               onClick={() => selectDifference((current + 1) % changes.length)}
             >
-              Next difference
+              Next
             </button>
+            <span className="difference-count">
+              {spans
+                ? changes.length
+                  ? `${current + 1} / ${changes.length} differences`
+                  : "No differences"
+                : "Not compared"}
+            </span>
             {selected && (
               <>
                 <button
+                  aria-label="Copy region to right"
                   disabled={busy}
                   onClick={() =>
-                    change(
-                      "right",
-                      copyRange(
-                        editors.left.text,
-                        editors.right.text,
-                        selected.leftStart,
-                        selected.leftEnd,
-                        selected.rightStart,
-                        selected.rightEnd,
-                      ),
-                    )
+                    void attempt(() => copyDifference("left", selected))
                   }
                 >
-                  Copy region to right
+                  Copy to right
                 </button>
                 <button
+                  aria-label="Copy region to left"
                   disabled={busy}
                   onClick={() =>
-                    change(
-                      "left",
-                      copyRange(
-                        editors.right.text,
-                        editors.left.text,
-                        selected.rightStart,
-                        selected.rightEnd,
-                        selected.leftStart,
-                        selected.leftEnd,
-                      ),
-                    )
+                    void attempt(() => copyDifference("right", selected))
                   }
                 >
-                  Copy region to left
+                  Copy to left
                 </button>
                 <button
+                  aria-label="Refine selected region"
                   disabled={busy}
                   onClick={() =>
                     void attempt(async () =>
@@ -1047,17 +1273,34 @@ export function App() {
                     )
                   }
                 >
-                  Refine selected region
+                  Intraline detail
                 </button>
               </>
             )}
           </div>
+          {inputs}
+          {spans && (
+            <p className="diff-legend">
+              <span className="legend-replace">Changed</span>
+              <span className="legend-insert">Added on right</span>
+              <span className="legend-delete">Removed from right</span>
+              <span>Blue edge: selected difference</span>
+              <span>Gutter arrows: copy that region to the other draft</span>
+            </p>
+          )}
+          {!spans && (
+            <p className="empty-state">
+              Run Compare to highlight changed lines. Copies refresh differences
+              automatically; compare again after manual edits.
+            </p>
+          )}
           {spans && (
             <section aria-live="polite">
               <h2>{changes.length} changed regions</h2>
-              <p>
-                Selected difference {changes.length ? current + 1 : 0}/
-                {changes.length}. Line ranges are zero-based and half-open.
+              <p className="result-summary">
+                {changes.length
+                  ? `Difference ${current + 1} of ${changes.length}. Use Previous / Next or Alt+Up / Alt+Down to navigate.`
+                  : "No differences under the current comparison rules."}
               </p>
               <div className="overview">
                 {changes.map((span, index) => (
@@ -1072,56 +1315,62 @@ export function App() {
                   </button>
                 ))}
               </div>
-              <VirtualList
-                count={aligned.length}
-                label="Aligned line comparison"
-                render={(index) => {
-                  const row = aligned[index];
-                  if (!row) return null;
-                  return (
-                    <div className={`aligned ${row.kind}`}>
-                      <code>
-                        {row.left === null
-                          ? ""
-                          : `${row.left + 1}  ${leftLines[row.left]?.content ?? ""}`}
-                      </code>
-                      <code>
-                        {row.right === null
-                          ? ""
-                          : `${row.right + 1}  ${rightLines[row.right]?.content ?? ""}`}
-                      </code>
-                    </div>
-                  );
-                }}
-              />
-              <table>
-                <thead>
-                  <tr>
-                    <th>Kind</th>
-                    <th>Left lines</th>
-                    <th>Right lines</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {spans.slice(0, 100).map((span, index) => (
-                    <tr key={index}>
-                      <td>{span.kind}</td>
-                      <td>
-                        {span.leftStart}..{span.leftEnd}
-                      </td>
-                      <td>
-                        {span.rightStart}..{span.rightEnd}
-                      </td>
+              <details className="comparison-details">
+                <summary>Aligned read-only view &amp; range details</summary>
+                <VirtualList
+                  count={aligned.length}
+                  label="Aligned line comparison"
+                  render={(index) => {
+                    const row = aligned[index];
+                    if (!row) return null;
+                    return (
+                      <div className={`aligned ${row.kind}`}>
+                        <code>
+                          {row.left === null
+                            ? ""
+                            : `${row.left + 1}  ${leftLines[row.left]?.content ?? ""}`}
+                        </code>
+                        <code>
+                          {row.right === null
+                            ? ""
+                            : `${row.right + 1}  ${rightLines[row.right]?.content ?? ""}`}
+                        </code>
+                      </div>
+                    );
+                  }}
+                />
+                <table>
+                  <caption>
+                    Line ranges use zero-based, end-exclusive offsets.
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th>Kind</th>
+                      <th>Left lines</th>
+                      <th>Right lines</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {spans.length > 100 && (
-                <p>
-                  Range table shows first 100 regions; aligned view and
-                  navigation cover all regions.
-                </p>
-              )}
+                  </thead>
+                  <tbody>
+                    {spans.slice(0, 100).map((span, index) => (
+                      <tr key={index}>
+                        <td>{span.kind}</td>
+                        <td>
+                          {span.leftStart}..{span.leftEnd}
+                        </td>
+                        <td>
+                          {span.rightStart}..{span.rightEnd}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {spans.length > 100 && (
+                  <p>
+                    Range table shows first 100 regions; aligned view and
+                    navigation cover all regions.
+                  </p>
+                )}
+              </details>
               {refinement && selected && (
                 <RefinedRegion
                   left={leftLines
@@ -1153,16 +1402,21 @@ export function App() {
       )}
       {mode === "folder" && (
         <>
-          <div className="toolbar">
+          <div
+            className="toolbar command-bar"
+            aria-label="Folder comparison actions"
+          >
             <label>
               Criterion
               <select
+                aria-label="Criterion"
                 value={criterion}
                 disabled={busy}
                 onChange={(event) => {
                   setCriterion(event.target.value);
                   setPreview(null);
                   setFolders([]);
+                  setSelectedFiles([]);
                 }}
               >
                 <option value="content">Content hash</option>
@@ -1173,6 +1427,7 @@ export function App() {
             <label>
               Exclusions (glob per line)
               <textarea
+                aria-label="Exclusions (glob per line)"
                 className="rules"
                 value={exclude}
                 disabled={busy}
@@ -1180,10 +1435,15 @@ export function App() {
                   setExclude(event.target.value);
                   setPreview(null);
                   setFolders([]);
+                  setSelectedFiles([]);
                 }}
               />
             </label>
-            <button disabled={busy} onClick={() => void attempt(scan)}>
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => void attempt(scan)}
+            >
               Scan folders
             </button>
             <button
@@ -1209,11 +1469,8 @@ export function App() {
             <button
               disabled={busy}
               onClick={() => {
-                invalidate();
-                setFolders([]);
-                setSelectedFiles([]);
-                setEditors((prior) => ({
-                  ...prior,
+                invalidateFolders();
+                setFolderRoots((prior) => ({
                   left: prior.right,
                   right: prior.left,
                 }));
@@ -1224,21 +1481,46 @@ export function App() {
             <label>
               Show
               <select
+                aria-label="Show"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
               >
                 {[
-                  "all",
-                  "differences",
-                  "same",
-                  "leftOnly",
-                  "rightOnly",
-                  "error",
-                ].map((value) => (
-                  <option key={value}>{value}</option>
+                  ["all", "All entries"],
+                  ["differences", "Differences"],
+                  ["same", "Same"],
+                  ["leftOnly", "Left only"],
+                  ["rightOnly", "Right only"],
+                  ["error", "Errors"],
+                ].map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
                 ))}
               </select>
             </label>
+          </div>
+          {inputs}
+          <p className="result-summary">
+            {notice.startsWith("Scan complete")
+              ? `${visibleFolders.length} visible entries / ${selectedFiles.length} selected.`
+              : "Scan folders to list their contents. Sync always runs from left to right; swap roots to reverse direction."}
+          </p>
+          <div className="folder-legend" aria-label="Folder status legend">
+            <span className="same">Same</span>
+            <span className="different">Different</span>
+            <span className="leftOnly">Left only</span>
+            <span className="rightOnly">Right only</span>
+            <span className="error-state">Error / unavailable</span>
+          </div>
+          <div className="folder-row folder-head" aria-hidden="true">
+            <span />
+            <span>Status</span>
+            <span>Left name / size</span>
+            <span>Right name / size</span>
+            <span>Compare</span>
+            <span>Move</span>
+            <span>Recycle</span>
           </div>
           <VirtualList
             count={visibleFolders.length}
@@ -1247,7 +1529,7 @@ export function App() {
               const row = visibleFolders[index];
               if (!row) return null;
               return (
-                <div className="folder-row">
+                <div className="folder-row" data-status={row.status}>
                   <input
                     type="checkbox"
                     aria-label={`Select ${row.relative}`}
@@ -1266,14 +1548,21 @@ export function App() {
                       )
                     }
                   />
-                  <span>{row.status}</span>
-                  <span title={row.detail ?? ""}>
-                    {row.isDirectory ? "[dir] " : ""}
-                    {row.relative}
+                  <span className={`file-status ${row.status}`}>
+                    {row.status === "leftOnly"
+                      ? "Left only"
+                      : row.status === "rightOnly"
+                        ? "Right only"
+                        : row.status === "same"
+                          ? "Same"
+                          : row.status === "different"
+                            ? "Different"
+                            : row.status === "error"
+                              ? "Error"
+                              : row.status}
                   </span>
-                  <span>
-                    {row.leftSize ?? "-"} / {row.rightSize ?? "-"}
-                  </span>
+                  {renderFolderSide(row, "left")}
+                  {renderFolderSide(row, "right")}
                   <button
                     disabled={
                       busy ||
@@ -1284,10 +1573,22 @@ export function App() {
                     }
                     onClick={() =>
                       void attempt(async () => {
-                        const rootLeft = editors.left.path;
-                        const rootRight = editors.right.path;
-                        await load("left", `${rootLeft}/${row.relative}`);
-                        await load("right", `${rootRight}/${row.relative}`);
+                        if (
+                          !(await discard("left")) ||
+                          !(await discard("right"))
+                        )
+                          return;
+                        const segments = row.relative.split("/");
+                        const leftPath = await join(
+                          folderRoots.left,
+                          ...segments,
+                        );
+                        const rightPath = await join(
+                          folderRoots.right,
+                          ...segments,
+                        );
+                        await load("left", leftPath, null, false);
+                        await load("right", rightPath, null, false);
                         setMode("text");
                       })
                     }
@@ -1358,9 +1659,19 @@ export function App() {
       )}
       {mode === "merge" && (
         <>
-          <button disabled={busy} onClick={() => void attempt(mergeInputs)}>
-            Merge three inputs
-          </button>
+          <div className="toolbar command-bar">
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => void attempt(mergeInputs)}
+            >
+              Merge three inputs
+            </button>
+            <span className="metadata">
+              Saving stays disabled until every conflict is resolved.
+            </span>
+          </div>
+          {inputs}
           {(blocks || output || outputDocument) && (
             <section>
               {blocks ? (

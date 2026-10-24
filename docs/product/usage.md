@@ -8,7 +8,7 @@ This guide covers everyday usage of Just Compare, including text comparison, fol
 
 1. **Opening Files:** Select the **text** tab, enter file paths and click **Open**, or use the file browse dialogs.
 2. **Comparing:** Edit either pane directly. Clicking **Compare** (or pressing `Ctrl+Enter` / `Cmd+Enter`) calculates aligned editable lines and an interactive overview map. Ignore options (case, whitespace, line endings) and regex rules affect comparison keys only, never your source bytes on disk.
-3. **Navigation & Merging:** Navigate differences with the overview buttons or by pressing `Alt+ArrowUp` / `Alt+ArrowDown`. Copy the selected difference block in either direction, use Undo, or click **Refine selected region** for character/word-level intraline highlighting.
+3. **Navigation & Merging:** Navigate differences with the overview buttons or by pressing `Alt+ArrowUp` / `Alt+ArrowDown`. Copy the selected difference block in either direction, use Undo, or click **Refine selected region** for character/word-level intraline highlighting. Each changed region also features an inline gutter arrow: the left pane's right arrow copies that region into the right draft, and the right pane's left arrow copies it into the left draft. Gutter arrows operate directly on their own region regardless of current selection. An arrow beside an empty gap copies the deletion to the counterpart pane. Region copies refresh differences automatically while preserving editor scroll positions without implicit disk writes.
 4. **Saving:** Press `Ctrl+S` / `Cmd+S` to save the active pane. Save As will prompt before overwriting any existing destination. Explicit legacy or UTF-16 encodings can be selected from the encoding menu.
 5. **Safety Protections:** External modifications to an open file trigger conflict alerts. Unsaved edits require confirmation before loading a new file or closing the window.
 
@@ -16,13 +16,14 @@ This guide covers everyday usage of Just Compare, including text comparison, fol
 
 ## 2. Folder Comparison & Synchronization
 
-1. **Scanning Folders:** Select the **folder** tab, choose two local directories, select your comparison criterion (Content Hash, File Size, or Size + Timestamp), and click **Scan folders**.
+1. **Scanning Folders:** Select the **folder** tab, choose two local directories, select your comparison criterion (Content Hash, File Size, or Size + Timestamp), and click **Scan folders**. Entries display aligned left and right filenames with color-coded status indicators (muted for identical, red for different, blue for left-only, purple for right-only, amber for errors). Missing counterparts are marked explicitly as "Not present".
 2. **Exclusion Rules:** Enter newline-separated glob patterns (e.g. `*.tmp`, `node_modules/**`, `.git/**`) to exclude matching entries from the scan.
-3. **Operation Previews:**
+3. **Opening File Pairs:** Clicking **Open pair** loads the selected file pair into Text Compare without altering folder roots or clearing the scanned directory listing.
+4. **Operation Previews:**
    - **Update:** Previews copying new and modified files from Left to Right, including creating missing subdirectories.
    - **Mirror:** Previews Left-to-Right updates plus recycling Right-only entries so the Right directory mirrors the Left.
    - **Single File Actions:** Select any entry to copy, move (copy to Right and recycle Left), or recycle individually.
-4. **Execution & Cancellation:** Review the planned operations and click Execute. If files change externally between preview generation and execution, the stale preview is halted automatically. Cancelling mid-flight cleanly stops remaining operations while reporting already completed actions.
+5. **Execution & Cancellation:** Review the planned operations and click Execute. If files change externally between preview generation and execution, the stale preview is halted automatically. Cancelling mid-flight cleanly stops remaining operations while reporting already completed actions.
 
 ---
 

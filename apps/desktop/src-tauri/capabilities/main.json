@@ -4,6 +4,7 @@
   "description": "Local main window with no filesystem or shell plugin permissions.",
   "windows": ["main"],
   "permissions": [
+    "core:path:allow-join",
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:event:default",

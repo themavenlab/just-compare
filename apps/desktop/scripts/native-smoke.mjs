@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -24,17 +25,85 @@ let session;
 try {
   session = await launchNative(config);
   const { page, call } = session;
+  const textWorkflow = page.getByRole("button", { name: /Text Compare/ });
+  assert.equal(await textWorkflow.getAttribute("aria-pressed"), "true");
+  assert.equal(await page.locator(".session-panel").getAttribute("open"), null);
+  assert.equal(await page.locator(".preferences").getAttribute("open"), null);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Open left", exact: true })
+      .isDisabled(),
+    true,
+  );
   await page.getByRole("textbox", { name: "Left text" }).fill("same\nold\n");
   await page.getByRole("textbox", { name: "Right text" }).fill("same\nnew\n");
   await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
+  await page.locator(".cm-editor .diff-selected").first().waitFor();
+  assert.equal(await page.locator(".cm-editor .diff-replace").count(), 2);
+  for (const width of [1100, 900]) {
+    await page.setViewportSize({ width, height: 800 });
+    const alignment = await page.evaluate(() => {
+      const panes = [...document.querySelectorAll(".code-editor")];
+      return Math.abs(
+        panes[0].getBoundingClientRect().top -
+          panes[1].getBoundingClientRect().top,
+      );
+    });
+    assert.ok(
+      alignment <= 2,
+      `Pane headers misalign by ${alignment}px at ${width}px`,
+    );
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.locator(".file-options > summary").first().click();
+  assert.equal(
+    await page.evaluate(() => {
+      const panes = [...document.querySelectorAll(".code-editor")];
+      return (
+        Math.abs(
+          panes[0].getBoundingClientRect().top -
+            panes[1].getBoundingClientRect().top,
+        ) <= 2
+      );
+    }),
+    true,
+    "Expanding file options must preserve pane alignment.",
+  );
+  await page.locator(".file-options > summary").first().click();
+  await textWorkflow.click();
+  assert.equal(await page.locator(".cm-editor .diff-replace").count(), 2);
+  const comparePosition = await page
+    .getByRole("button", { name: "Compare", exact: true })
+    .boundingBox();
+  const editorPosition = await page
+    .locator(".code-editor")
+    .first()
+    .boundingBox();
+  assert.ok(
+    comparePosition && editorPosition && comparePosition.y < editorPosition.y,
+  );
+  assert.equal(
+    await page.locator(".comparison-details").getAttribute("open"),
+    null,
+  );
+  await page
+    .getByText("Aligned read-only view & range details", { exact: true })
+    .click();
   assert.equal(
     await page.getByRole("cell", { name: "replace", exact: true }).count(),
     1,
   );
   await page.getByRole("textbox", { name: "Right text" }).fill("same\nold\n");
+  assert.equal(await page.locator(".cm-editor .diff-line").count(), 0);
   assert.equal(
     await page
       .getByRole("heading", { name: "1 changed regions", exact: true })
@@ -45,6 +114,176 @@ try {
   await page
     .getByRole("heading", { name: "0 changed regions", exact: true })
     .waitFor();
+  await page.getByRole("textbox", { name: "Left text" }).fill("first\nlast\n");
+  await page
+    .getByRole("textbox", { name: "Right text" })
+    .fill("first\nadded\nlast\n");
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await page.locator(".cm-editor .diff-insert").waitFor();
+  assert.equal(await page.locator(".cm-editor .diff-delete").count(), 0);
+  await page.getByRole("button", { name: "Swap sides", exact: true }).click();
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await page.locator(".cm-editor .diff-delete").waitFor();
+  assert.equal(await page.locator(".cm-editor .diff-insert").count(), 0);
+  assert.equal(
+    await page
+      .getByRole("textbox", { name: "Right text" })
+      .locator(".diff-line")
+      .count(),
+    0,
+    "Missing-side gaps must not be marked as real document lines.",
+  );
+  await page.getByRole("button", { name: "Swap sides", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Left text" })
+    .fill("old-a\nsame\nold-b\n");
+  await page
+    .getByRole("textbox", { name: "Right text" })
+    .fill("new-a\nsame\nnew-b\n");
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await page
+    .getByRole("heading", { name: "2 changed regions", exact: true })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Next difference", exact: true })
+    .click();
+  assert.equal(
+    await page.locator(".difference-count").innerText(),
+    "2 / 2 differences",
+  );
+  assert.equal(
+    await page
+      .getByRole("textbox", { name: "Right text" })
+      .locator(".diff-selected")
+      .innerText(),
+    "new-b",
+  );
+  await page.keyboard.press("Alt+ArrowUp");
+  assert.equal(
+    await page.locator(".difference-count").innerText(),
+    "1 / 2 differences",
+  );
+  await page
+    .getByRole("button", { name: "Copy difference 2 to right", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: "1 changed regions", exact: true })
+    .waitFor();
+  await page.locator(".copy-arrow:not(:disabled)").first().waitFor();
+  assert.equal(
+    (
+      await page
+        .getByRole("textbox", { name: "Right text" })
+        .locator(".cm-line")
+        .allTextContents()
+    ).join("\n"),
+    "new-a\nsame\nold-b\n",
+    "A nonselected region arrow must copy that region, not the selected region.",
+  );
+  assert.equal(
+    await page.locator(".copy-arrow").count(),
+    2,
+    "Remaining difference arrows refresh automatically.",
+  );
+  await page.getByRole("button", { name: "Undo right", exact: true }).click();
+  assert.equal(
+    (
+      await page
+        .getByRole("textbox", { name: "Right text" })
+        .locator(".cm-line")
+        .allTextContents()
+    ).join("\n"),
+    "new-a\nsame\nnew-b\n",
+  );
+  const arrowCases = [
+    {
+      left: "same\nold\n",
+      right: "same\nnew\n",
+      destination: "left",
+      expected: "same\nnew\n",
+    },
+    { left: "a\n", right: "extra\na\n", destination: "right", expected: "a\n" },
+    {
+      left: "a\n",
+      right: "a\nextra\n",
+      destination: "left",
+      expected: "a\nextra\n",
+    },
+    { left: "extra\na\n", right: "a\n", destination: "left", expected: "a\n" },
+    {
+      left: "a\nextra\n",
+      right: "a\n",
+      destination: "right",
+      expected: "a\nextra\n",
+    },
+    { left: "", right: "added", destination: "left", expected: "added" },
+    { left: "", right: "added", destination: "right", expected: "" },
+    { left: "removed", right: "", destination: "right", expected: "removed" },
+    { left: "removed", right: "", destination: "left", expected: "" },
+  ];
+  for (const [index, test] of arrowCases.entries()) {
+    await page.getByRole("textbox", { name: "Left text" }).fill(test.left);
+    await page.getByRole("textbox", { name: "Right text" }).fill(test.right);
+    await page.getByRole("button", { name: "Compare", exact: true }).click();
+    const arrow = page.getByRole("button", {
+      name: `Copy difference 1 to ${test.destination}`,
+      exact: true,
+    });
+    await arrow.waitFor();
+    const source = test.destination === "left" ? "right" : "left";
+    await arrow.focus();
+    await arrow.press(index % 2 === 0 ? "Enter" : "Space");
+    await page
+      .getByRole("heading", { name: "0 changed regions", exact: true })
+      .waitFor();
+    await page.getByRole("button", { name: "Compare", exact: true }).waitFor();
+    const destinationEditor = page.getByRole("textbox", {
+      name: test.destination === "left" ? "Left text" : "Right text",
+      exact: true,
+    });
+    assert.equal(
+      (await destinationEditor.locator(".cm-line").allTextContents()).join(
+        "\n",
+      ),
+      test.expected,
+      `Inline copy case ${index + 1}`,
+    );
+    assert.equal(
+      await page.locator(".copy-arrow").count(),
+      0,
+      "The copied difference disappears after automatic comparison.",
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.getAttribute("aria-label"),
+      ),
+      test.destination === "left" ? "Left text" : "Right text",
+      "Copy restores keyboard focus to the destination draft.",
+    );
+    await page
+      .getByRole("button", { name: `Undo ${test.destination}`, exact: true })
+      .click();
+    assert.equal(
+      (await destinationEditor.locator(".cm-line").allTextContents()).join(
+        "\n",
+      ),
+      test[test.destination],
+      "Inline copy is undoable.",
+    );
+    assert.equal(
+      (
+        await page
+          .getByRole("textbox", {
+            name: source === "left" ? "Left text" : "Right text",
+            exact: true,
+          })
+          .locator(".cm-line")
+          .allTextContents()
+      ).join("\n"),
+      test[source],
+      "Inline copy leaves its source unchanged.",
+    );
+  }
   await page.getByRole("textbox", { name: "Left text" }).fill("HELLO \n");
   await page.getByRole("textbox", { name: "Right text" }).fill("hello\n");
   await page
@@ -93,8 +332,13 @@ try {
     .click();
   await page.locator("mark").first().waitFor();
   await page
-    .getByRole("button", { name: "Copy region to right", exact: true })
+    .getByRole("button", { name: "Copy difference 1 to right", exact: true })
     .click();
+  assert.equal(
+    await readFile(rightFile, "utf8"),
+    "updated\r\n",
+    "Inline copying must not save the file.",
+  );
   assert.equal(
     (
       await page
@@ -335,7 +579,14 @@ try {
     "{broken",
   );
   await writeFile(join(config, "settings.json"), validSettings);
-  await page.getByRole("button", { name: "folder", exact: true }).click();
+  await writeFile(join(leftFolder, "different.txt"), "left version");
+  await writeFile(join(rightFolder, "different.txt"), "right version");
+  await writeFile(join(leftFolder, "left-only.txt"), "left only");
+  await writeFile(join(rightFolder, "right-only.txt"), "right only");
+  const linkedTarget = join(fixtures, "linked-target");
+  await mkdir(linkedTarget);
+  await symlink(linkedTarget, join(leftFolder, "linked-entry"), "junction");
+  await page.getByRole("button", { name: /Folder Compare/ }).click();
   await page
     .getByRole("textbox", { name: "left path", exact: true })
     .fill(leftFolder);
@@ -346,8 +597,129 @@ try {
   await page
     .getByRole("region", { name: "Folder comparison entries" })
     .getByText("copy.txt", { exact: true })
+    .first()
     .waitFor();
+  const folderList = page.getByRole("region", {
+    name: "Folder comparison entries",
+  });
+  for (const [relative, status] of [
+    ["copy.txt", "same"],
+    ["different.txt", "different"],
+    ["left-only.txt", "leftOnly"],
+    ["right-only.txt", "rightOnly"],
+    ["linked-entry", "error"],
+  ]) {
+    const row = folderList.locator(".folder-row").filter({
+      has: page.getByRole("checkbox", {
+        name: `Select ${relative}`,
+        exact: true,
+      }),
+    });
+    assert.equal(await row.getAttribute("data-status"), status);
+    const left = row.locator(".folder-file").nth(0);
+    const right = row.locator(".folder-file").nth(1);
+    assert.equal(await left.getAttribute("aria-label"), `Left: ${relative}`);
+    assert.equal(await right.getAttribute("aria-label"), `Right: ${relative}`);
+    assert.equal(
+      await left.locator(".file-name").innerText(),
+      status === "rightOnly" ? "Not present" : relative,
+    );
+    assert.equal(
+      await right.locator(".file-name").innerText(),
+      status === "leftOnly" ? "Not present" : relative,
+    );
+    if (status === "error")
+      assert.equal(
+        await row.getByRole("button", { name: "Open pair" }).isDisabled(),
+        true,
+      );
+  }
+  for (const theme of ["light", "dark"]) {
+    await page.locator(".preferences > summary").click();
+    if (
+      (await page.evaluate(() => document.documentElement.dataset.theme)) !==
+      theme
+    )
+      await page
+        .getByRole("button", { name: "Toggle theme", exact: true })
+        .click();
+    await page.locator(".preferences > summary").click();
+    const colors = await folderList
+      .locator(".folder-file:not(.missing) .file-name")
+      .evaluateAll((nodes) =>
+        Object.fromEntries(
+          nodes.map((node) => [
+            node.parentElement.className,
+            getComputedStyle(node).color,
+          ]),
+        ),
+      );
+    assert.equal(
+      new Set(Object.values(colors)).size,
+      5,
+      `Each folder status has a distinct filename color in ${theme} theme.`,
+    );
+    const contrast = await folderList.evaluate((list) => {
+      const luminance = (rgb) => {
+        const values = rgb
+          .match(/\d+/g)
+          .slice(0, 3)
+          .map(Number)
+          .map((value) => {
+            const s = value / 255;
+            return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+          });
+        return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
+      };
+      const background = luminance(getComputedStyle(list).backgroundColor);
+      return [...list.querySelectorAll(".file-name")].map((name) => {
+        const foreground = luminance(getComputedStyle(name).color);
+        return (
+          (Math.max(background, foreground) + 0.05) /
+          (Math.min(background, foreground) + 0.05)
+        );
+      });
+    });
+    assert.ok(
+      contrast.every((value) => value >= 4.5),
+      `Filename contrast must reach 4.5:1 in ${theme}: ${contrast}`,
+    );
+  }
+  await page.getByLabel("Show", { exact: true }).selectOption("leftOnly");
+  assert.equal(
+    await folderList
+      .locator(".folder-row:not([data-status='leftOnly'])")
+      .count(),
+    0,
+  );
+  await page.getByLabel("Show", { exact: true }).selectOption("all");
+  await page
+    .getByRole("checkbox", { name: "Select left-only.txt", exact: true })
+    .check();
+  await page
+    .getByLabel("Exclusions (glob per line)", { exact: true })
+    .fill("*.tmp");
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Preview selected copies", exact: true })
+      .isDisabled(),
+    true,
+    "Changed scan criteria clear stale selections.",
+  );
+  await page.getByLabel("Exclusions (glob per line)", { exact: true }).fill("");
+  await page.getByRole("button", { name: "Scan folders", exact: true }).click();
+  await folderList.getByText("copy.txt", { exact: true }).first().waitFor();
   assert.equal(await page.getByRole("alert").count(), 0);
+  for (const width of [1100, 900, 640]) {
+    await page.setViewportSize({ width, height: 800 });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+      `Folder entries should not overflow at ${width}px.`,
+    );
+  }
   const directoryRow = page
     .locator(".folder-row")
     .filter({ hasText: "[dir] empty" });
@@ -362,15 +734,29 @@ try {
   await session.page.waitForFunction(
     () => document.documentElement.dataset.theme === "dark",
   );
-  await session.page
-    .getByText("Sessions and recent files", { exact: true })
-    .click();
+  await session.page.locator(".session-panel > summary").click();
   await session.page
     .getByRole("button", { name: "merge fixture", exact: true })
     .click();
   await session.page
     .getByRole("textbox", { name: "Base text", exact: true })
     .waitFor();
+  assert.equal(
+    await session.page
+      .getByRole("region", { name: "Comparison options" })
+      .count(),
+    0,
+  );
+  for (const width of [1100, 900, 640]) {
+    await session.page.setViewportSize({ width, height: 800 });
+    assert.equal(
+      await session.page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+      `Merge should not overflow at ${width}px.`,
+    );
+  }
   await session.page
     .getByText("UTF-8 draft", { exact: false })
     .last()

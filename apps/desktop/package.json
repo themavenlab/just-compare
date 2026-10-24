@@ -12,6 +12,7 @@
     "test:native": "node scripts/native-smoke.mjs",
     "test:git": "node scripts/git-smoke.mjs",
     "test:acceptance": "node scripts/acceptance.mjs",
+    "test:workflows": "node scripts/workflow-regression.mjs",
     "package:windows": "node scripts/package-windows.mjs",
     "tauri": "tauri"
   },
