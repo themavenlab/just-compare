@@ -47,7 +47,7 @@ try {
     .getByRole("button", { name: "Text Compare", exact: true })
     .click();
   await session.page
-    .getByRole("textbox", { name: "left path", exact: true })
+    .getByRole("combobox", { name: "left path", exact: true })
     .fill(unrelated);
   await session.page
     .getByRole("button", { name: "Open left", exact: true })

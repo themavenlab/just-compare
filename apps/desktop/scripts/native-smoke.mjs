@@ -29,6 +29,8 @@ let session;
 try {
   session = await launchNative(config);
   const { page, call } = session;
+  assert.equal(await page.getByRole("tab").count(), 0);
+  await selectWorkspace(page, "text");
   const textWorkflow = page.getByRole("tab").first();
   assert.equal(await textWorkflow.getAttribute("aria-selected"), "true");
   assert.equal(
@@ -375,12 +377,14 @@ try {
   }
   await page.getByRole("textbox", { name: "Left text" }).fill("HELLO \n");
   await page.getByRole("textbox", { name: "Right text" }).fill("hello\n");
+  await togglePanel(page, "rules");
   await page
     .getByRole("checkbox", { name: "Ignore case", exact: true })
     .check();
   await page
     .getByRole("checkbox", { name: "Ignore whitespace", exact: true })
     .check();
+  await togglePanel(page, "rules");
   await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "0 changed regions", exact: true })
@@ -395,23 +399,20 @@ try {
   const rightFile = join(fixtures, "right.txt");
   await writeFile(leftFile, "original\r\n");
   await writeFile(rightFile, "updated\r\n");
+  await page.getByRole("textbox", { name: "Left text" }).fill("");
+  await page.getByRole("textbox", { name: "Right text" }).fill("");
   await page
-    .getByRole("textbox", { name: "Left text" })
-    .fill("First line\nOriginal text\n");
-  await page
-    .getByRole("textbox", { name: "Right text" })
-    .fill("First line\nUpdated text\n");
-  await page
-    .getByRole("textbox", { name: "left path", exact: true })
+    .getByRole("combobox", { name: "left path", exact: true })
     .fill(leftFile);
   await page.getByRole("button", { name: "Open left", exact: true }).click();
   await page
-    .getByRole("textbox", { name: "right path", exact: true })
+    .getByRole("combobox", { name: "right path", exact: true })
     .fill(rightFile);
   await page.getByRole("button", { name: "Open right", exact: true }).click();
   await page
-    .getByRole("textbox", { name: "Right text", exact: true })
-    .waitFor();
+    .getByText("UTF-8 draft", { exact: false })
+    .last()
+    .waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "1 changed regions", exact: true })
@@ -533,9 +534,17 @@ try {
   assert.equal(rows[0].status, "leftOnly");
   assert.deepEqual(Object.keys(rows[0]).sort(), [
     "detail",
+    "error",
+    "importance",
     "isDirectory",
+    "leftModified",
+    "leftRelative",
     "leftSize",
+    "newer",
+    "newerMixed",
     "relative",
+    "rightModified",
+    "rightRelative",
     "rightSize",
     "status",
   ]);
@@ -692,10 +701,10 @@ try {
   await symlink(linkedTarget, join(leftFolder, "linked-entry"), "junction");
   await selectWorkspace(page, "folder");
   await page
-    .getByRole("textbox", { name: "left path", exact: true })
+    .getByRole("combobox", { name: "left path", exact: true })
     .fill(leftFolder);
   await page
-    .getByRole("textbox", { name: "right path", exact: true })
+    .getByRole("combobox", { name: "right path", exact: true })
     .fill(rightFolder);
   await page.getByRole("button", { name: "Scan folders", exact: true }).click();
   await page
@@ -720,23 +729,20 @@ try {
       }),
     });
     assert.equal(await row.getAttribute("data-status"), status);
-    const left = row.locator(".folder-file").nth(0);
-    const right = row.locator(".folder-file").nth(1);
+    const left = row.locator(".folder-side").nth(0);
+    const right = row.locator(".folder-side").nth(1);
     assert.equal(await left.getAttribute("aria-label"), `Left: ${relative}`);
     assert.equal(await right.getAttribute("aria-label"), `Right: ${relative}`);
     assert.equal(
       await left.locator(".file-name").innerText(),
-      status === "rightOnly" ? "Not present" : relative,
+      status === "rightOnly" ? "" : relative,
     );
     assert.equal(
       await right.locator(".file-name").innerText(),
-      status === "leftOnly" ? "Not present" : relative,
+      status === "leftOnly" ? "" : relative,
     );
     if (status === "error")
-      assert.equal(
-        await row.getByRole("button", { name: "Open pair" }).isDisabled(),
-        true,
-      );
+      assert.equal(await row.getByRole("checkbox").isDisabled(), true);
   }
   for (const theme of ["light", "dark"]) {
     await togglePanel(page, "preferences");
@@ -749,11 +755,11 @@ try {
         .click();
     await togglePanel(page, "preferences");
     const colors = await folderList
-      .locator(".folder-file:not(.missing) .file-name")
+      .locator(".folder-side:not(.missing) .file-name")
       .evaluateAll((nodes) =>
         Object.fromEntries(
           nodes.map((node) => [
-            node.parentElement.className,
+            node.closest(".folder-side").className,
             getComputedStyle(node).color,
           ]),
         ),
@@ -789,14 +795,17 @@ try {
       `Filename contrast must reach 4.5:1 in ${theme}: ${contrast}`,
     );
   }
-  await page.getByLabel("Show", { exact: true }).selectOption("leftOnly");
+  await page.getByRole("button", { name: "Diffs", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Show Left Orphans", exact: true })
+    .click();
   assert.equal(
     await folderList
       .locator(".folder-row:not([data-status='leftOnly'])")
       .count(),
     0,
   );
-  await page.getByLabel("Show", { exact: true }).selectOption("all");
+  await page.getByRole("button", { name: "All", exact: true }).click();
   await page
     .getByRole("checkbox", { name: "Select left-only.txt", exact: true })
     .check();
@@ -806,9 +815,7 @@ try {
     .fill("*.tmp");
   await togglePanel(page, "rules");
   assert.equal(
-    await page
-      .getByRole("button", { name: "Preview selected copies", exact: true })
-      .isDisabled(),
+    await page.getByRole("button", { name: "Copy", exact: true }).isDisabled(),
     true,
     "Changed scan criteria clear stale selections.",
   );
@@ -828,16 +835,18 @@ try {
       `Folder entries should not overflow at ${width}px.`,
     );
   }
-  const directoryRow = page
-    .locator(".folder-row")
-    .filter({ hasText: "[dir] empty" });
+  const directoryRow = page.locator('.folder-row[data-relative="empty"]');
+  const tabCount = await page.getByRole("tab").count();
+  await directoryRow.locator(".folder-side").first().dblclick();
   assert.equal(
-    await directoryRow.getByRole("button", { name: "Open pair" }).isDisabled(),
-    true,
+    await page.getByRole("tab").count(),
+    tabCount,
+    "Directories expand rather than open as text files.",
   );
   await session.close();
   session = null;
   session = await launchNative(config);
+  await selectWorkspace(session.page, "text");
   assert.equal((await session.call("read_settings")).formats[0].suffix, ".txt");
   await session.page.waitForFunction(
     () => document.documentElement.dataset.theme === "dark",
@@ -872,7 +881,7 @@ try {
   assert.ok(
     (
       await session.page
-        .getByRole("textbox", { name: "base path", exact: true })
+        .getByRole("combobox", { name: "base path", exact: true })
         .inputValue()
     ).endsWith("\\base.txt"),
   );

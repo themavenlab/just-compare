@@ -47,6 +47,7 @@ npm run test:git --workspace apps\desktop
 npm run test:acceptance --workspace apps\desktop
 npm run test:workflows --workspace apps\desktop
 npm run test:workbench --workspace apps\desktop
+npm run test:compact --workspace apps\desktop
 ```
 
 Stop the live development terminal before preparing an embedded-assets build. These scripts own temporary fixtures and processes; manual tests should use disposable copies too. Screen-reader and native confirmation UX still require manual checks.
@@ -73,6 +74,7 @@ npm run test:git --workspace apps/desktop
 npm run test:acceptance --workspace apps/desktop
 npm run test:workflows --workspace apps/desktop
 npm run test:workbench --workspace apps/desktop
+npm run test:compact --workspace apps/desktop
 ```
 
 Use `npm ci` for a fresh checkout. Native suites require an embedded-assets debug build, launch only owned processes, and write only owned temporary fixture trees. They are Windows WebView2/CDP tests, not browser mocks or other-platform evidence.

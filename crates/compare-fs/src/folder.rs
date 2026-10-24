@@ -10,6 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const MAX_ENTRIES: usize = 10_000;
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
+#[path = "folder_rules.rs"]
+mod folder_rules;
+pub use folder_rules::{
+  refresh_selection, scan_pair_with_rules, scan_selected_with_rules, validate_folder_configuration,
+  ComparisonImportance, ContentMethod, FolderRules, FolderSide, FolderTextRules, QuickTest,
+  QuickTestPolicy,
+};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Criterion {
@@ -33,13 +41,21 @@ impl Default for FolderOptions {
   }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntry {
   pub relative: String,
+  pub left_relative: Option<String>,
+  pub right_relative: Option<String>,
   pub status: String,
   pub left_size: Option<u64>,
   pub right_size: Option<u64>,
+  pub left_modified: Option<u64>,
+  pub right_modified: Option<u64>,
+  pub newer: Option<FolderSide>,
+  pub newer_mixed: bool,
+  pub importance: ComparisonImportance,
+  pub error: Option<String>,
   pub detail: Option<String>,
   pub is_directory: bool,
 }
@@ -104,16 +120,7 @@ fn snapshot(path: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileError> 
 
 type Scan = (BTreeMap<String, Snapshot>, BTreeMap<String, String>);
 
-fn scan(
-  root: &Path,
-  options: &FolderOptions,
-  cancelled: &AtomicBool,
-  progress: &mut impl FnMut(usize),
-) -> Result<Scan, FileError> {
-  let root = checked_path(root, false)?;
-  if !root.is_dir() {
-    return Err(FileError("Folder root must be a directory.".into()));
-  }
+fn exclusion_filters(options: &FolderOptions) -> Result<globset::GlobSet, FileError> {
   if options.exclude.len() > 32 {
     return Err(FileError(
       "At most 32 exclusion patterns are supported.".into(),
@@ -126,7 +133,20 @@ fn scan(
     }
     builder.add(Glob::new(pattern).map_err(|e| FileError(e.to_string()))?);
   }
-  let filters = builder.build().map_err(|e| FileError(e.to_string()))?;
+  builder.build().map_err(|e| FileError(e.to_string()))
+}
+
+fn scan(
+  root: &Path,
+  options: &FolderOptions,
+  cancelled: &AtomicBool,
+  progress: &mut impl FnMut(usize),
+) -> Result<Scan, FileError> {
+  let root = checked_path(root, false)?;
+  if !root.is_dir() {
+    return Err(FileError("Folder root must be a directory.".into()));
+  }
+  let filters = exclusion_filters(options)?;
   let mut stack = vec![root.clone()];
   let mut files = BTreeMap::new();
   let mut errors = BTreeMap::new();
@@ -254,9 +274,17 @@ pub fn scan_pair(
               if (l.hash == "directory") != (r.hash == "directory") {
                 return FolderEntry {
                   relative: name.clone(),
+                  left_relative: Some(name.clone()),
+                  right_relative: Some(name.clone()),
                   status: "error".into(),
                   left_size: Some(l.size),
                   right_size: Some(r.size),
+                  left_modified: folder_rules::modified_ms(l.modified),
+                  right_modified: folder_rules::modified_ms(r.modified),
+                  newer: None,
+                  newer_mixed: false,
+                  importance: ComparisonImportance::Unknown,
+                  error: Some("File/directory type collision.".into()),
                   detail: Some("File/directory type collision.".into()),
                   is_directory: false,
                 };
@@ -279,9 +307,25 @@ pub fn scan_pair(
         };
         FolderEntry {
           relative: name.clone(),
+          left_relative: (l.is_some() || ae.contains_key(name)).then(|| name.clone()),
+          right_relative: (r.is_some() || be.contains_key(name)).then(|| name.clone()),
           status: status.into(),
           left_size: l.map(|s| s.size),
           right_size: r.map(|s| s.size),
+          left_modified: l.and_then(|s| folder_rules::modified_ms(s.modified)),
+          right_modified: r.and_then(|s| folder_rules::modified_ms(s.modified)),
+          newer: match (l, r) {
+            (Some(l), Some(r)) if l.modified > r.modified => Some(FolderSide::Left),
+            (Some(l), Some(r)) if l.modified < r.modified => Some(FolderSide::Right),
+            _ => None,
+          },
+          newer_mixed: false,
+          importance: match status {
+            "same" => ComparisonImportance::Equal,
+            "error" => ComparisonImportance::Unknown,
+            _ => ComparisonImportance::Important,
+          },
+          error: detail.clone(),
           detail,
           is_directory: l.or(r).is_some_and(|s| s.hash == "directory"),
         }

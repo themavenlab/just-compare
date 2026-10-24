@@ -13,6 +13,7 @@ export interface DiffSpan {
   leftEnd: number;
   rightStart: number;
   rightEnd: number;
+  minor?: boolean;
 }
 
 export async function compareText(

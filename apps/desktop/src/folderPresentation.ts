@@ -1,6 +1,24 @@
 import type { FolderEntry } from "./api";
 
-export type FolderSort = "name" | "status" | "leftSize" | "rightSize";
+export type FolderSort =
+  | "name"
+  | "status"
+  | "leftSize"
+  | "rightSize"
+  | "leftModified"
+  | "rightModified";
+export const differenceFilters = [
+  ["differences", "Show Differences"],
+  ["paired", "Show No Orphans"],
+  ["pairedDifferences", "Show Differences but No Orphans"],
+  ["orphans", "Show Orphans"],
+  ["leftNewer", "Show Left Newer"],
+  ["rightNewer", "Show Right Newer"],
+  ["leftNewerOrphans", "Show Left Newer and Left Orphans"],
+  ["rightNewerOrphans", "Show Right Newer and Right Orphans"],
+  ["leftOnly", "Show Left Orphans"],
+  ["rightOnly", "Show Right Orphans"],
+] as const;
 export interface FolderNode {
   path: string;
   name: string;
@@ -9,12 +27,53 @@ export interface FolderNode {
   entry: FolderEntry | null;
 }
 export function matchesFilter(entry: FolderEntry, filter: string) {
-  return (
-    filter === "all" ||
-    (filter === "differences"
-      ? entry.status !== "same"
-      : entry.status === filter)
-  );
+  const paired = entry.leftSize !== null && entry.rightSize !== null;
+  const different = entry.status !== "same" && entry.status !== "error";
+  if (filter === "all") return true;
+  if (entry.status === "error") return filter === "error";
+  switch (filter) {
+    case "differences":
+      return different;
+    case "paired":
+      return paired;
+    case "pairedDifferences":
+      return paired && different;
+    case "orphans":
+      return !paired;
+    case "leftNewer":
+      return paired && different && entry.newer === "left";
+    case "rightNewer":
+      return paired && different && entry.newer === "right";
+    case "leftNewerOrphans":
+      return (
+        entry.status === "leftOnly" ||
+        (paired && different && entry.newer === "left")
+      );
+    case "rightNewerOrphans":
+      return (
+        entry.status === "rightOnly" ||
+        (paired && different && entry.newer === "right")
+      );
+    default:
+      return entry.status === filter;
+  }
+}
+export function matchesName(relative: string, patterns: string) {
+  return patterns
+    .split(";")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .some((pattern) => {
+      const expression = pattern === "*.*" ? "*" : pattern;
+      const regex = new RegExp(
+        `^${expression
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replaceAll("*", ".*")
+          .replaceAll("?", ".")}$`,
+        "i",
+      );
+      return regex.test(relative.split("/").at(-1) ?? relative);
+    });
 }
 export function canCopy(entry: FolderEntry, destination: "left" | "right") {
   if (entry.status === "error" || entry.status === "same") return false;

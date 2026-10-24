@@ -22,15 +22,16 @@ Use the tab bar or File menu to open independent Text Compare, Folder Compare, o
 
 ## 3. Folder Comparison & Synchronization
 
-1. **Scanning Folders:** Select a folder tab, choose two local directories, select your comparison criterion (Content Hash, File Size, or Size + Timestamp), and click **Scan folders**. Choose between Tree and Flat views, sort by name, status, or size, and expand or collapse folders. Entries display aligned left and right filenames with color-coded status indicators (muted for identical, red for different, blue for left-only, purple for right-only, amber for errors). Missing counterparts are marked explicitly as "Not present".
-2. **Exclusion Rules:** Enter newline-separated glob patterns (e.g. `*.tmp`, `node_modules/**`, `.git/**`) to exclude matching entries from the scan.
-3. **Opening File Pairs:** Clicking **Open pair** loads the selected file pair into a new Text Compare tab without altering folder roots or clearing the scanned directory listing.
-4. **Row Copy Actions:** Each eligible row features copy arrows for either direction. These create an exact preview and never write immediately. Directory row copies create the selected directory and necessary ancestors only, rather than copying all descendant files.
-5. **Operation Previews:**
-   - **Update:** Previews copying new and modified files from Left to Right, including creating missing subdirectories.
-   - **Mirror:** Previews Left-to-Right updates plus recycling Right-only entries so the Right directory mirrors the Left.
-   - **Single File Actions:** Select any entry to copy, move (copy to Right and recycle Left), or recycle individually.
-6. **Execution & Cancellation:** Review the planned operations and click Execute. If files change externally between preview generation and execution, the stale preview is halted automatically. Cancelling mid-flight cleanly stops remaining operations while reporting already completed actions.
+1. **Scanning Folders:** Select a folder tab, choose two local directories, select your comparison criterion, and click **Scan folders**. Choose between Tree and Flat views, sort by name, size, or modified timestamp, and expand or collapse folders. Entries display mirrored Name/Size/Modified columns with color-coded status indicators (muted for identical, red for different, blue for left-only, purple for right-only, amber for errors).
+2. **Comparison Rules:** Click **Rules** to configure independent size/timestamp checks, timestamp tolerance, right-side timezone offsets, daylight-saving adjustments, attribute comparisons, case/extension alignment, and content rules. Content comparison defaults to binary hashing, with optional CRC-32 checksums. Unicode filename alignment supports canonical NFC matching within the same parent folder. On Windows, executable versions (file and product versions in EXE, DLL, OCX, SYS, SCR, CPL binaries) can be compared directly as metadata.
+3. **Exclusion Rules:** Enter newline-separated glob patterns (e.g. `*.tmp`, `node_modules/**`, `.git/**`) to exclude matching entries from the scan.
+4. **Opening File Pairs:** Clicking **Open pair** (or pressing Enter on a file row) loads the selected pair into a new Text Compare tab without altering folder roots or clearing directory listings.
+5. **Row Copy Actions & Context Menu:** Each eligible row features copy arrows for either direction. Right-clicking a row opens contextual commands (Copy to Side, Move to Side, Delete to Recycle Bin, Rename, Make Directory, Read-only attributes, and Touch timestamp). Directory operations create a recursive preview before any execution.
+6. **Operation Previews:**
+   - **Update:** Previews copying new and modified files from Left to Right (or reverse), including creating missing subdirectories.
+   - **Mirror:** Previews updates plus recycling counterpart-only entries so the target directory mirrors the source.
+   - **Single File Actions:** Select any entry to copy, move, or recycle individually.
+7. **Execution & Cancellation:** Review the planned operations and click Execute. If files change externally between preview generation and execution, the stale preview is halted automatically. Cancelling mid-flight cleanly stops remaining operations while reporting already completed actions. Free disk space is sampled for both roots after scanning.
 
 ---
 

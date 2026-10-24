@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchNative } from "./native-harness.mjs";
+import {
+  launchNative,
+  previewUpdate,
+  selectWorkspace,
+  togglePanel,
+} from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-workbench-"));
 let session;
@@ -22,6 +27,7 @@ try {
   await mkdir(join(root, "config"));
   session = await launchNative(join(root, "config"));
   const { page } = session;
+  await selectWorkspace(page, "text");
   const normalizedRoots = await session.call("normalize_folder_roots", {
     left,
     right,
@@ -72,9 +78,11 @@ try {
   const secondId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
+  await togglePanel(page, "rules");
   await workspace
     .getByRole("checkbox", { name: "Ignore case", exact: true })
     .check();
+  await togglePanel(page, "rules");
   await page.locator(`#${originalId}`).click();
   assert.equal(
     (await text("Left").locator(".cm-line").allTextContents()).join("\n"),
@@ -82,7 +90,11 @@ try {
   );
   assert.equal(
     await workspace
-      .getByRole("checkbox", { name: "Ignore case", exact: true })
+      .getByRole("checkbox", {
+        name: "Ignore case",
+        exact: true,
+        includeHidden: true,
+      })
       .isChecked(),
     false,
   );
@@ -104,7 +116,11 @@ try {
   await page.locator(`#${secondId}`).click();
   assert.equal(
     await workspace
-      .getByRole("checkbox", { name: "Ignore case", exact: true })
+      .getByRole("checkbox", {
+        name: "Ignore case",
+        exact: true,
+        includeHidden: true,
+      })
       .isChecked(),
     true,
   );
@@ -201,12 +217,8 @@ try {
   await page
     .getByRole("button", { name: "Folder Compare", exact: true })
     .click();
-  await workspace
-    .getByRole("textbox", { name: "left path", exact: true })
-    .fill(left);
-  await workspace
-    .getByRole("textbox", { name: "right path", exact: true })
-    .fill(right);
+  await workspace.getByLabel("left path", { exact: true }).fill(left);
+  await workspace.getByLabel("right path", { exact: true }).fill(right);
   await workspace
     .getByRole("button", { name: "Scan folders", exact: true })
     .click();
@@ -219,23 +231,21 @@ try {
   const row = (path) => list.locator(`.folder-row[data-relative="${path}"]`);
   await row("nested/second.txt").waitFor();
   await workspace
-    .getByRole("button", { name: "Collapse nested", exact: true })
+    .getByRole("button", { name: "Collapse nested left", exact: true })
     .click();
   assert.equal(await row("nested/second.txt").count(), 0);
   await workspace
-    .getByRole("button", { name: "Expand nested", exact: true })
+    .getByRole("button", { name: "Expand nested left", exact: true })
     .click();
   await row("nested/second.txt").getByRole("checkbox").check();
   await workspace
-    .getByRole("button", { name: "Sort by name", exact: true })
+    .getByRole("button", { name: "Sort left by name", exact: true })
     .click();
   assert.equal(
     await row("nested/second.txt").getByRole("checkbox").isChecked(),
     true,
   );
-  await row("first.txt")
-    .getByRole("button", { name: "Open pair", exact: true })
-    .click();
+  await row("first.txt").locator(".folder-side").first().dblclick();
   await text("Left").waitFor();
   await page.waitForFunction(() =>
     document
@@ -251,12 +261,10 @@ try {
     .getByRole("button", { name: "Return to folder comparison" })
     .click();
   assert.equal(
-    await workspace
-      .getByRole("textbox", { name: "left path", exact: true })
-      .inputValue(),
+    await workspace.getByLabel("left path", { exact: true }).inputValue(),
     left,
   );
-  await row("nested/second.txt").dblclick();
+  await row("nested/second.txt").locator(".folder-side").first().dblclick();
   await page.waitForFunction(() =>
     document
       .querySelector(
@@ -270,6 +278,7 @@ try {
     "Keep this unsaved draft\n",
   );
   await page.locator(`#${folderTabId}`).click();
+  await row("right-only.txt").locator(".folder-side").last().hover();
   await row("right-only.txt")
     .getByRole("button", { name: "Copy right-only.txt to left", exact: true })
     .click();
@@ -295,6 +304,7 @@ try {
     await readFile(join(left, "right-only.txt")),
     await readFile(join(right, "right-only.txt")),
   );
+  await row("first.txt").locator(".folder-side").first().hover();
   await row("first.txt")
     .getByRole("button", { name: "Copy first.txt to right", exact: true })
     .click();
@@ -369,17 +379,21 @@ try {
     await workspace.locator(".result-summary").innerText(),
     /stale|Scan folders to list/,
   );
-  await row("first.txt").click({ button: "right" });
+  await row("first.txt")
+    .locator(".folder-side")
+    .first()
+    .click({ button: "right" });
   await page
-    .getByRole("menuitem", { name: "Copy to right", exact: true })
+    .getByRole("menuitem", { name: "Open With", exact: true })
     .waitFor();
   await page.keyboard.press("ArrowDown");
   assert.equal(
     await page.evaluate(() => document.activeElement?.textContent),
-    "Recycle left",
+    "Open pair",
   );
   await page.keyboard.press("Escape");
   assert.equal(await page.getByRole("menu").count(), 0);
+  await row("nested/second.txt").locator(".folder-side").first().hover();
   await row("nested/second.txt")
     .getByRole("button", {
       name: "Copy nested/second.txt to right",
@@ -407,6 +421,7 @@ try {
     .getByRole("button", { name: "Scan folders", exact: true })
     .click();
   await row("nested/second.txt").waitFor();
+  await row("nested/second.txt").locator(".folder-side").first().hover();
   await row("nested/second.txt")
     .getByRole("button", {
       name: "Copy nested/second.txt to right",
@@ -422,15 +437,9 @@ try {
   const secondFolderId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
-  await workspace
-    .getByRole("textbox", { name: "left path", exact: true })
-    .fill(left);
-  await workspace
-    .getByRole("textbox", { name: "right path", exact: true })
-    .fill(right);
-  await workspace
-    .getByRole("button", { name: "Preview update left to right", exact: true })
-    .click();
+  await workspace.getByLabel("left path", { exact: true }).fill(left);
+  await workspace.getByLabel("right path", { exact: true }).fill(right);
+  await previewUpdate(page);
   assert.match(
     await session.respondToDialog("Cancel"),
     /Replace the pending sync preview/,
@@ -439,9 +448,7 @@ try {
   await page.locator(`#${folderTabId}`).click();
   assert.equal(await workspace.locator(".sync-preview").count(), 1);
   await page.locator(`#${secondFolderId}`).click();
-  await workspace
-    .getByRole("button", { name: "Preview update left to right", exact: true })
-    .click();
+  await previewUpdate(page);
   assert.match(
     await session.respondToDialog("Confirm"),
     /Replace the pending sync preview/,
@@ -499,7 +506,7 @@ try {
   );
   await page.getByRole("button", { name: "Text Compare", exact: true }).click();
   await workspace
-    .getByRole("textbox", { name: "left path", exact: true })
+    .getByLabel("left path", { exact: true })
     .fill(join(left, "first.txt"));
   await workspace
     .getByRole("button", { name: "Open left", exact: true })
@@ -536,12 +543,8 @@ try {
   const scanTabId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
-  await workspace
-    .getByRole("textbox", { name: "left path", exact: true })
-    .fill(largeLeft);
-  await workspace
-    .getByRole("textbox", { name: "right path", exact: true })
-    .fill(largeRight);
+  await workspace.getByLabel("left path", { exact: true }).fill(largeLeft);
+  await workspace.getByLabel("right path", { exact: true }).fill(largeRight);
   await workspace
     .getByRole("button", { name: "Scan folders", exact: true })
     .click();
@@ -560,7 +563,7 @@ try {
   );
   await page.locator(`#${scanTabId}`).click();
   assert.match(
-    await workspace.locator(".folder-view-bar").innerText(),
+    await workspace.locator(".folder-status-counts").innerText(),
     /1000 visible/,
   );
   assert.ok(

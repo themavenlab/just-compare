@@ -19,14 +19,15 @@ class Gap extends WidgetType {
   }
   toDOM() {
     const element = document.createElement("div");
-    element.style.height = `${this.lines * 21}px`;
+    element.style.height = `${this.lines * 18}px`;
     element.className = "alignment-gap";
     element.setAttribute("aria-hidden", "true");
     return element;
   }
   get estimatedHeight() {
-    return this.lines * 21;
+    return this.lines * 18;
   }
+
   eq(other: Gap) {
     return (
       this.lines === other.lines &&
@@ -35,6 +36,22 @@ class Gap extends WidgetType {
           other.copyMarker !== null &&
           this.copyMarker.eq(other.copyMarker)))
     );
+  }
+}
+
+class FoldedLines extends WidgetType {
+  constructor(private readonly count: number) {
+    super();
+  }
+  eq(other: FoldedLines) {
+    return this.count === other.count;
+  }
+  toDOM() {
+    const element = document.createElement("div");
+    element.className = "comparison-fold";
+    element.textContent = `${this.count} lines hidden by display filter`;
+    element.setAttribute("aria-label", element.textContent);
+    return element;
   }
 }
 
@@ -91,6 +108,7 @@ export function EditorSurface({
   side = "left",
   selectedDifference,
   onCopyDifference,
+  displayMode = "all",
 }: {
   text: string;
   onChange: (text: string) => void;
@@ -106,6 +124,7 @@ export function EditorSurface({
   side?: "left" | "right";
   selectedDifference?: DiffSpan | undefined;
   onCopyDifference?: ((span: DiffSpan) => void) | undefined;
+  displayMode?: "all" | "differences" | "same" | "context";
 }) {
   const element = useRef<HTMLDivElement>(null);
   const [syntaxError, setSyntaxError] = useState("");
@@ -143,7 +162,7 @@ export function EditorSurface({
           EditorView.theme({
             "&": { height: "100%" },
             ".cm-scroller": { overflow: "auto", fontFamily: "monospace" },
-            ".cm-line": { lineHeight: "21px" },
+            ".cm-line": { lineHeight: "18px" },
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !updating.current)
@@ -200,8 +219,21 @@ export function EditorSurface({
         updating.current = false;
       }
     }
+    const hidden = differences.flatMap((span) => {
+      const start = side === "left" ? span.leftStart : span.rightStart;
+      const end = side === "left" ? span.leftEnd : span.rightEnd;
+      if (
+        (displayMode === "differences" && span.kind === "equal") ||
+        (displayMode === "same" && span.kind !== "equal")
+      )
+        return end > start ? [{ start, end }] : [];
+      if (displayMode === "context" && span.kind === "equal" && end - start > 6)
+        return [{ start: start + 3, end: end - 3 }];
+      return [];
+    });
     const copyMarkers = differences
       .filter((span) => span.kind !== "equal")
+      .filter(() => displayMode !== "same")
       .map((span, index) => ({
         start: side === "left" ? span.leftStart : span.rightStart,
         end: side === "left" ? span.leftEnd : span.rightEnd,
@@ -216,24 +248,46 @@ export function EditorSurface({
           () => copyCallback.current?.(span),
         ),
       }));
-    const decorations = gaps.map(({ line, count }) => {
-      const position =
-        line < instance.state.doc.lines
-          ? instance.state.doc.line(line + 1).from
-          : instance.state.doc.length;
-      return Decoration.widget({
-        widget: new Gap(
-          count,
-          copyEnabled
-            ? (copyMarkers.find(
-                (entry) => entry.start === line && entry.start === entry.end,
-              )?.marker ?? null)
-            : null,
-        ),
-        block: true,
-        side: line < instance.state.doc.lines ? -1 : 1,
-      }).range(position);
-    });
+    const displayedGaps =
+      displayMode === "same"
+        ? differences
+            .filter(
+              (span) =>
+                span.kind !== "equal" &&
+                (side === "left"
+                  ? span.leftEnd === span.leftStart &&
+                    span.rightEnd > span.rightStart
+                  : span.rightEnd === span.rightStart &&
+                    span.leftEnd > span.leftStart),
+            )
+            .map((span) => ({
+              line: side === "left" ? span.leftStart : span.rightStart,
+              count: 1,
+            }))
+        : gaps;
+    const decorations = displayedGaps
+      .filter(
+        ({ line }) =>
+          !hidden.some((range) => line >= range.start && line < range.end),
+      )
+      .map(({ line, count }) => {
+        const position =
+          line < instance.state.doc.lines
+            ? instance.state.doc.line(line + 1).from
+            : instance.state.doc.length;
+        return Decoration.widget({
+          widget: new Gap(
+            count,
+            copyEnabled
+              ? (copyMarkers.find(
+                  (entry) => entry.start === line && entry.start === entry.end,
+                )?.marker ?? null)
+              : null,
+          ),
+          block: true,
+          side: line < instance.state.doc.lines ? -1 : 1,
+        }).range(position);
+      });
     for (const span of differences) {
       if (span.kind === "equal") continue;
       const start = side === "left" ? span.leftStart : span.rightStart;
@@ -243,14 +297,32 @@ export function EditorSurface({
         line < end && line < instance.state.doc.lines;
         line++
       ) {
+        if (hidden.some((range) => line >= range.start && line < range.end))
+          continue;
         decorations.push(
           Decoration.line({
             attributes: {
-              class: `diff-line diff-${span.kind}${span === selectedDifference ? " diff-selected" : ""}`,
+              class: `diff-line diff-${span.kind}${span.minor ? " diff-minor" : ""}${span === selectedDifference ? " diff-selected" : ""}`,
             },
           }).range(instance.state.doc.line(line + 1).from),
         );
       }
+    }
+    for (const range of hidden) {
+      const from = instance.state.doc.line(
+        Math.min(range.start + 1, instance.state.doc.lines),
+      ).from;
+      const to =
+        range.end < instance.state.doc.lines
+          ? instance.state.doc.line(range.end + 1).from
+          : instance.state.doc.length;
+      if (to > from)
+        decorations.push(
+          Decoration.replace({
+            widget: new FoldedLines(range.end - range.start),
+            block: true,
+          }).range(from, to),
+        );
     }
     const markers = RangeSet.of(
       copyMarkers
@@ -304,6 +376,7 @@ export function EditorSurface({
     selectedDifference,
     disabled,
     copyEnabled,
+    displayMode,
   ]);
   useEffect(() => {
     const instance = view.current;

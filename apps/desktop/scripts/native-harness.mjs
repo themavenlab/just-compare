@@ -15,6 +15,7 @@ export async function selectWorkspace(page, mode) {
   if (await tabs.count()) await tabs.last().getByRole("tab").click();
   else
     await page
+      .locator(".new-comparisons")
       .getByRole("button", {
         name: {
           text: "Text Compare",
@@ -28,11 +29,29 @@ export async function selectWorkspace(page, mode) {
 
 export async function togglePanel(page, panel) {
   const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
-  const element = workspace.locator(`[data-panel="${panel}"]`);
-  if ((await element.getAttribute("open")) !== null) {
-    await element.locator("summary").click();
+  if (
+    panel === "rules" &&
+    (await workspace.locator(".folder-workspace").count())
+  ) {
+    const dialog = page.getByRole("dialog", {
+      name: "Session Settings - Folder Compare",
+      exact: true,
+    });
+    if (await dialog.count()) {
+      await dialog.getByRole("button", { name: "OK", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+    } else
+      await workspace
+        .getByRole("button", { name: "Rules", exact: true })
+        .click();
     return;
   }
+  const element = workspace.locator(`[data-panel="${panel}"]`);
+  if ((await element.getAttribute("open")) !== null) {
+    await element.locator(":scope > summary").click();
+    return;
+  }
+
   const menu = panel === "sessions" ? "Session" : "View";
   const command = {
     sessions: "Sessions and recent files",
@@ -43,6 +62,19 @@ export async function togglePanel(page, panel) {
   if (!command) throw new Error(`Unsupported test panel: ${panel}`);
   await page.getByRole("button", { name: menu, exact: true }).click();
   await page.getByRole("menuitem", { name: command, exact: true }).click();
+}
+
+export async function previewUpdate(page) {
+  const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
+  await workspace
+    .getByRole("button", { name: "Copy options", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", {
+      name: "Preview update left to right",
+      exact: true,
+    })
+    .click();
 }
 
 export async function launchNative(config, args = [], options = {}) {
@@ -133,9 +165,12 @@ export async function launchNative(config, args = [], options = {}) {
     const page =
       context.pages()[0] ??
       (await context.waitForEvent("page", { timeout: 15000 }));
+    page.on("pageerror", (error) =>
+      console.error("Native renderer error:", error.message),
+    );
     await page
-      .getByRole("heading", { name: "Just Compare", exact: true })
-      .waitFor();
+      .getByRole("heading", { name: "Compare Workbench", exact: true })
+      .waitFor({ state: "attached" });
     const call = (command, args = {}) =>
       page.evaluate(
         ({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args),

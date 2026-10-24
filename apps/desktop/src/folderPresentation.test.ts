@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FolderEntry } from "./api";
-import { canCopy, folderRows } from "./folderPresentation";
+import {
+  canCopy,
+  differenceFilters,
+  folderRows,
+  matchesFilter,
+  matchesName,
+} from "./folderPresentation";
 import { relatedPaths, sameSummary, sessionWorkflow } from "./workbench";
 
 const entry = (
@@ -18,6 +24,56 @@ const entry = (
 });
 
 describe("folder presentation", () => {
+  it("implements every screenshot difference predicate without guessing newer timestamps", () => {
+    const rows = [
+      entry("equal", "same"),
+      { ...entry("left-newer"), newer: "left" as const },
+      { ...entry("right-newer"), newer: "right" as const },
+      { ...entry("tie"), newer: null },
+      entry("left-only", "leftOnly", 2, null),
+      entry("right-only", "rightOnly", null, 2),
+      entry("error", "error", null, null),
+    ];
+    const expected: Record<string, string[]> = {
+      differences: [
+        "left-newer",
+        "right-newer",
+        "tie",
+        "left-only",
+        "right-only",
+      ],
+      paired: ["equal", "left-newer", "right-newer", "tie"],
+      pairedDifferences: ["left-newer", "right-newer", "tie"],
+      orphans: ["left-only", "right-only"],
+      leftNewer: ["left-newer"],
+      rightNewer: ["right-newer"],
+      leftNewerOrphans: ["left-newer", "left-only"],
+      rightNewerOrphans: ["right-newer", "right-only"],
+      leftOnly: ["left-only"],
+      rightOnly: ["right-only"],
+    };
+    expect(differenceFilters).toHaveLength(10);
+    for (const [filter] of differenceFilters)
+      expect(
+        rows
+          .filter((row) => matchesFilter(row, filter))
+          .map((row) => row.relative),
+      ).toEqual(expected[filter]);
+    expect(
+      rows
+        .filter((row) => matchesFilter(row, "error"))
+        .map((row) => row.relative),
+    ).toEqual(["error"]);
+    expect(rows.filter((row) => matchesFilter(row, "all"))).toHaveLength(7);
+  });
+  it("matches display wildcards literally and does not interpret regex input", () => {
+    expect(matchesName("nested/README", "*.*")).toBe(true);
+    expect(matchesName("nested/a.TXT", "*.txt;*.md")).toBe(true);
+    expect(matchesName("nested/a.json", "*.txt;*.md")).toBe(false);
+    expect(matchesName("a[1].txt", "a[1].txt")).toBe(true);
+    expect(matchesName("a1.txt", "a[1].txt")).toBe(false);
+    expect(matchesName("x.ts", "?.ts")).toBe(true);
+  });
   const entries = [
     entry("nested/z.txt"),
     entry("a.txt", "same"),

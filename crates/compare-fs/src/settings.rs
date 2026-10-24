@@ -12,6 +12,8 @@ pub struct Session {
   pub mode: String,
   #[serde(default)]
   pub base: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub folder_rules: Option<crate::FolderRules>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,6 +29,18 @@ pub struct Settings {
   pub unimportant_patterns: Vec<String>,
   #[serde(default)]
   pub formats: Vec<FormatRule>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub folder_rules: Option<crate::FolderRules>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub content_comparison: Option<ContentComparison>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContentComparison {
+  pub method: crate::ContentMethod,
+  pub show_results: bool,
+  pub prompt: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,11 +65,31 @@ impl Default for Settings {
       ignore_line_endings: false,
       unimportant_patterns: Vec::new(),
       formats: Vec::new(),
+      folder_rules: None,
+      content_comparison: None,
     }
   }
 }
 
 fn validate(settings: &Settings) -> Result<(), FileError> {
+  if settings.content_comparison.as_ref().is_some_and(|options| {
+    !matches!(
+      options.method,
+      crate::ContentMethod::Binary | crate::ContentMethod::Rules | crate::ContentMethod::Crc
+    )
+  }) {
+    return Err(FileError(
+      "Selected content-comparison method is unavailable.".into(),
+    ));
+  }
+  if let Some(rules) = &settings.folder_rules {
+    rules.validate()?;
+  }
+  for session in &settings.sessions {
+    if let Some(rules) = &session.folder_rules {
+      rules.validate()?;
+    }
+  }
   if settings.version != 1 {
     return Err(FileError(
       "Unsupported settings version; file was not reset.".into(),
@@ -161,6 +195,41 @@ mod tests {
     assert!(load_settings(&path).is_err());
     assert_eq!(std::fs::read_to_string(path).unwrap(), "{broken");
   }
+  #[test]
+  fn approved_folder_methods_survive_settings_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("settings.json");
+    let settings = Settings {
+      folder_rules: Some(crate::FolderRules {
+        content: crate::ContentMethod::Crc,
+        executable_version: cfg!(windows),
+        text_rules: crate::FolderTextRules {
+          unicode_normalization: true,
+          ..Default::default()
+        },
+        ..Default::default()
+      }),
+      content_comparison: Some(ContentComparison {
+        method: crate::ContentMethod::Crc,
+        show_results: true,
+        prompt: false,
+      }),
+      ..Default::default()
+    };
+    save_settings(&path, &settings).unwrap();
+    assert_eq!(load_settings(&path).unwrap(), settings);
+    let invalid = Settings {
+      content_comparison: Some(ContentComparison {
+        method: crate::ContentMethod::None,
+        show_results: true,
+        prompt: true,
+      }),
+      ..Default::default()
+    };
+    assert!(save_settings(&path, &invalid).is_err());
+    assert_eq!(load_settings(&path).unwrap(), settings);
+  }
+
   #[test]
   fn earlier_version_one_settings_migrate_additive_profiles() {
     let root = tempfile::tempdir().unwrap();

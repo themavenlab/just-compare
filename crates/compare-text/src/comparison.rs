@@ -79,6 +79,7 @@ impl UnimportantRule {
 }
 
 /// Cooperative cancellation, with a deadline bounding the library diff phase.
+#[derive(Clone, Copy)]
 pub struct WorkControl<'a> {
   cancelled: &'a AtomicBool,
   deadline: Instant,
@@ -194,6 +195,46 @@ pub fn compare_with_rules(
   )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifiedSpan {
+  pub span: DiffSpan,
+  pub minor: bool,
+}
+
+pub fn compare_classified(
+  left: &str,
+  right: &str,
+  options: CompareOptions,
+  rules: &[UnimportantRule],
+  control: WorkControl<'_>,
+) -> Result<Vec<ClassifiedSpan>, CompareError> {
+  let spans = compare_with_rules(left, right, CompareOptions::default(), &[], control)?;
+  let offsets = |text: &str| {
+    let mut offsets: Vec<_> = lines(text).map(|line| line.byte_offset).collect();
+    offsets.push(text.len());
+    offsets
+  };
+  let left_offsets = offsets(left);
+  let right_offsets = offsets(right);
+  spans
+    .into_iter()
+    .map(|span| {
+      control.check()?;
+      let minor = span.kind != DiffKind::Equal
+        && compare_with_rules(
+          &left[left_offsets[span.left.start]..left_offsets[span.left.end]],
+          &right[right_offsets[span.right.start]..right_offsets[span.right.end]],
+          options,
+          rules,
+          control,
+        )?
+        .iter()
+        .all(|item| item.kind == DiffKind::Equal);
+      Ok(ClassifiedSpan { span, minor })
+    })
+    .collect()
+}
+
 /// Original UTF-8 byte ranges for character-level refinement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntralineSpan {
@@ -252,6 +293,40 @@ pub fn intraline(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn classified_differences_keep_original_coordinates_and_minor_text() {
+    let flag = AtomicBool::new(false);
+    let result = compare_classified(
+      "Keep\nCASE\nend\n",
+      "Keep\ncase\nend\n",
+      CompareOptions {
+        ignore_case: true,
+        ..CompareOptions::default()
+      },
+      &[],
+      WorkControl::new(&flag, Duration::from_secs(2)),
+    )
+    .unwrap();
+    assert!(result
+      .iter()
+      .any(|item| item.minor && item.span.left == (1..2)));
+    assert!(result
+      .iter()
+      .filter(|item| item.span.kind == DiffKind::Equal)
+      .all(|item| !item.minor));
+    flag.store(true, Ordering::Relaxed);
+    assert_eq!(
+      compare_classified(
+        "a",
+        "b",
+        CompareOptions::default(),
+        &[],
+        WorkControl::new(&flag, Duration::from_secs(2))
+      ),
+      Err(CompareError::Cancelled)
+    );
+  }
 
   fn reconstruct(left: &str, right: &str) {
     let left_lines: Vec<_> = lines(left).collect();

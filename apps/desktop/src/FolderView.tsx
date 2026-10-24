@@ -1,9 +1,10 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FolderEntry } from "./api";
-import { CommandMenu } from "./CommandMenu";
+import { CommandMenu, type MenuCommand } from "./CommandMenu";
 import { canCopy, folderRows, type FolderSort } from "./folderPresentation";
 import { VirtualList } from "./VirtualList";
 
+export type FolderSide = "left" | "right";
 export function FolderView({
   entries,
   filter,
@@ -12,7 +13,8 @@ export function FolderView({
   onSelect,
   openPair,
   preview,
-  renderSide,
+  onAction,
+  registerCommands,
 }: {
   entries: FolderEntry[];
   filter: string;
@@ -23,38 +25,88 @@ export function FolderView({
   preview: (
     entry: FolderEntry,
     action: string,
-    destination: "left" | "right",
+    destination: FolderSide,
   ) => void;
-  renderSide: (
-    entry: FolderEntry,
-    side: "left" | "right",
-    name: string,
-  ) => ReactNode;
+  onAction: (action: string, entries: FolderEntry[], side: FolderSide) => void;
+  registerCommands: (controller: ((name: string) => void) | null) => void;
 }) {
   const [tree, setTree] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<FolderSort>("name");
   const [descending, setDescending] = useState(false);
   const [focused, setFocused] = useState<string | null>(null);
+  const [side, setSide] = useState<FolderSide>("left");
   const [menu, setMenu] = useState<{
     entry: FolderEntry;
+    side: FolderSide;
     x: number;
     y: number;
   } | null>(null);
   const element = useRef<HTMLDivElement>(null);
-  const treeId = useId();
+  const id = useId();
   const rows = useMemo(
     () => folderRows(entries, filter, tree, collapsed, sort, descending),
     [entries, filter, tree, collapsed, sort, descending],
   );
+  const latest = useRef({ entries, rows, selected, onSelect, onAction, side });
+  useLayoutEffect(() => {
+    latest.current = { entries, rows, selected, onSelect, onAction, side };
+  });
+  useLayoutEffect(() => {
+    registerCommands((name) => {
+      const {
+        rows: currentRows,
+        entries: currentEntries,
+        selected: currentSelection,
+        onSelect: select,
+        onAction: action,
+        side: currentSide,
+      } = latest.current;
+      if (name === "tree") setTree(true);
+      else if (name === "flat") setTree(false);
+      else if (name === "expand") setCollapsed(new Set());
+      else if (name === "collapse")
+        setCollapsed(
+          new Set(
+            currentEntries
+              .filter((entry) => entry.isDirectory)
+              .map((entry) => entry.relative),
+          ),
+        );
+      else if (
+        name === "selectAll" ||
+        name === "selectNone" ||
+        name === "selectInvert"
+      ) {
+        for (const row of currentRows)
+          if (row.entry && row.entry.status !== "error")
+            select(
+              row.path,
+              name === "selectAll" ||
+                (name === "selectInvert" &&
+                  !currentSelection.includes(row.path)),
+            );
+      } else if (name) {
+        action(
+          name,
+          currentEntries.filter((entry) =>
+            currentSelection.includes(entry.relative),
+          ),
+          currentSide,
+        );
+      }
+    });
+    return () => registerCommands(null);
+  }, [registerCommands]);
   const focusedIndex = rows.findIndex((row) => row.path === focused);
-  const toggle = (path: string) =>
+  function toggle(path: string) {
     setCollapsed((prior) => {
       const next = new Set(prior);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
+  }
   function openable(entry: FolderEntry) {
     return (
       !busy &&
@@ -64,94 +116,108 @@ export function FolderView({
       entry.rightSize !== null
     );
   }
-  function commands(entry: FolderEntry) {
+  function commands(entry: FolderEntry, activeSide: FolderSide): MenuCommand[] {
+    const targets = selected.includes(entry.relative)
+      ? entries.filter((item) => selected.includes(item.relative))
+      : [entry];
+    const invoke = (name: string) => onAction(name, targets, activeSide);
     return [
       {
+        label: "Open With",
+        run: () => invoke("openWith"),
+        disabled: busy || entry.isDirectory,
+      },
+      {
         label: "Open pair",
-        disabled: !openable(entry),
         run: () => openPair(entry),
+        disabled: !openable(entry),
       },
       {
-        label: "Copy to right",
-        disabled: busy || !canCopy(entry, "right"),
-        run: () => preview(entry, "copy", "right"),
+        label: "Compare Contents...",
+        run: () => invoke("compareContents"),
+        disabled: busy,
       },
       {
-        label: "Copy to left",
-        disabled: busy || !canCopy(entry, "left"),
-        run: () => preview(entry, "copy", "left"),
+        label: "Copy to Side...",
+        run: () => invoke("copySide"),
+        disabled: busy,
       },
       {
-        label: "Move to right",
-        disabled:
-          busy ||
-          entry.isDirectory ||
-          entry.leftSize === null ||
-          !canCopy(entry, "right"),
-        run: () => preview(entry, "move", "right"),
+        label: "Move to Side...",
+        run: () => invoke("moveSide"),
+        disabled: busy,
       },
       {
-        label: "Recycle left",
-        disabled:
-          busy ||
-          entry.isDirectory ||
-          entry.leftSize === null ||
-          entry.status === "error",
-        run: () => preview(entry, "trashLeft", "right"),
+        label: "Copy to Folder...",
+        run: () => invoke("copyFolder"),
+        disabled: busy,
       },
+      {
+        label: "Move to Folder...",
+        run: () => invoke("moveFolder"),
+        disabled: busy,
+      },
+      { label: "Delete...", run: () => invoke("recycle"), disabled: busy },
+      {
+        label: "Rename...",
+        run: () => invoke("rename"),
+        disabled: busy || targets.length !== 1,
+      },
+      {
+        label: "Attributes...",
+        run: () => invoke("attributes"),
+        disabled: busy,
+      },
+      { label: "Touch...", run: () => invoke("touch"), disabled: busy },
+      { label: "Exclude", run: () => invoke("exclude"), disabled: busy },
+      { label: "New Folder...", run: () => invoke("mkdir"), disabled: busy },
+      {
+        label: "Copy Filename",
+        run: () => invoke("copyFilename"),
+        disabled: busy,
+      },
+      { label: "Ignored", run: () => invoke("ignored"), disabled: busy },
+      {
+        label: "Refresh Selection",
+        run: () => invoke("refresh"),
+        disabled: busy,
+      },
+      {
+        label: "Synchronize...",
+        run: () => invoke("synchronize"),
+        disabled: busy,
+      },
+      { label: "Explorer", run: () => invoke("reveal"), disabled: busy },
     ];
   }
   function sortBy(key: FolderSort) {
-    if (sort === key) setDescending((prior) => !prior);
+    if (sort === key) setDescending(!descending);
     else {
       setSort(key);
       setDescending(false);
     }
   }
+  const formatTime = (value: number | null | undefined) =>
+    value == null ? "" : new Date(value).toLocaleString();
   return (
     <div className="folder-browser" ref={element}>
-      <div className="folder-view-bar">
-        <button aria-pressed={tree} onClick={() => setTree((prior) => !prior)}>
-          {tree ? "Tree view" : "Flat view"}
-        </button>
-        <button onClick={() => setCollapsed(new Set())}>Expand all</button>
-        <button
-          onClick={() =>
-            setCollapsed(
-              new Set(rows.filter((row) => row.branch).map((row) => row.path)),
-            )
-          }
-        >
-          Collapse all
-        </button>
-        <span>
-          {rows.length} visible / {selected.length} selected
-        </span>
-      </div>
-      <div className="folder-row folder-head">
-        <span />
-        {(["status", "name", "leftSize", "rightSize"] as const).map((key) => (
-          <button
-            key={key}
-            aria-label={`Sort by ${key}`}
-            onClick={() => sortBy(key)}
-          >
-            {
-              {
-                status: "Status",
-                name: "Name",
-                leftSize: "Left size",
-                rightSize: "Right size",
-              }[key]
-            }
-            {sort === key
-              ? descending
-                ? " (descending)"
-                : " (ascending)"
-              : ""}
-          </button>
+      <div className="paired-folder-head">
+        {(["left", "right"] as const).map((pane) => (
+          <div key={pane} className="folder-side-columns">
+            {(["name", `${pane}Size`, `${pane}Modified`] as FolderSort[]).map(
+              (key, index) => (
+                <button
+                  key={key}
+                  aria-label={`Sort ${pane} by ${index === 0 ? "name" : index === 1 ? "size" : "modified"}`}
+                  onClick={() => sortBy(key)}
+                >
+                  {["Name", "Size", "Modified"][index]}
+                  {sort === key ? (descending ? " v" : " ^") : ""}
+                </button>
+              ),
+            )}
+          </div>
         ))}
-        <span>Copy / compare</span>
       </div>
       <div
         className="folder-tree"
@@ -160,14 +226,13 @@ export function FolderView({
       >
         <VirtualList
           count={rows.length}
+          rowHeight={18}
           fill
           label={tree ? "Paired folder hierarchy" : "Paired folder entries"}
           role={tree ? "tree" : "region"}
           activeIndex={focusedIndex}
           activeDescendant={
-            tree && focusedIndex >= 0
-              ? `${treeId}-${encodeURIComponent(rows[focusedIndex]?.path ?? "")}`
-              : undefined
+            tree && focusedIndex >= 0 ? `${id}-${focusedIndex}` : undefined
           }
           onKeyDown={(event) => {
             if (event.defaultPrevented || event.target !== event.currentTarget)
@@ -189,32 +254,39 @@ export function FolderView({
                         ),
                       );
               setFocused(rows[next]?.path ?? null);
-            } else if (
-              row &&
-              (event.key === "ArrowLeft" || event.key === "ArrowRight")
-            ) {
+            } else if (row && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
               event.preventDefault();
-              if (
-                row.branch &&
-                (event.key === "ArrowLeft"
-                  ? !collapsed.has(row.path)
-                  : collapsed.has(row.path))
-              )
-                toggle(row.path);
-              else if (event.key === "ArrowLeft")
-                setFocused(row.path.slice(0, row.path.lastIndexOf("/")));
+              if (row.branch) {
+                if ((event.key === "ArrowLeft") !== collapsed.has(row.path))
+                  toggle(row.path);
+              } else setSide(event.key === "ArrowLeft" ? "left" : "right");
             } else if (row && event.key === "Enter") {
               event.preventDefault();
               if (row.branch) toggle(row.path);
               else if (row.entry && openable(row.entry)) openPair(row.entry);
-            } else if (
-              row?.entry &&
-              event.key === " " &&
-              !busy &&
-              canCopy(row.entry, "right")
-            ) {
+            } else if (row?.entry && !busy && event.key === " ") {
               event.preventDefault();
               onSelect(row.path, !selected.includes(row.path));
+            } else if (
+              row?.entry &&
+              !busy &&
+              (event.key === "F2" ||
+                event.key === "Insert" ||
+                event.key === "Delete" ||
+                (event.shiftKey && event.key === "F5"))
+            ) {
+              event.preventDefault();
+              onAction(
+                event.key === "F2"
+                  ? "rename"
+                  : event.key === "Insert"
+                    ? "mkdir"
+                    : event.key === "Delete"
+                      ? "recycle"
+                      : "refresh",
+                [row.entry],
+                side,
+              );
             } else if (
               row?.entry &&
               (event.key === "ContextMenu" ||
@@ -224,8 +296,9 @@ export function FolderView({
               const box = element.current?.getBoundingClientRect();
               setMenu({
                 entry: row.entry,
-                x: box?.left ?? 0,
-                y: (box?.top ?? 0) + 80,
+                side,
+                x: box?.left ?? 4,
+                y: (box?.top ?? 0) + 40,
               });
             }
           }}
@@ -235,139 +308,175 @@ export function FolderView({
             const entry = node.entry;
             return (
               <div
-                className={`folder-row ${focused === node.path ? "focused-row" : ""}`}
+                className={`paired-folder-row folder-row ${index % 2 ? "alternate-row" : ""} ${focused === node.path ? "focused-row" : ""} ${selected.includes(node.path) ? "selected-folder-row" : ""}`}
                 data-status={entry?.status ?? "ancestor"}
                 data-relative={node.path}
-                id={`${treeId}-${encodeURIComponent(node.path)}`}
+                id={`${id}-${index}`}
                 role={tree ? "treeitem" : undefined}
                 aria-level={tree ? node.depth + 1 : undefined}
                 aria-expanded={
                   tree && node.branch ? !collapsed.has(node.path) : undefined
                 }
                 aria-selected={tree ? selected.includes(node.path) : undefined}
-                onClick={(event) => {
-                  setFocused(node.path);
-                  if (
-                    event.target instanceof HTMLElement &&
-                    !event.target.closest("button,input")
-                  )
-                    element.current
-                      ?.querySelector<HTMLElement>(".virtual")
-                      ?.focus({ preventScroll: true });
-                }}
-                onDoubleClick={(event) => {
-                  if (
-                    event.target instanceof HTMLElement &&
-                    event.target.closest("button,input")
-                  )
-                    return;
-                  if (node.branch) toggle(node.path);
-                  else if (entry && openable(entry)) openPair(entry);
-                }}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setFocused(node.path);
-                  if (entry)
-                    setMenu({ entry, x: event.clientX, y: event.clientY });
-                }}
               >
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${node.path}`}
-                  checked={selected.includes(node.path)}
-                  disabled={busy || !entry || !canCopy(entry, "right")}
-                  onChange={(event) =>
-                    onSelect(node.path, event.target.checked)
-                  }
-                />
-                <span className={`file-status ${entry?.status ?? ""}`}>
-                  {entry?.status === "leftOnly"
-                    ? "Left only"
-                    : entry?.status === "rightOnly"
-                      ? "Right only"
-                      : entry?.status === "same"
-                        ? "Same"
-                        : entry?.status === "different"
-                          ? "Different"
-                          : entry?.status === "error"
-                            ? "Error"
-                            : "Folder"}
-                </span>
-                <div
-                  className="tree-name"
-                  style={{ paddingLeft: node.depth * 14 }}
-                  title={node.path}
-                >
-                  {node.branch ? (
-                    <button
-                      aria-label={`${collapsed.has(node.path) ? "Expand" : "Collapse"} ${node.path}`}
-                      aria-expanded={!collapsed.has(node.path)}
+                {(["left", "right"] as const).map((pane) => {
+                  const missing =
+                    !!entry &&
+                    entry.status !== "error" &&
+                    (pane === "left" ? entry.leftSize : entry.rightSize) ===
+                      null;
+                  const relative =
+                    (pane === "left"
+                      ? entry?.leftRelative
+                      : entry?.rightRelative) ?? node.path;
+                  return (
+                    <div
+                      className={`folder-side-columns folder-side ${entry?.status ?? ""} ${missing ? "missing" : ""}`}
+                      key={pane}
+                      aria-label={`${pane === "left" ? "Left" : "Right"}: ${node.path}`}
                       onClick={(event) => {
-                        event.stopPropagation();
-                        toggle(node.path);
+                        if (
+                          (event.target as HTMLElement).closest("button,input")
+                        )
+                          return;
+                        setSide(pane);
+                        if (entry && !busy && entry.status !== "error") {
+                          if (event.shiftKey && focusedIndex >= 0) {
+                            for (const row of rows.slice(
+                              Math.min(index, focusedIndex),
+                              Math.max(index, focusedIndex) + 1,
+                            ))
+                              if (row.entry && row.entry.status !== "error")
+                                onSelect(row.path, true);
+                          } else if (event.ctrlKey || event.metaKey)
+                            onSelect(node.path, !selected.includes(node.path));
+                          else {
+                            for (const path of selected)
+                              if (path !== node.path) onSelect(path, false);
+                            onSelect(node.path, true);
+                          }
+                        }
+                        setFocused(node.path);
+                        element.current
+                          ?.querySelector<HTMLElement>(".virtual")
+                          ?.focus({ preventScroll: true });
+                      }}
+                      onDoubleClick={(event) => {
+                        if (
+                          (event.target as HTMLElement).closest("button,input")
+                        )
+                          return;
+                        if (node.branch) toggle(node.path);
+                        else if (entry && openable(entry)) openPair(entry);
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setSide(pane);
+                        setFocused(node.path);
+                        if (entry)
+                          setMenu({
+                            entry,
+                            side: pane,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
                       }}
                     >
-                      {collapsed.has(node.path) ? "+" : "-"}
-                    </button>
-                  ) : (
-                    <span className="tree-spacer" />
-                  )}
-                  <span>{node.name}</span>
-                </div>
-                {entry ? (
-                  renderSide(entry, "left", node.name)
-                ) : (
-                  <span className="metadata">Folder</span>
-                )}
-                {entry ? (
-                  renderSide(entry, "right", node.name)
-                ) : (
-                  <span className="metadata">Folder</span>
-                )}
-                <div className="row-actions">
-                  <button
-                    aria-label={`Copy ${node.path} to right`}
-                    title={
-                      entry?.isDirectory
-                        ? "Preview folder creation on right only; use Update to copy its contents."
-                        : "Preview copy to right; no immediate disk changes"
-                    }
-                    disabled={busy || !entry || !canCopy(entry, "right")}
-                    onClick={() => {
-                      if (entry) preview(entry, "copy", "right");
-                    }}
-                  >
-                    {"\u2192"}
-                  </button>
-                  <button
-                    aria-label={`Copy ${node.path} to left`}
-                    title={
-                      entry?.isDirectory
-                        ? "Preview folder creation on left only; use Update with swapped roots to copy its contents."
-                        : "Preview copy to left; no immediate disk changes"
-                    }
-                    disabled={busy || !entry || !canCopy(entry, "left")}
-                    onClick={() => {
-                      if (entry) preview(entry, "copy", "left");
-                    }}
-                  >
-                    {"\u2190"}
-                  </button>
-                  <button
-                    disabled={!entry || !openable(entry)}
-                    onClick={() => {
-                      if (entry) openPair(entry);
-                    }}
-                  >
-                    Open pair
-                  </button>
-                  {entry && (
-                    <CommandMenu
-                      label={`Actions for ${node.path}`}
-                      commands={commands(entry)}
-                    />
-                  )}
-                </div>
+                      <span
+                        className="folder-name-cell"
+                        style={{ paddingLeft: node.depth * 14 }}
+                        title={
+                          entry?.detail
+                            ? `${relative}: ${entry.detail}`
+                            : relative
+                        }
+                      >
+                        {pane === "left" && (
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${node.path}`}
+                            checked={selected.includes(node.path)}
+                            disabled={
+                              busy || !entry || entry.status === "error"
+                            }
+                            onChange={(event) =>
+                              onSelect(node.path, event.target.checked)
+                            }
+                          />
+                        )}
+                        {node.branch ? (
+                          <button
+                            disabled={missing}
+                            aria-label={`${collapsed.has(node.path) ? "Expand" : "Collapse"} ${node.path} ${pane}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggle(node.path);
+                            }}
+                          >
+                            {collapsed.has(node.path) ? "+" : "-"}
+                          </button>
+                        ) : (
+                          <span className="tree-spacer" />
+                        )}
+                        <span className="entry-symbol" aria-hidden="true">
+                          {entry?.status === "error"
+                            ? "!"
+                            : missing
+                              ? ""
+                              : node.branch
+                                ? "\u25a3"
+                                : "\u25aa"}
+                        </span>
+                        <span className="file-name">
+                          {missing ? "" : relative.split("/").at(-1)}
+                        </span>
+                      </span>
+                      <span className="file-size">
+                        {missing
+                          ? ""
+                          : ((pane === "left"
+                              ? entry?.leftSize
+                              : entry?.rightSize
+                            )?.toLocaleString() ?? "")}
+                      </span>
+                      <span className="file-modified">
+                        {missing
+                          ? ""
+                          : formatTime(
+                              pane === "left"
+                                ? entry?.leftModified
+                                : entry?.rightModified,
+                            )}
+                      </span>
+                      {entry && (
+                        <span className="row-hover-actions">
+                          <button
+                            aria-label={`Copy ${node.path} to ${pane === "left" ? "right" : "left"}`}
+                            title="Preview copy to the other side; no immediate changes"
+                            disabled={
+                              busy ||
+                              !canCopy(
+                                entry,
+                                pane === "left" ? "right" : "left",
+                              )
+                            }
+                            onClick={() =>
+                              entry.isDirectory
+                                ? onAction("copySide", [entry], pane)
+                                : preview(
+                                    entry,
+                                    "copy",
+                                    pane === "left" ? "right" : "left",
+                                  )
+                            }
+                          >
+                            {pane === "left" ? "\u2192" : "\u2190"}
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             );
           }}
@@ -376,7 +485,7 @@ export function FolderView({
       {menu && (
         <CommandMenu
           label={`Actions for ${menu.entry.relative}`}
-          commands={commands(menu.entry)}
+          commands={commands(menu.entry, menu.side)}
           position={{ x: menu.x, y: menu.y }}
           onClose={() => {
             setMenu(null);

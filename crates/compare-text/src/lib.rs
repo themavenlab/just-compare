@@ -7,8 +7,8 @@
 mod comparison;
 mod encoding;
 pub use comparison::{
-  compare, compare_with_rules, intraline, CompareError, CompareOptions, DiffKind, DiffSpan,
-  IntralineSpan, UnimportantRule, WorkControl,
+  compare, compare_classified, compare_with_rules, intraline, ClassifiedSpan, CompareError,
+  CompareOptions, DiffKind, DiffSpan, IntralineSpan, UnimportantRule, WorkControl,
 };
 pub use encoding::{decode, DecodedText, TextEncoding, TextError};
 

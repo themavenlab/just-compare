@@ -6,6 +6,7 @@ import { CommandMenu } from "./CommandMenu";
 import { errorMessage } from "./comparison";
 import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
+import { HomeScreen } from "./HomeScreen";
 import {
   sameSummary,
   sessionWorkflow,
@@ -26,21 +27,7 @@ export function App() {
   const [settings, setSettings] = useState<Settings>(defaults);
   const [settingsAvailable, setSettingsAvailable] = useState(!isTauri());
   const [ready, setReady] = useState(!isTauri());
-  const [tabs, setTabs] = useState<WorkspaceTab[]>(() =>
-    isTauri()
-      ? []
-      : [
-          {
-            id: crypto.randomUUID(),
-            mode: "text",
-            left: "",
-            right: "",
-            base: "",
-            gitOutput: "",
-            parent: null,
-          },
-        ],
-  );
+  const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const [active, setActive] = useState<string | null>(tabs[0]?.id ?? null);
   const [owner, setOwner] = useState<string | null>(null);
   const [summaries, setSummaries] = useState<Record<string, WorkspaceSummary>>(
@@ -141,7 +128,7 @@ export function App() {
     (
       mode: Workflow,
       paths: Partial<
-        Pick<WorkspaceTab, "left" | "right" | "base" | "parent">
+        Pick<WorkspaceTab, "left" | "right" | "base" | "parent" | "folderRules">
       > = {},
     ) => {
       const tab: WorkspaceTab = {
@@ -171,6 +158,7 @@ export function App() {
           left: session.left,
           right: session.right,
           base: session.base ?? "",
+          ...(session.folderRules ? { folderRules: session.folderRules } : {}),
         });
       } catch (failure) {
         setError(errorMessage(failure));
@@ -286,8 +274,8 @@ export function App() {
             right: args[2] ?? "",
           };
         else if (args.length) throw new Error("Unsupported desktop arguments.");
-        setTabs([tab]);
-        setActive(tab.id);
+        setTabs(args.length ? [tab] : []);
+        setActive(args.length ? tab.id : null);
         setReady(true);
       } catch (failure) {
         if (!disposed) {
@@ -322,11 +310,37 @@ export function App() {
             void controller
               .drop(event.payload.paths)
               .catch((failure) => setError(errorMessage(failure)));
-          else
-            openTab("text", {
-              left: event.payload.paths[0] ?? "",
-              right: event.payload.paths[1] ?? "",
+          else {
+            const position = event.payload.position;
+            const target = document
+              .elementFromPoint(
+                position.x / devicePixelRatio,
+                position.y / devicePixelRatio,
+              )
+              ?.closest<HTMLElement>("[data-workflow]");
+            const workflow = target?.dataset.workflow;
+            if (
+              workflow !== "text" &&
+              workflow !== "folder" &&
+              workflow !== "merge"
+            ) {
+              setError(
+                "Drop paths onto a Home workflow icon to choose how they are opened.",
+              );
+              return;
+            }
+            const paths = event.payload.paths;
+            const maximum = workflow === "merge" ? 3 : 2;
+            if (paths.length < 1 || paths.length > maximum) {
+              setError(`This workflow accepts one to ${maximum} paths.`);
+              return;
+            }
+            openTab(workflow, {
+              left: paths[workflow === "merge" ? 1 : 0] ?? "",
+              right: paths[workflow === "merge" ? 2 : 1] ?? "",
+              base: workflow === "merge" ? (paths[0] ?? "") : "",
             });
+          }
         });
         if (disposed) drop();
         else cleanup.push(drop);
@@ -402,8 +416,8 @@ export function App() {
   const blocked = !!owner;
   return (
     <div className="workbench-shell">
-      <header className="shell-header">
-        <h1>Just Compare</h1>
+      <header className="shell-header sr-only">
+        <h1>Compare Workbench</h1>
         <span>Phase 1 / local files</span>
       </header>
       <nav className="menubar" aria-label="Application commands">
@@ -704,36 +718,19 @@ export function App() {
         ))}
       <div className="workspace-host">
         {active === null && (
-          <section className="home-screen">
-            <h2>New comparison</h2>
-            <p>
-              Open local files or folders. Each comparison keeps its own
-              workspace.
-            </p>
-            {workflows.map(([mode, label]) => (
-              <button
-                key={mode}
-                disabled={!ready || blocked}
-                onClick={() => openTab(mode)}
-              >
-                {label}
-              </button>
-            ))}
-            <h3>Saved sessions</h3>
-            {settings.sessions.length ? (
-              settings.sessions.map((session, index) => (
-                <button
-                  key={index}
-                  disabled={blocked}
-                  onClick={() => openSession(session)}
-                >
-                  {session.name}
-                </button>
-              ))
-            ) : (
-              <p>No saved sessions.</p>
-            )}
-          </section>
+          <HomeScreen
+            settings={settings}
+            ready={ready && settingsAvailable}
+            busy={blocked}
+            update={setSettings}
+            openTab={openTab}
+            openSession={openSession}
+            savePreferences={() => {
+              void native("write_settings", { settings })
+                .then(() => setInfo("Preferences saved."))
+                .catch((failure) => setError(errorMessage(failure)));
+            }}
+          />
         )}
         {tabs.map((tab) => (
           <section
@@ -756,6 +753,7 @@ export function App() {
             )}
             <ComparisonWorkspace
               tab={tab}
+              onHome={() => setActive(null)}
               confirmGitExit={confirmGitExit}
               sharedSettings={settings}
               settingsReady={settingsAvailable}

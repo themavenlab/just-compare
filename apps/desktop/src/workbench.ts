@@ -1,4 +1,4 @@
-import type { Settings } from "./api";
+import type { FolderRules, Settings } from "./api";
 
 export type Workflow = "text" | "folder" | "merge";
 export type SavedSession = Settings["sessions"][number];
@@ -10,6 +10,7 @@ export interface WorkspaceTab {
   base: string;
   gitOutput: string;
   parent: string | null;
+  folderRules?: FolderRules;
 }
 export interface WorkspaceSummary {
   title: string;

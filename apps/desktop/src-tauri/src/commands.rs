@@ -14,6 +14,7 @@ use tauri::{Emitter, Manager, State};
 pub struct Resources {
   documents: Mutex<HashMap<String, Document>>,
   plans: Mutex<HashMap<String, Plan>>,
+  file_plans: Mutex<HashMap<String, compare_fs::file_actions::FileActionPlan>>,
   jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
   next: AtomicU64,
   pub git_accepted: AtomicBool,
@@ -44,6 +45,8 @@ pub struct Span {
   left_end: usize,
   right_start: usize,
   right_end: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  minor: Option<bool>,
 }
 fn kind(kind: DiffKind) -> &'static str {
   match kind {
@@ -99,6 +102,7 @@ pub async fn compare_text(
   left: String,
   right: String,
   options: Options,
+  show_minor: Option<bool>,
   job_id: String,
   state: State<'_, Arc<Resources>>,
 ) -> Result<Vec<Span>, String> {
@@ -114,6 +118,34 @@ pub async fn compare_text(
       .map(|p| UnimportantRule::compile(p))
       .collect();
     let rules = rules.map_err(|e| e.to_string())?;
+    let compare_options = CompareOptions {
+      ignore_case: options.ignore_case,
+      ignore_whitespace: options.ignore_whitespace,
+      ignore_line_endings: options.ignore_line_endings,
+    };
+    if show_minor == Some(true) {
+      return compare_text::compare_classified(
+        &left,
+        &right,
+        compare_options,
+        &rules,
+        WorkControl::new(&flag, Duration::from_secs(2)),
+      )
+      .map(|spans| {
+        spans
+          .into_iter()
+          .map(|item| Span {
+            kind: kind(item.span.kind),
+            left_start: item.span.left.start,
+            left_end: item.span.left.end,
+            right_start: item.span.right.start,
+            right_end: item.span.right.end,
+            minor: Some(item.minor),
+          })
+          .collect()
+      })
+      .map_err(|e| e.to_string());
+    }
     compare_with_rules(
       &left,
       &right,
@@ -134,6 +166,7 @@ pub async fn compare_text(
           left_end: s.left.end,
           right_start: s.right.start,
           right_end: s.right.end,
+          minor: None,
         })
         .collect()
     })
@@ -173,6 +206,7 @@ pub async fn refine_text(left: String, right: String) -> Result<Vec<Span>, Strin
           left_end: s.left.end,
           right_start: s.right.start,
           right_end: s.right.end,
+          minor: None,
         })
         .collect()
     })
@@ -344,10 +378,155 @@ pub struct FolderRoots {
 }
 
 #[tauri::command]
+pub async fn disk_space(path: String) -> Result<compare_fs::DiskSpace, String> {
+  worker(move || compare_fs::disk_space(Path::new(&path)).map_err(|e| e.to_string())).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathMetadata {
+  bytes: u64,
+  modified: Option<u64>,
+  directory: bool,
+  read_only: bool,
+}
+
+#[tauri::command]
+pub async fn path_metadata(path: String) -> Result<PathMetadata, String> {
+  worker(move || {
+    let path = compare_fs::checked_path(Path::new(&path), false).map_err(|e| e.to_string())?;
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let modified = metadata
+      .modified()
+      .map_err(|e| e.to_string())?
+      .duration_since(std::time::UNIX_EPOCH)
+      .ok()
+      .map(|duration| u64::try_from(duration.as_millis()).map_err(|e| e.to_string()))
+      .transpose()?;
+    if metadata.len() > 9_007_199_254_740_991
+      || modified.is_some_and(|value| value > 8_640_000_000_000_000)
+    {
+      return Err("Metadata exceeds the supported display range.".into());
+    }
+
+    Ok(PathMetadata {
+      bytes: metadata.len(),
+      modified,
+      directory: metadata.is_dir(),
+      read_only: metadata.permissions().readonly(),
+    })
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn parent_folder(path: String) -> Result<String, String> {
+  worker(move || {
+    let path = compare_fs::checked_path(Path::new(&path), false).map_err(|e| e.to_string())?;
+    if !path.is_dir() {
+      return Err("Choose an existing directory before navigating to its parent.".into());
+    }
+    let parent = path.parent().ok_or("This folder has no parent.")?;
+    compare_fs::checked_path(parent, false)
+      .map_err(|e| e.to_string())?
+      .into_os_string()
+      .into_string()
+      .map_err(|_| "Non-Unicode paths are unsupported.".into())
+  })
+  .await
+}
+
+fn launch_external(
+  mut command: std::process::Command,
+  description: &'static str,
+) -> Result<(), String> {
+  let mut child = command
+    .spawn()
+    .map_err(|error| format!("Cannot launch {description}: {error}"))?;
+  tauri::async_runtime::spawn_blocking(move || match child.wait() {
+    Ok(status) if !status.success() => {
+      eprintln!("{description} exited unsuccessfully: {status}")
+    }
+    Err(error) => eprintln!("Cannot wait for {description}: {error}"),
+    Ok(_) => {}
+  });
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn reveal_path(path: String) -> Result<(), String> {
+  worker(move || {
+    let path = compare_fs::checked_path(Path::new(&path), false).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    let command = {
+      let mut command = std::process::Command::new("explorer.exe");
+      if path.is_dir() {
+        command.arg(&path);
+      } else {
+        command.arg(format!("/select,{}", path.display()));
+      }
+      command
+    };
+    #[cfg(target_os = "macos")]
+    let command = {
+      let mut command = std::process::Command::new("open");
+      command.arg("-R").arg(&path);
+      command
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let command = {
+      let mut command = std::process::Command::new("xdg-open");
+      command.arg(if path.is_dir() {
+        path.as_path()
+      } else {
+        path.parent().ok_or("Path has no parent directory.")?
+      });
+      command
+    };
+    launch_external(command, "the file manager")
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn open_with(path: String, application: String) -> Result<(), String> {
+  worker(move || {
+    let path = compare_fs::checked_path(Path::new(&path), false).map_err(|e| e.to_string())?;
+    let application =
+      compare_fs::checked_path(Path::new(&application), false).map_err(|e| e.to_string())?;
+    if !path.is_file() || !application.is_file() {
+      return Err("Open With requires a regular file and an application executable.".into());
+    }
+    #[cfg(target_os = "windows")]
+    if !application
+      .extension()
+      .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+      return Err(
+        "Select a Windows .exe application; scripts and shell commands are not accepted.".into(),
+      );
+    }
+    let mut command = std::process::Command::new(application);
+    command.arg(path);
+    launch_external(command, "the selected application")
+  })
+  .await
+}
+
+#[tauri::command]
+pub fn validate_folder_rules(
+  rules: compare_fs::FolderRules,
+  options: FolderOptions,
+) -> Result<(), String> {
+  compare_fs::validate_folder_configuration(&rules, &options).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn scan_folders(
   left: String,
   right: String,
   options: FolderOptions,
+  rules: Option<compare_fs::FolderRules>,
   job_id: String,
   app: tauri::AppHandle,
   state: State<'_, Arc<Resources>>,
@@ -357,17 +536,29 @@ pub async fn scan_folders(
   let event_id = job_id.clone();
   let result = worker(move || {
     let mut event_error = None;
-    let result = compare_fs::scan_pair(
-      Path::new(&left),
-      Path::new(&right),
-      &options,
-      &flag,
-      |count| {
-        if let Err(e) = app.emit("operation-progress", (&event_id, count)) {
-          event_error = Some(e.to_string());
-        }
-      },
-    )
+    let mut progress = |count| {
+      if let Err(e) = app.emit("operation-progress", (&event_id, count)) {
+        event_error = Some(e.to_string());
+      }
+    };
+    let result = if let Some(rules) = rules {
+      compare_fs::scan_pair_with_rules(
+        Path::new(&left),
+        Path::new(&right),
+        &options,
+        &rules,
+        &flag,
+        &mut progress,
+      )
+    } else {
+      compare_fs::scan_pair(
+        Path::new(&left),
+        Path::new(&right),
+        &options,
+        &flag,
+        &mut progress,
+      )
+    }
     .map_err(|e| e.to_string());
     if let Some(error) = event_error {
       return Err(format!("Progress delivery failed: {error}"));
@@ -395,6 +586,119 @@ pub struct Operation {
   action: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePreview {
+  id: String,
+  operations: Vec<compare_fs::file_actions::FileActionOperation>,
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn compare_folder_selection(
+  left: String,
+  right: String,
+  options: FolderOptions,
+  rules: compare_fs::FolderRules,
+  selected: Vec<String>,
+  previous: Option<Vec<compare_fs::FolderEntry>>,
+  job_id: String,
+  state: State<'_, Arc<Resources>>,
+) -> Result<Vec<compare_fs::FolderEntry>, String> {
+  let resources = state.inner().clone();
+  let flag = begin(&resources, &job_id)?;
+  let result = worker(move || {
+    if let Some(previous) = previous {
+      compare_fs::refresh_selection(
+        Path::new(&left),
+        Path::new(&right),
+        &options,
+        &rules,
+        &selected,
+        &previous,
+        &flag,
+        |_| {},
+      )
+    } else {
+      compare_fs::scan_selected_with_rules(
+        Path::new(&left),
+        Path::new(&right),
+        &options,
+        &rules,
+        &selected,
+        &flag,
+        |_| {},
+      )
+    }
+    .map_err(|e| e.to_string())
+  })
+  .await;
+  resources
+    .jobs
+    .lock()
+    .map_err(|e| e.to_string())?
+    .remove(&job_id);
+  result
+}
+
+#[tauri::command]
+pub async fn preview_local_action(
+  request: compare_fs::file_actions::FileActionRequest,
+  job_id: String,
+  state: State<'_, Arc<Resources>>,
+) -> Result<FilePreview, String> {
+  let resources = state.inner().clone();
+  let flag = begin(&resources, &job_id)?;
+  let retained = resources.clone();
+  let result = worker(move || {
+    let plan = compare_fs::file_actions::FileActionPlan::preview(request, &flag)
+      .map_err(|e| e.to_string())?;
+    let operations = plan.operations().to_vec();
+    let id = retained.id();
+    retained.plans.lock().map_err(|e| e.to_string())?.clear();
+    let mut plans = retained.file_plans.lock().map_err(|e| e.to_string())?;
+    plans.clear();
+    plans.insert(id.clone(), plan);
+    Ok(FilePreview { id, operations })
+  })
+  .await;
+  resources
+    .jobs
+    .lock()
+    .map_err(|e| e.to_string())?
+    .remove(&job_id);
+  result
+}
+
+#[tauri::command]
+pub async fn execute_local_action(
+  id: String,
+  job_id: String,
+  state: State<'_, Arc<Resources>>,
+) -> Result<Vec<compare_fs::file_actions::FileActionOutcome>, String> {
+  let resources = state.inner().clone();
+  let flag = begin(&resources, &job_id)?;
+  let plan = resources
+    .file_plans
+    .lock()
+    .map_err(|e| e.to_string())?
+    .remove(&id);
+  let result = worker(move || {
+    Ok(
+      plan
+        .ok_or("Preview is missing or consumed.")?
+        .execute(&flag, |_, _| {}),
+    )
+  })
+  .await;
+  resources
+    .jobs
+    .lock()
+    .map_err(|e| e.to_string())?
+    .remove(&job_id);
+  result
+}
+
 #[tauri::command]
 pub async fn preview_sync(
   left: String,
@@ -413,7 +717,30 @@ pub async fn preview_sync(
     let mut plan = Plan::preview(Path::new(&left), Path::new(&right), options, mode, &flag)
       .map_err(|e| e.to_string())?;
     if let Some(names) = selected {
-      plan.select(&names).map_err(|e| e.to_string())?;
+      if names.is_empty()
+        || names.len() > 10_000
+        || names.iter().any(|name| {
+          name.is_empty()
+            || name.starts_with('/')
+            || name.split('/').any(|part| part == ".." || part.is_empty())
+        })
+      {
+        return Err("Select valid relative entries for synchronization.".into());
+      }
+      let actionable: Vec<_> = plan
+        .operations
+        .iter()
+        .filter(|operation| {
+          names.iter().any(|name| {
+            operation.relative == *name || operation.relative.starts_with(&format!("{name}/"))
+          })
+        })
+        .map(|operation| operation.relative.clone())
+        .collect();
+      if actionable.is_empty() {
+        return Err("No changes are required for the selected entries.".into());
+      }
+      plan.select(&actionable).map_err(|e| e.to_string())?;
     }
     let operations = plan
       .operations
@@ -424,6 +751,11 @@ pub async fn preview_sync(
       })
       .collect();
     let id = worker_resources.id();
+    worker_resources
+      .file_plans
+      .lock()
+      .map_err(|e| e.to_string())?
+      .clear();
     let mut plans = worker_resources.plans.lock().map_err(|e| e.to_string())?;
     plans.clear();
     plans.insert(id.clone(), plan);
@@ -471,6 +803,11 @@ pub async fn preview_file_action(
       })
       .collect();
     let id = worker_resources.id();
+    worker_resources
+      .file_plans
+      .lock()
+      .map_err(|e| e.to_string())?
+      .clear();
     let mut plans = worker_resources.plans.lock().map_err(|e| e.to_string())?;
     plans.clear();
     plans.insert(id.clone(), plan);

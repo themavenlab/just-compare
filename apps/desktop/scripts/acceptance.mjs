@@ -4,8 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { cpus, release, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath } from "node:url";
-import { launchNative } from "./native-harness.mjs";
+import { launchNative, selectWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-acceptance-"));
 const config = join(root, "config");
@@ -14,6 +13,7 @@ let session;
 try {
   session = await launchNative(config);
   const { page, call } = session;
+  await selectWorkspace(page, "text");
   const options = {
     ignoreCase: false,
     ignoreWhitespace: false,

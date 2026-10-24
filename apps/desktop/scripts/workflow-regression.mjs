@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchNative, selectWorkspace } from "./native-harness.mjs";
+import {
+  launchNative,
+  previewUpdate,
+  selectWorkspace,
+} from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-workflows-"));
 let session;
@@ -35,10 +39,10 @@ try {
   const leftRoot = `\\\\?\\${left}`;
   const rightRoot = `\\\\?\\${right}`;
   await page
-    .getByRole("textbox", { name: "left path", exact: true })
+    .getByRole("combobox", { name: "left path", exact: true })
     .fill(leftRoot);
   await page
-    .getByRole("textbox", { name: "right path", exact: true })
+    .getByRole("combobox", { name: "right path", exact: true })
     .fill(rightRoot);
   await page.getByRole("button", { name: "Scan folders", exact: true }).click();
   const folderList = page.getByRole("region", {
@@ -59,21 +63,22 @@ try {
           exact: true,
         }),
       })
-      .getByRole("button", { name: "Open pair", exact: true })
-      .click();
+      .locator(".folder-side")
+      .first()
+      .dblclick();
   try {
     await openPair("first.txt");
     await text("Left").waitFor({ timeout: 5000 });
     await selectWorkspace(page, "folder");
     assert.equal(
       await page
-        .getByRole("textbox", { name: "left path", exact: true })
+        .getByRole("combobox", { name: "left path", exact: true })
         .inputValue(),
       leftRoot,
     );
     assert.equal(
       await page
-        .getByRole("textbox", { name: "right path", exact: true })
+        .getByRole("combobox", { name: "right path", exact: true })
         .inputValue(),
       rightRoot,
     );
@@ -95,35 +100,26 @@ try {
     await folderList
       .getByRole("checkbox", { name: "Select first.txt", exact: true })
       .waitFor();
-    await page
-      .getByRole("button", {
-        name: "Preview update left to right",
-        exact: true,
-      })
-      .click();
+    await previewUpdate(page);
     await page
       .getByRole("heading", { name: "Sync preview: 2 operations", exact: true })
       .waitFor();
     assert.equal(await page.getByRole("alert").count(), 0);
     await page.getByRole("button", { name: "Dismiss preview" }).click();
-    await page
-      .getByRole("button", { name: "Swap folder roots", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Swap", exact: true }).click();
     assert.equal(
       await page
-        .getByRole("textbox", { name: "left path", exact: true })
+        .getByRole("combobox", { name: "left path", exact: true })
         .inputValue(),
       rightRoot,
     );
     assert.equal(
       await page
-        .getByRole("textbox", { name: "right path", exact: true })
+        .getByRole("combobox", { name: "right path", exact: true })
         .inputValue(),
       leftRoot,
     );
-    await page
-      .getByRole("button", { name: "Swap folder roots", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Swap", exact: true }).click();
     await selectWorkspace(page, "text");
   } catch (error) {
     failures.push(`Folder round-trip: ${error.message}`);
@@ -310,11 +306,11 @@ try {
   await writeFile(boundedLeft, ["inserted", ...boundedLines].join("\n") + "\n");
   await writeFile(boundedRight, [...boundedLines, "tail"].join("\n") + "\n");
   await page
-    .getByRole("textbox", { name: "left path", exact: true })
+    .getByRole("combobox", { name: "left path", exact: true })
     .fill(boundedLeft);
   await page.getByRole("button", { name: "Open left", exact: true }).click();
   await page
-    .getByRole("textbox", { name: "right path", exact: true })
+    .getByRole("combobox", { name: "right path", exact: true })
     .fill(boundedRight);
   await page.getByRole("button", { name: "Open right", exact: true }).click();
   await compare();

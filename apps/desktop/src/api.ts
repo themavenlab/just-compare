@@ -39,7 +39,14 @@ export interface Settings {
     right: string;
     mode: string;
     base?: string;
+    folderRules?: FolderRules;
   }[];
+  folderRules?: FolderRules;
+  contentComparison?: {
+    method: "binary" | "rules" | "crc";
+    showResults: boolean;
+    prompt: boolean;
+  };
   ignoreCase: boolean;
   ignoreWhitespace: boolean;
   ignoreLineEndings: boolean;
@@ -70,6 +77,14 @@ export interface FolderEntry {
   rightSize: number | null;
   detail: string | null;
   isDirectory: boolean;
+  leftModified?: number | null;
+  rightModified?: number | null;
+  leftRelative?: string | null;
+  rightRelative?: string | null;
+  newer?: "left" | "right" | null;
+  newerMixed?: boolean;
+  error?: string | null;
+  importance?: string;
 }
 export interface Preview {
   id: string;
@@ -79,6 +94,93 @@ export interface Outcome {
   relative: string;
   error: string | null;
 }
+export type LocalActionRequest =
+  | { kind: "batch"; requests: LocalActionRequest[] }
+  | {
+      kind: "copyTo" | "moveTo";
+      source: string;
+      destination: string;
+      overwrite?: boolean;
+    }
+  | {
+      kind: "copy" | "move";
+      sources: string[];
+      destination: string;
+      overwrite?: boolean;
+    }
+  | { kind: "recycle"; sources: string[] }
+  | { kind: "rename"; source: string; name: string }
+  | { kind: "createDirectory"; parent: string; name: string }
+  | { kind: "setReadOnly"; sources: string[]; readonly: boolean }
+  | { kind: "touch"; sources: string[]; modifiedMs: number };
+export interface LocalOperation {
+  action: { kind: string; readonly?: boolean; modifiedMs?: number };
+  source: string | null;
+  destination: string | null;
+  entryCount: number;
+  entries: {
+    action: { kind: string };
+    source: string | null;
+    destination: string | null;
+    directory: boolean;
+    replacesExisting: boolean;
+  }[];
+}
+export interface LocalPreview {
+  id: string;
+  operations: LocalOperation[];
+}
+
+export interface FolderRules {
+  compareSize: boolean;
+  compareModified: boolean;
+  timestampToleranceMs: number;
+  timezoneOffsetMinutes: number;
+  ignoreDst: boolean;
+  compareFilenameCase: boolean;
+  alignCase: boolean;
+  alignExtensions: boolean;
+  compareReadonly: boolean;
+  compareArchive: boolean;
+  compareSystem: boolean;
+  compareHidden: boolean;
+  content: "none" | "binary" | "rules" | "crc";
+  quickTest: "none" | "size" | "modified";
+  quickTestPolicy: "override" | "skip" | "requireAll";
+  textRules: {
+    ignoreCase: boolean;
+    ignoreWhitespace: boolean;
+    ignoreLineEndings: boolean;
+    unimportant: string[];
+    unicodeNormalization: boolean;
+  };
+  executableVersion: boolean;
+}
+export const defaultFolderRules: FolderRules = {
+  compareSize: false,
+  compareModified: false,
+  timestampToleranceMs: 2000,
+  timezoneOffsetMinutes: 0,
+  ignoreDst: false,
+  compareFilenameCase: false,
+  alignCase: false,
+  alignExtensions: false,
+  compareReadonly: false,
+  compareArchive: false,
+  compareSystem: false,
+  compareHidden: false,
+  content: "binary",
+  quickTest: "none",
+  quickTestPolicy: "requireAll",
+  textRules: {
+    ignoreCase: false,
+    ignoreWhitespace: false,
+    ignoreLineEndings: false,
+    unimportant: [],
+    unicodeNormalization: false,
+  },
+  executableVersion: false,
+};
 export type Block =
   | { kind: "resolved"; text: string }
   | { kind: "conflict"; base: string; left: string; right: string };
@@ -94,12 +196,29 @@ interface FolderOptions {
   exclude: string[];
 }
 interface Commands {
+  validate_folder_rules: {
+    args: { rules: FolderRules; options: FolderOptions };
+    result: void;
+  };
+  parent_folder: { args: { path: string }; result: string };
+  path_metadata: {
+    args: { path: string };
+    result: {
+      bytes: number;
+      modified: number | null;
+      directory: boolean;
+      readOnly: boolean;
+    };
+  };
+  reveal_path: { args: { path: string }; result: void };
+  open_with: { args: { path: string; application: string }; result: void };
   compare_text: {
     args: {
       left: string;
       right: string;
       jobId: string;
       options: CompareOptions;
+      showMinor?: boolean;
     };
     result: DiffSpan[];
   };
@@ -124,12 +243,43 @@ interface Commands {
       right: string;
       options: FolderOptions;
       jobId: string;
+      rules?: FolderRules;
     };
     result: FolderEntry[];
+  };
+  preview_local_action: {
+    args: { request: LocalActionRequest; jobId: string };
+    result: LocalPreview;
+  };
+  compare_folder_selection: {
+    args: {
+      left: string;
+      right: string;
+      options: { criterion: string; exclude: string[] };
+      rules: FolderRules;
+      selected: string[];
+      previous?: FolderEntry[];
+      jobId: string;
+    };
+    result: FolderEntry[];
+  };
+  execute_local_action: {
+    args: { id: string; jobId: string };
+    result: {
+      operation: LocalOperation;
+      result: {
+        status: "completed" | "failed" | "cancelled";
+        message?: string;
+      };
+    }[];
   };
   normalize_folder_roots: {
     args: { left: string; right: string };
     result: { left: string; right: string };
+  };
+  disk_space: {
+    args: { path: string };
+    result: { availableBytes: string; totalBytes: string };
   };
   preview_sync: {
     args: {

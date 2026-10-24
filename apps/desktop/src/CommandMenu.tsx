@@ -20,6 +20,16 @@ export function CommandMenu({
   const [anchor, setAnchor] = useState(position);
   const container = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  function clampAnchor(x: number, y: number) {
+    const height = Math.min(
+      commands.length * 22 + 10,
+      window.innerHeight * 0.6,
+    );
+    return {
+      x: Math.max(4, Math.min(x, window.innerWidth - 240)),
+      y: Math.max(4, Math.min(y, window.innerHeight - height - 4)),
+    };
+  }
   function close(restore = true) {
     setOpen(false);
     onClose?.();
@@ -48,11 +58,8 @@ export function CommandMenu({
         position
           ? {
               position: "fixed",
-              left: Math.min(position.x, window.innerWidth - 240),
-              top: Math.min(
-                position.y,
-                window.innerHeight - commands.length * 32 - 20,
-              ),
+              left: clampAnchor(position.x, position.y).x,
+              top: clampAnchor(position.x, position.y).y,
               zIndex: 30,
             }
           : undefined
@@ -63,19 +70,10 @@ export function CommandMenu({
           ref={trigger}
           aria-haspopup="menu"
           aria-expanded={open}
+          title={`Open ${label} commands`}
           onClick={() => {
             const box = trigger.current?.getBoundingClientRect();
-            if (box)
-              setAnchor({
-                x: Math.max(4, Math.min(box.left, window.innerWidth - 240)),
-                y: Math.max(
-                  4,
-                  Math.min(
-                    box.bottom,
-                    window.innerHeight - commands.length * 32 - 20,
-                  ),
-                ),
-              });
+            if (box) setAnchor(clampAnchor(box.left, box.bottom));
             setOpen((prior) => !prior);
           }}
         >
@@ -126,6 +124,11 @@ export function CommandMenu({
               key={command.label}
               role="menuitem"
               disabled={command.disabled}
+              title={
+                command.disabled
+                  ? `${command.label} is unavailable for the current selection or operation.`
+                  : command.label
+              }
               onClick={() => {
                 close();
                 command.run();
