@@ -33,6 +33,8 @@ export interface Settings {
   version: number;
   theme: "light" | "dark";
   recent: string[];
+  recentFolders?: string[];
+  recentComparisons?: RecentComparison[];
   sessions: {
     name: string;
     left: string;
@@ -58,6 +60,12 @@ export interface Settings {
     ignoreLineEndings: boolean;
     patterns: string[];
   }[];
+}
+export interface RecentComparison {
+  mode: "text" | "folder" | "merge";
+  left: string;
+  right: string;
+  base: string;
 }
 export const defaults: Settings = {
   version: 1,
@@ -196,6 +204,14 @@ interface FolderOptions {
   exclude: string[];
 }
 interface Commands {
+  remember_history: {
+    args: {
+      settings: Settings;
+      folders: string[];
+      comparison: RecentComparison | null;
+    };
+    result: Settings;
+  };
   validate_folder_rules: {
     args: { rules: FolderRules; options: FolderOptions };
     result: void;

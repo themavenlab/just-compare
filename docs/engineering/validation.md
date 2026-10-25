@@ -78,6 +78,7 @@ npm run test:workbench --workspace apps/desktop
 npm run test:compact --workspace apps/desktop
 npm run test:interactions --workspace apps/desktop
 npm run test:sessions --workspace apps/desktop
+npm run test:history --workspace apps/desktop
 ```
 
 Use `npm ci` for a fresh checkout. Native suites require an embedded-assets debug build, launch only owned processes, and write only owned temporary fixture trees. They are Windows WebView2/CDP tests, not browser mocks or other-platform evidence.
@@ -108,6 +109,10 @@ $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = 'rust-lld'
 The scoped stable toolchain used here reports 1.99.0. Reproduction should select `1.99.0-x86_64-pc-windows-gnu` rather than allowing stable to drift; install rustfmt and Clippy for that toolchain. Do not install system-wide tools without approval.
 
 ## Verified Evidence
+
+### Phase 2A-01 Recent History (Windows/MSVC)
+
+Windows MSVC: settings migration/restart/bounds tests, TypeScript check, all 16 Vitest frontend tests, ESLint, production frontend build, and embedded-assets native build passed. `node apps/desktop/scripts/history-regression.mjs` verifies empty history, typed path submission without per-keystroke scans, single- and two-root loading, collapsed initial trees, keyboard filtering and selection, retained results on missing roots, deduplication, complete Home tuple reopening across restart, and real failed persistence.
 
 | Area | Evidence |
 | :--- | :--- |

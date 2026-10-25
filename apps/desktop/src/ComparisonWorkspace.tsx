@@ -25,15 +25,7 @@ import {
   type Settings,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
-import { CommandMenu } from "./CommandMenu";
-import { errorMessage, type DiffSpan } from "./comparison";
-import {
-  differenceFilters,
-  matchesFilter,
-  matchesName,
-} from "./folderPresentation";
-import { FolderRulesDialog } from "./FolderRulesDialog";
-import { FolderView, type FolderSide } from "./FolderView";
+import { FolderPathInput } from "./FolderPathInput";
 import { RefinedRegion } from "./RefinedRegion";
 import { ToolButton } from "./ToolButton";
 import { VirtualList } from "./VirtualList";
@@ -145,6 +137,12 @@ export function ComparisonWorkspace({
       ...prior,
       ...(next.theme !== previous.theme ? { theme: next.theme } : {}),
       ...(next.recent !== previous.recent ? { recent: next.recent } : {}),
+      ...(next.recentFolders !== previous.recentFolders
+        ? { recentFolders: next.recentFolders }
+        : {}),
+      ...(next.recentComparisons !== previous.recentComparisons
+        ? { recentComparisons: next.recentComparisons }
+        : {}),
       ...(next.sessions !== previous.sessions
         ? { sessions: next.sessions }
         : {}),
@@ -431,9 +429,7 @@ export function ComparisonWorkspace({
     discardPreview(tab.id);
     setPreview(null);
     setLocalPreview(null);
-    setFolders([]);
-    setHasScanned(false);
-    setFolderStale(false);
+    setFolderStale(true);
     setSelectedFiles([]);
     setError("");
     setNotice("");
@@ -537,6 +533,32 @@ export function ComparisonWorkspace({
         await scan(next);
       }
     } else await load(side, path);
+  }
+  async function recordHistory(
+    folders: string[],
+    comparison: import("./api").RecentComparison | null,
+  ) {
+    const saved = await native("remember_history", {
+      settings: settingsSnapshot.current,
+      folders,
+      comparison,
+    });
+    setSettings((prior) => ({
+      ...prior,
+      recentFolders: saved.recentFolders ?? [],
+      recentComparisons: saved.recentComparisons ?? [],
+    }));
+  }
+  async function saveFolderHistory(recentFolders: string[]) {
+    const next = { ...settings, recentFolders };
+    await native("write_settings", { settings: next });
+    updateSettings((prior) => ({ ...prior, recentFolders }));
+  }
+  async function chooseFolder(side: FolderSide, path: string) {
+    invalidateFolders();
+    const roots = { ...folderRoots, [side]: path };
+    setFolderRoots(roots);
+    await scan(roots);
   }
   async function openSide(side: Side, encoding: string | null = null) {
     await load(side, editors[side].path, encoding);
@@ -646,6 +668,13 @@ export function ComparisonWorkspace({
           ),
         );
       }
+      if (inputs.left.document && inputs.right.document)
+        await recordHistory([], {
+          mode: "text",
+          left: inputs.left.document.path,
+          right: inputs.right.document.path,
+          base: "",
+        });
     }
   }
   const changes = spans?.filter((s) => s.kind !== "equal") ?? [];
@@ -735,22 +764,13 @@ export function ComparisonWorkspace({
     discardPreview(tab.id);
     setPreview(null);
     setLocalPreview(null);
-    setFolders([]);
-    setHasScanned(false);
+    setFolderStale(true);
     setSelectedFiles([]);
     setProgress(0);
     const roots =
       requestedRoots.left && requestedRoots.right
         ? await native("normalize_folder_roots", requestedRoots)
         : requestedRoots;
-    setNativeFolderRoots(roots);
-    rememberRoots(roots);
-    setSettings((prior) => ({
-      ...prior,
-      recent: [...new Set([roots.left, roots.right, ...prior.recent])]
-        .filter(Boolean)
-        .slice(0, 20),
-    }));
     const jobId = crypto.randomUUID();
     startJob(jobId);
     const result = await native("scan_folders", {
@@ -761,6 +781,9 @@ export function ComparisonWorkspace({
       jobId,
     });
     setFolders(result);
+    setFolderRoots(roots);
+    setNativeFolderRoots(roots);
+    rememberRoots(roots);
     const spaceFor = async (side: FolderSide) => {
       if (!roots[side]) return "";
       try {
@@ -778,6 +801,10 @@ export function ComparisonWorkspace({
       roots.left && roots.right
         ? `Scan complete: ${result.length} file entries.`
         : `Listed ${result.length} entries. Choose the other folder to compare.`,
+    );
+    await recordHistory(
+      [roots.left, roots.right],
+      roots.left && roots.right ? { mode: "folder", ...roots, base: "" } : null,
     );
   }
   function folderOptions() {
@@ -904,16 +931,16 @@ export function ComparisonWorkspace({
       );
     await scan();
   }
-  async function mergeInputs() {
+  async function mergeInputs(inputs = editors) {
     if (
       output !== outputSaved &&
       !(await confirmAction("Replace unsaved merge output with a new merge?"))
     )
       return;
     const result = await native("merge_text", {
-      base: editors.base.text,
-      left: editors.left.text,
-      right: editors.right.text,
+      base: inputs.base.text,
+      left: inputs.left.text,
+      right: inputs.right.text,
       gitSession: !!gitOutput,
     });
     setBlocks(result);
@@ -927,6 +954,13 @@ export function ComparisonWorkspace({
         .map((b) => b.text)
         .join(""),
     );
+    if (inputs.left.document && inputs.right.document && inputs.base.document)
+      await recordHistory([], {
+        mode: "merge",
+        left: inputs.left.document.path,
+        right: inputs.right.document.path,
+        base: inputs.base.document.path,
+      });
   }
   async function resolve(index: number, text: string) {
     const generated =
@@ -991,13 +1025,16 @@ export function ComparisonWorkspace({
           await scan({ left: tab.left, right: tab.right });
       } else {
         const inputs = { ...editors };
-        if (tab.base) await load("base", tab.base);
+        if (tab.base)
+          inputs.base = (await load("base", tab.base)) ?? inputs.base;
         if (tab.left)
           inputs.left = (await load("left", tab.left)) ?? inputs.left;
         if (tab.right)
           inputs.right = (await load("right", tab.right)) ?? inputs.right;
         if (mode === "text" && tab.left && tab.right)
           await compareInputs(inputs);
+        if (mode === "merge" && tab.base && tab.left && tab.right && !gitOutput)
+          await mergeInputs(inputs);
         if (gitOutput) {
           const document = await native("open_git_output");
           if (document) {
@@ -1226,42 +1263,66 @@ export function ComparisonWorkspace({
                   : "Draft"}
           </span>
         </div>
-        <label>
-          {mode === "folder" ? "Folder path" : "File path"}
-          <input
-            aria-label={`${side} path`}
-            name={`${side}-path`}
-            autoComplete="off"
-            spellCheck={false}
-            list={`recent-${tab.id}-${side}`}
-            placeholder={
-              mode === "folder"
-                ? "Choose a folder or paste its path..."
-                : "Choose a file or paste its path..."
-            }
-            value={
-              mode === "folder" && side !== "base" ? folderRoots[side] : e.path
-            }
-            disabled={busy}
-            onChange={(event) => {
-              const path = event.target.value;
-              if (mode === "folder" && side !== "base") {
-                invalidateFolders();
-                setFolderRoots((prior) => ({ ...prior, [side]: path }));
-              } else {
-                setEditors((prior) => ({
-                  ...prior,
-                  [side]: { ...prior[side], path },
-                }));
-              }
-            }}
-          />
-          <datalist id={`recent-${tab.id}-${side}`}>
-            {settings.recent.map((path) => (
-              <option key={path} value={path} />
-            ))}
-          </datalist>
-        </label>
+        <div className="path-label">
+          {mode === "folder" && side !== "base" ? (
+            <>
+              <span>Folder path</span>
+              <FolderPathInput
+                side={side}
+                value={folderRoots[side]}
+                recent={settings.recentFolders ?? []}
+                disabled={busy}
+                change={(path) => {
+                  invalidateFolders();
+                  setFolderRoots((prior) => ({ ...prior, [side]: path }));
+                }}
+                choose={(path) => void attempt(() => chooseFolder(side, path))}
+                onSaveHistory={(paths) =>
+                  void attempt(() => saveFolderHistory(paths))
+                }
+              />
+            </>
+          ) : (
+            <label>
+              {mode === "folder" ? "Folder path" : "File path"}
+              <input
+                aria-label={`${side} path`}
+                name={`${side}-path`}
+                autoComplete="off"
+                spellCheck={false}
+                list={`recent-${tab.id}-${side}`}
+                placeholder={
+                  mode === "folder"
+                    ? "Choose a folder or paste its path..."
+                    : "Choose a file or paste its path..."
+                }
+                value={
+                  mode === "folder" && side !== "base"
+                    ? folderRoots[side]
+                    : e.path
+                }
+                disabled={busy}
+                onChange={(event) => {
+                  const path = event.target.value;
+                  if (mode === "folder" && side !== "base") {
+                    invalidateFolders();
+                    setFolderRoots((prior) => ({ ...prior, [side]: path }));
+                  } else {
+                    setEditors((prior) => ({
+                      ...prior,
+                      [side]: { ...prior[side], path },
+                    }));
+                  }
+                }}
+              />
+              <datalist id={`recent-${tab.id}-${side}`}>
+                {settings.recent.map((path) => (
+                  <option key={path} value={path} />
+                ))}
+              </datalist>
+            </label>
+          )}
+        </div>
         <div className="toolbar compact">
           {mode === "folder" && side !== "base" && (
             <>
@@ -3355,6 +3416,7 @@ export function ComparisonWorkspace({
             </button>
           )}
           <FolderView
+            key={`${nativeFolderRoots.left}\0${nativeFolderRoots.right}`}
             entries={filteredFolders}
             filter={peek ? "all" : filter}
             busy={busy}

@@ -871,6 +871,22 @@ pub async fn read_settings(app: tauri::AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
+pub async fn remember_history(
+  mut settings: Settings,
+  folders: Vec<String>,
+  comparison: Option<compare_fs::RecentComparison>,
+  app: tauri::AppHandle,
+) -> Result<Settings, String> {
+  let path = settings_path(&app)?;
+  worker(move || {
+    compare_fs::remember_history(&mut settings, folders, comparison).map_err(|e| e.to_string())?;
+    compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())?;
+    Ok(settings)
+  })
+  .await
+}
+
+#[tauri::command]
 pub async fn write_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
   let path = settings_path(&app)?;
   worker(move || compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())).await

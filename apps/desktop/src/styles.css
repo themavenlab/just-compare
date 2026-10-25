@@ -1949,3 +1949,48 @@ body,
     font-size: 10px;
   }
 }
+.folder-path-input {
+  position: relative;
+  min-width: 0;
+}
+.folder-path-field {
+  display: flex;
+}
+.folder-path-field input {
+  flex: 1;
+  min-width: 0;
+}
+.folder-history {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 6px;
+  background: var(--panel, Canvas);
+  border: 1px solid GrayText;
+  box-shadow: 0 3px 10px #0004;
+}
+.folder-history [role="listbox"] {
+  max-height: 220px;
+  overflow: auto;
+}
+.folder-history-row {
+  display: flex;
+  min-width: 0;
+}
+.folder-history-row [role="option"] {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.folder-history-row [aria-selected="true"] {
+  outline: 2px solid Highlight;
+  outline-offset: -2px;
+}
+.path-label {
+  min-width: 0;
+}

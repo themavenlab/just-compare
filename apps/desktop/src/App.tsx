@@ -622,7 +622,7 @@ export function App() {
               label: "About Phase 1",
               run: () =>
                 setInfo(
-                  "Original local text/folder/merge workbench. Copies in text edit drafts; folder actions require previews. No uploads. Not complete Beyond Compare parity.",
+                  "Original local text/folder/merge workbench. Copies in text edit drafts; folder actions require previews. No uploads.",
                 ),
             },
           ]}
@@ -775,6 +775,17 @@ export function App() {
             openTab={openTab}
             openSession={openSession}
             saveSessions={saveHomeSessions}
+            saveHistory={(recentComparisons) => {
+              if (!acquire("home-history")) return;
+              void native("write_settings", {
+                settings: { ...settings, recentComparisons },
+              })
+                .then(() =>
+                  setSettings((prior) => ({ ...prior, recentComparisons })),
+                )
+                .catch((failure) => setError(errorMessage(failure)))
+                .finally(() => release("home-history"));
+            }}
             savePreferences={() => {
               void native("write_settings", { settings })
                 .then(() => setInfo("Preferences saved."))

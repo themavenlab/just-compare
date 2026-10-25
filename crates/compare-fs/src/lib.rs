@@ -11,5 +11,7 @@ pub use folder::{
   FolderOptions, FolderRules, FolderSide, FolderTextRules, Plan, QuickTest, QuickTestPolicy,
   SyncMode,
 };
-pub use settings::{load_settings, save_settings, Session, Settings};
+pub use settings::{
+  load_settings, remember_history, save_settings, RecentComparison, Session, Settings,
+};
 pub use windows_metadata::{disk_space, DiskSpace};

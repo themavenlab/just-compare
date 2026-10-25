@@ -22,6 +22,10 @@ pub struct Settings {
   pub version: u32,
   pub theme: String,
   pub recent: Vec<String>,
+  #[serde(default)]
+  pub recent_folders: Option<Vec<String>>,
+  #[serde(default)]
+  pub recent_comparisons: Vec<RecentComparison>,
   pub sessions: Vec<Session>,
   pub ignore_case: bool,
   pub ignore_whitespace: bool,
@@ -33,6 +37,62 @@ pub struct Settings {
   pub folder_rules: Option<crate::FolderRules>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub content_comparison: Option<ContentComparison>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecentComparison {
+  pub mode: String,
+  pub left: String,
+  pub right: String,
+  #[serde(default)]
+  pub base: String,
+}
+
+pub fn remember_history(
+  settings: &mut Settings,
+  folders: Vec<String>,
+  comparison: Option<RecentComparison>,
+) -> Result<(), FileError> {
+  validate(settings)?;
+  let mut recent = settings.recent_folders.clone().unwrap_or_default();
+  for folder in folders.into_iter().rev().filter(|path| !path.is_empty()) {
+    let path = crate::checked_path(Path::new(&folder), false)?;
+    if !path.is_dir() {
+      return Err(FileError("Recent folder must be a directory.".into()));
+    }
+    let path = path
+      .to_str()
+      .ok_or_else(|| FileError("Non-Unicode paths are unsupported.".into()))?
+      .to_owned();
+    recent.retain(|previous| previous != &path);
+    recent.insert(0, path);
+  }
+  recent.truncate(20);
+  settings.recent_folders = Some(recent);
+  if let Some(comparison) = comparison {
+    validate_comparison(&comparison)?;
+    settings
+      .recent_comparisons
+      .retain(|item| item != &comparison);
+    settings.recent_comparisons.insert(0, comparison);
+    settings.recent_comparisons.truncate(20);
+  }
+  Ok(())
+}
+
+fn validate_comparison(comparison: &RecentComparison) -> Result<(), FileError> {
+  if !["text", "folder", "merge"].contains(&comparison.mode.as_str())
+    || comparison.left.is_empty()
+    || comparison.right.is_empty()
+    || (comparison.mode == "merge" && comparison.base.is_empty())
+    || (comparison.mode != "merge" && !comparison.base.is_empty())
+  {
+    return Err(FileError(
+      "Recent comparison requires a complete workflow tuple.".into(),
+    ));
+  }
+  Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,6 +119,8 @@ impl Default for Settings {
       version: 1,
       theme: "light".into(),
       recent: Vec::new(),
+      recent_folders: Some(Vec::new()),
+      recent_comparisons: Vec::new(),
       sessions: Vec::new(),
       ignore_case: false,
       ignore_whitespace: false,
@@ -72,6 +134,17 @@ impl Default for Settings {
 }
 
 fn validate(settings: &Settings) -> Result<(), FileError> {
+  if settings
+    .recent_folders
+    .as_ref()
+    .is_some_and(|items| items.len() > 20)
+    || settings.recent_comparisons.len() > 20
+  {
+    return Err(FileError("Recent history exceeds 20 entries.".into()));
+  }
+  for comparison in &settings.recent_comparisons {
+    validate_comparison(comparison)?;
+  }
   if settings.content_comparison.as_ref().is_some_and(|options| {
     !matches!(
       options.method,
@@ -144,9 +217,24 @@ pub fn load_settings(path: &Path) -> Result<Settings, FileError> {
     Err(error) => return Err(error.into()),
   }
   let bytes = crate::document::read_bounded(path, 1024 * 1024)?;
-  let settings: Settings = serde_json::from_slice(&bytes)
+  let mut settings: Settings = serde_json::from_slice(&bytes)
     .map_err(|e| FileError(format!("Settings cannot be read; original retained: {e}")))?;
   validate(&settings)?;
+  if settings.recent_folders.is_none() {
+    let mut folders = Vec::new();
+    for path in &settings.recent {
+      if let Ok(path) = crate::checked_path(Path::new(path), false) {
+        if path.is_dir() {
+          if let Some(path) = path.to_str() {
+            if !folders.iter().any(|item| item == path) {
+              folders.push(path.to_owned());
+            }
+          }
+        }
+      }
+    }
+    settings.recent_folders = Some(folders);
+  }
   Ok(settings)
 }
 
@@ -179,6 +267,54 @@ pub fn save_settings(path: &Path, settings: &Settings) -> Result<(), FileError> 
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[test]
+  fn history_is_bounded_deduplicated_and_migrates_only_folders() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let file = root.path().join("file.txt");
+    std::fs::write(&file, "private contents").unwrap();
+    let path = root.path().join("settings.json");
+    let legacy = Settings {
+      recent: vec![
+        folder.display().to_string(),
+        file.display().to_string(),
+        root.path().join("missing").display().to_string(),
+      ],
+      recent_folders: None,
+      ..Default::default()
+    };
+    save_settings(&path, &legacy).unwrap();
+    let mut settings = load_settings(&path).unwrap();
+    assert_eq!(settings.recent_folders.as_ref().unwrap().len(), 1);
+    assert!(settings.recent_comparisons.is_empty());
+    for i in 0..25 {
+      remember_history(
+        &mut settings,
+        vec![folder.display().to_string()],
+        Some(RecentComparison {
+          mode: "text".into(),
+          left: format!("left-{i}"),
+          right: "right".into(),
+          base: "".into(),
+        }),
+      )
+      .unwrap();
+    }
+    assert_eq!(settings.recent_folders.as_ref().unwrap().len(), 1);
+    assert_eq!(settings.recent_comparisons.len(), 20);
+    let comparison = settings.recent_comparisons[3].clone();
+    remember_history(&mut settings, vec![], Some(comparison.clone())).unwrap();
+    assert_eq!(settings.recent_comparisons[0], comparison);
+    assert_eq!(settings.recent_comparisons.len(), 20);
+    assert!(remember_history(&mut settings, vec![file.display().to_string()], None).is_err());
+    save_settings(&path, &settings).unwrap();
+    std::fs::remove_dir(&folder).unwrap();
+    assert_eq!(load_settings(&path).unwrap(), settings);
+    assert!(save_settings(root.path(), &settings).is_err());
+    settings.recent_comparisons[0].mode = "merge".into();
+    assert!(save_settings(&path, &settings).is_err());
+  }
   #[test]
   fn settings_restart_and_corruption_are_explicit() {
     let root = tempfile::tempdir().unwrap();

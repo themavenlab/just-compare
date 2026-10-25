@@ -57,6 +57,7 @@ export function HomeScreen({
   openSession,
   savePreferences,
   saveSessions,
+  saveHistory,
 }: {
   settings: Settings;
   ready: boolean;
@@ -69,6 +70,9 @@ export function HomeScreen({
   openSession: (session: SavedSession) => void;
   savePreferences: () => void;
   saveSessions: (sessions: SavedSession[]) => Promise<boolean>;
+  saveHistory: (
+    comparisons: NonNullable<Settings["recentComparisons"]>,
+  ) => void;
 }) {
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
@@ -78,10 +82,6 @@ export function HomeScreen({
   const [left, setLeft] = useState("");
   const [right, setRight] = useState("");
   const [base, setBase] = useState("");
-  const [recentMode, setRecentMode] = useState<Workflow>("text");
-  const [recentSide, setRecentSide] = useState<"left" | "right" | "base">(
-    "left",
-  );
   const matches = (text: string) =>
     text.toLocaleLowerCase().includes(query.toLocaleLowerCase());
   return (
@@ -231,61 +231,34 @@ export function HomeScreen({
               </div>
             ),
         )}
-        <h3>Recent paths</h3>
-        <div className="recent-target">
-          <label>
-            Open as
-            <select
-              value={recentMode}
-              onChange={(e) => {
-                setRecentMode(e.target.value as Workflow);
-                if (e.target.value !== "merge") setRecentSide("left");
-              }}
-            >
-              {launchers.map((item) => (
-                <option key={item.mode} value={item.mode}>
-                  {item.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Input
-            <select
-              value={recentSide}
-              onChange={(e) =>
-                setRecentSide(e.target.value as "left" | "right" | "base")
-              }
-            >
-              <option value="left">Left</option>
-              <option value="right">Right</option>
-              {recentMode === "merge" && <option value="base">Base</option>}
-            </select>
-          </label>
-        </div>
-        {settings.recent.length === 0 && (
-          <p className="metadata">Opened files appear here.</p>
+        <h3>Recent comparisons</h3>
+        {!settings.recentComparisons?.length && (
+          <p className="metadata">Completed comparisons appear here.</p>
         )}
-        {settings.recent.map(
-          (path) =>
-            matches(path) && (
-              <div className="session-item" key={path}>
+        {(settings.recentComparisons ?? []).map(
+          (comparison, index) =>
+            matches(
+              `${comparison.mode} ${comparison.left} ${comparison.right} ${comparison.base}`,
+            ) && (
+              <div className="session-item" key={index}>
                 <button
                   disabled={busy}
-                  title={`Open ${path} as ${recentSide} input`}
-                  onClick={() => openTab(recentMode, { [recentSide]: path })}
+                  title={`${comparison.mode}: ${comparison.left} / ${comparison.right}${comparison.base ? ` / base: ${comparison.base}` : ""}`}
+                  onClick={() => openTab(comparison.mode, comparison)}
                 >
-                  {path.split(/[\\/]/).at(-1) || path}
+                  {comparison.mode}: {comparison.left.split(/[\\/]/).at(-1)} /{" "}
+                  {comparison.right.split(/[\\/]/).at(-1)}
                 </button>
                 <button
                   disabled={busy}
-                  aria-label={`Remove recent path ${path}`}
-                  title="Remove this recent entry; the file is not deleted"
+                  aria-label={`Remove recent comparison ${index + 1}`}
+                  title="Remove history only; source files are not deleted"
                   onClick={() =>
-                    update((prior) => ({
-                      ...prior,
-                      recent: prior.recent.filter((item) => item !== path),
-                    }))
+                    saveHistory(
+                      (settings.recentComparisons ?? []).filter(
+                        (_, i) => i !== index,
+                      ),
+                    )
                   }
                 >
                   −
@@ -293,6 +266,12 @@ export function HomeScreen({
               </div>
             ),
         )}
+        <button
+          disabled={busy || !ready || !settings.recentComparisons?.length}
+          onClick={() => saveHistory([])}
+        >
+          Clear comparison history
+        </button>
         <div className="home-preferences">
           <label>
             <input

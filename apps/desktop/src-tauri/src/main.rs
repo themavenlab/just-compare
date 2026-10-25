@@ -32,6 +32,7 @@ fn main() {
       commands::compare_folder_selection,
       commands::read_settings,
       commands::write_settings,
+      commands::remember_history,
       commands::launch_arguments,
       commands::finish_git_merge,
     ])
