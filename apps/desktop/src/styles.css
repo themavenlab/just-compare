@@ -1428,6 +1428,7 @@ body,
   height: 18px;
   font-size: 11px;
   line-height: 18px;
+  user-select: none;
 }
 .folder-browser .paired-folder-row.folder-row {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1474,11 +1475,37 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.folder-name-cell input {
-  width: 12px;
-  height: 12px;
-  margin: 0 3px 0 0;
+.tree-guides {
+  display: flex;
+  align-self: stretch;
   flex-shrink: 0;
+  color: var(--muted);
+}
+.tree-guide,
+.tree-elbow {
+  position: relative;
+  width: 14px;
+  flex-shrink: 0;
+}
+.tree-guide.continues::before,
+.tree-elbow::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 0;
+  height: 100%;
+  border-left: 1px dotted currentColor;
+}
+.tree-elbow.last-sibling::before {
+  height: 50%;
+}
+.tree-elbow::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  width: 7px;
+  border-top: 1px dotted currentColor;
 }
 .folder-name-cell button,
 .folder-name-cell .tree-spacer {
@@ -1493,9 +1520,19 @@ body,
   font-size: 11px;
   flex-shrink: 0;
 }
-.entry-symbol {
-  width: 12px;
+.entry-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 3px;
   flex-shrink: 0;
+  stroke: currentColor;
+  stroke-width: 1;
+  fill: none;
+  stroke-linejoin: round;
+}
+.folder-icon {
+  color: var(--file-error);
+  fill: var(--surface-alt);
 }
 .file-modified,
 .folder-side .file-size {

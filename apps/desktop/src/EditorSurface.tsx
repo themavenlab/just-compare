@@ -138,6 +138,8 @@ export function EditorSurface({
   const copyCallback = useRef(onCopyDifference);
   const copyEnabled = onCopyDifference !== undefined;
   const lastNavigation = useRef(-1);
+  const restoringScroll = useRef(false);
+  const scrollFrame = useRef<number | null>(null);
   useEffect(() => {
     copyCallback.current = onCopyDifference;
   }, [onCopyDifference]);
@@ -185,11 +187,15 @@ export function EditorSurface({
         ],
       }),
     });
-    const scrolled = () =>
-      scrollCallback.current?.(instance.scrollDOM.scrollTop);
+    const scrolled = () => {
+      if (!restoringScroll.current)
+        scrollCallback.current?.(instance.scrollDOM.scrollTop);
+    };
     instance.scrollDOM.addEventListener("scroll", scrolled);
     view.current = instance;
     return () => {
+      if (scrollFrame.current !== null)
+        cancelAnimationFrame(scrollFrame.current);
       view.current = null;
       instance.scrollDOM.removeEventListener("scroll", scrolled);
       instance.destroy();
@@ -207,6 +213,10 @@ export function EditorSurface({
     if (!instance) return;
     const top = instance.scrollDOM.scrollTop;
     const left = instance.scrollDOM.scrollLeft;
+    const preserveScroll =
+      selectedLine === undefined || lastNavigation.current === navigation;
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    restoringScroll.current = preserveScroll;
     const normalized = text.replace(/\r\n|\r/g, "\n");
     const documentChanged = instance.state.doc.toString() !== normalized;
     if (documentChanged) {
@@ -366,10 +376,19 @@ export function EditorSurface({
       ]),
     });
     instance.requestMeasure({
+      key: alignment.current,
       read: () => instance.scrollDOM.querySelectorAll(".cm-gutters"),
       write: (containers) => {
-        instance.scrollDOM.scrollTop = top;
-        instance.scrollDOM.scrollLeft = left;
+        if (preserveScroll) {
+          // CodeMirror applies block-height scroll anchoring after measure writes.
+          // Restore pixels afterward and do not mirror intermediate anchor offsets.
+          scrollFrame.current = requestAnimationFrame(() => {
+            instance.scrollDOM.scrollTop = top;
+            instance.scrollDOM.scrollLeft = left;
+            restoringScroll.current = false;
+            scrollFrame.current = null;
+          });
+        }
         // CodeMirror hides gutter containers by default; only copy actions are interactive.
         for (const container of containers) {
           const hasCopyActions =
@@ -391,6 +410,8 @@ export function EditorSurface({
     disabled,
     copyEnabled,
     displayMode,
+    selectedLine,
+    navigation,
   ]);
   useEffect(() => {
     const instance = view.current;

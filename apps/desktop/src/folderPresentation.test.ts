@@ -109,6 +109,61 @@ describe("folder presentation", () => {
       "a.txt",
     ]);
   });
+  it("connects visible siblings and ancestors without dangling final branches", () => {
+    const rows = folderRows(
+      [
+        entry("alpha/inner/one.txt"),
+        entry("alpha/inner/two.txt"),
+        entry("alpha/last.txt"),
+        entry("z.txt"),
+      ],
+      "all",
+      true,
+      new Set(),
+      "name",
+      false,
+    );
+    expect(
+      rows.map(({ path, guides, lastSibling }) => ({
+        path,
+        guides,
+        lastSibling,
+      })),
+    ).toEqual([
+      { path: "alpha", guides: [], lastSibling: false },
+      { path: "alpha/inner", guides: [true], lastSibling: false },
+      { path: "alpha/inner/one.txt", guides: [true, true], lastSibling: false },
+      { path: "alpha/inner/two.txt", guides: [true, true], lastSibling: true },
+      { path: "alpha/last.txt", guides: [true], lastSibling: true },
+      { path: "z.txt", guides: [], lastSibling: true },
+    ]);
+  });
+  it("recomputes connectors for filtered, sorted and collapsed visible branches", () => {
+    const rows = folderRows(
+      [entry("a/one.txt"), entry("a/two.txt", "same"), entry("b/three.txt")],
+      "differences",
+      true,
+      new Set(["b"]),
+      "name",
+      true,
+    );
+    expect(
+      rows.map(({ path, guides, lastSibling }) => ({
+        path,
+        guides,
+        lastSibling,
+      })),
+    ).toEqual([
+      { path: "b", guides: [], lastSibling: false },
+      { path: "a", guides: [], lastSibling: true },
+      { path: "a/one.txt", guides: [false], lastSibling: true },
+    ]);
+    expect(
+      folderRows(entries, "all", false, new Set(), "name", false).every(
+        (row) => row.depth === 0 && row.guides.length === 0,
+      ),
+    ).toBe(true);
+  });
   it("sorts all flat entries numerically by size with missing sizes first", () => {
     const rows = folderRows(
       entries,

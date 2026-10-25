@@ -48,24 +48,11 @@ try {
   const folderList = page.getByRole("region", {
     name: "Folder comparison entries",
   });
-  await folderList
-    .getByRole("checkbox", { name: "Select first.txt", exact: true })
-    .waitFor();
-  await folderList
-    .getByRole("checkbox", { name: "Select first.txt", exact: true })
-    .check();
+  const row = (name) =>
+    folderList.locator(`.folder-row[data-relative="${name}"]`);
+  await row("first.txt").locator(".folder-side").first().click();
   const openPair = (name) =>
-    folderList
-      .locator(".folder-row")
-      .filter({
-        has: page.getByRole("checkbox", {
-          name: `Select ${name}`,
-          exact: true,
-        }),
-      })
-      .locator(".folder-side")
-      .first()
-      .dblclick();
+    row(name).locator(".folder-side").first().dblclick();
   try {
     await openPair("first.txt");
     await text("Left").waitFor({ timeout: 5000 });
@@ -82,12 +69,7 @@ try {
         .inputValue(),
       rightRoot,
     );
-    assert.equal(
-      await folderList
-        .getByRole("checkbox", { name: "Select first.txt", exact: true })
-        .isChecked(),
-      true,
-    );
+    assert.equal(await row("first.txt").getAttribute("aria-selected"), "true");
     await folderList
       .getByRole("button", { name: "Expand nested left", exact: true })
       .click();
@@ -100,9 +82,7 @@ try {
     await page
       .getByRole("button", { name: "Scan folders", exact: true })
       .click();
-    await folderList
-      .getByRole("checkbox", { name: "Select first.txt", exact: true })
-      .waitFor();
+    await row("first.txt").waitFor();
     await previewUpdate(page);
     await page
       .getByRole("heading", { name: "Sync preview: 2 operations", exact: true })

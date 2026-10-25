@@ -234,13 +234,13 @@ try {
   await workspace
     .getByRole("button", { name: "Expand nested left", exact: true })
     .click();
-  await row("nested/second.txt").getByRole("checkbox").check();
+  await row("nested/second.txt").locator(".folder-side").first().click();
   await workspace
     .getByRole("button", { name: "Sort left by name", exact: true })
     .click();
   assert.equal(
-    await row("nested/second.txt").getByRole("checkbox").isChecked(),
-    true,
+    await row("nested/second.txt").getAttribute("aria-selected"),
+    "true",
   );
   await row("first.txt").locator(".folder-side").first().dblclick();
   await text("Left").waitFor();

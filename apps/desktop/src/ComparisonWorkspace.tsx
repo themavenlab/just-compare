@@ -62,6 +62,7 @@ const editor = (text = ""): Editor => ({
   history: [],
 });
 type Editors = Record<Side, Editor>;
+const noDifferences: DiffSpan[] = [];
 
 interface WorkspaceProps {
   tab: WorkspaceTab;
@@ -334,9 +335,9 @@ export function ComparisonWorkspace({
     latest.current = { editors, output, outputSaved, gitOutput, mode, busy };
   }, [editors, output, outputSaved, gitOutput, mode, busy]);
 
-  function invalidate() {
+  function invalidate(clearComparison = true) {
     revision.current += 1;
-    setSpans(null);
+    if (clearComparison) setSpans(null);
     setRefinement(null);
     setBlocks(null);
     setChoices({});
@@ -398,6 +399,7 @@ export function ComparisonWorkspace({
     path: string,
     encoding: string | null = null,
     checkDiscard = true,
+    keepComparison = false,
   ) {
     if (checkDiscard && !(await discard(side))) return;
     const document = await native("open_document", {
@@ -420,7 +422,7 @@ export function ComparisonWorkspace({
         throw error;
       }
     }
-    invalidate();
+    invalidate(!keepComparison);
     const loaded: Editor = {
       text: document.text,
       original: document.text,
@@ -471,7 +473,7 @@ export function ComparisonWorkspace({
     };
     invalidate();
     setEditors(inputs);
-    if (mode === "text") await compareInputs(inputs, selected);
+    if (mode === "text") await compareInputs(inputs, selected, minorText, true);
   }
   async function saveSide(side: Side, asNew = false, convert = false) {
     const e = editors[side];
@@ -489,32 +491,35 @@ export function ComparisonWorkspace({
     });
     discardPreview(tab.id);
     setPreview(null);
-    invalidate();
-    setEditors((prior) => ({
-      ...prior,
+    invalidate(mode !== "text");
+    const inputs = {
+      ...editors,
       [side]: {
-        ...prior[side],
+        ...editors[side],
         text: document.text,
         original: document.text,
         document,
         path: document.path,
       },
-    }));
+    };
+    setEditors(inputs);
     setNotice(`${side} saved.`);
     setStaleSides((prior) => prior.filter((value) => value !== side));
     diskChanged([document.path]);
     const metadata = await native("path_metadata", { path: document.path });
     setFileMetadata((prior) => ({ ...prior, [side]: metadata }));
+    if (mode === "text") await compareInputs(inputs, selected, minorText, true);
   }
   async function compareInputs(
     inputs = editors,
     afterCopy?: DiffSpan,
     includeMinor = minorText,
+    preserveViewport = afterCopy !== undefined,
   ) {
     const request = ++revision.current;
     const jobId = crypto.randomUUID();
     startJob(jobId);
-    if (!afterCopy) setSpans(null);
+    if (!preserveViewport) setSpans(null);
     setRefinement(null);
     const profile = settings.formats.find((f) =>
       (inputs.left.document?.path || inputs.left.path)
@@ -534,6 +539,9 @@ export function ComparisonWorkspace({
           profile?.ignoreLineEndings ?? settings.ignoreLineEndings,
         patterns: profile?.patterns ?? settings.unimportantPatterns,
       },
+    }).catch((failure: unknown) => {
+      if (request === revision.current) setSpans(null);
+      throw failure;
     });
     if (request === revision.current) {
       setSpans(result);
@@ -543,9 +551,19 @@ export function ComparisonWorkspace({
           (span) => span.leftStart >= afterCopy.leftStart,
         );
         setCurrent(next < 0 ? Math.max(0, remaining.length - 1) : next);
-      } else {
+      } else if (!preserveViewport) {
         setCurrent(0);
         setNavigation((value) => value + 1);
+      } else {
+        setCurrent((value) =>
+          Math.min(
+            value,
+            Math.max(
+              0,
+              result.filter((span) => span.kind !== "equal").length - 1,
+            ),
+          ),
+        );
       }
     }
   }
@@ -1318,7 +1336,9 @@ export function ComparisonWorkspace({
                 }}
                 displayMode={mode === "text" ? textFilter : "all"}
                 differences={
-                  mode === "text" && side !== "base" ? (spans ?? []) : []
+                  mode === "text" && side !== "base"
+                    ? (spans ?? noDifferences)
+                    : noDifferences
                 }
                 side={side === "right" ? "right" : "left"}
                 selectedDifference={mode === "text" ? selected : undefined}
@@ -2671,16 +2691,37 @@ export function ComparisonWorkspace({
             <ToolButton
               label="Reload"
               symbol="↻"
-              description="Reopen both file inputs. Dirty drafts require confirmation; failures retain existing text."
+              description="Reopen both file inputs and refresh differences without resetting the viewport. Dirty drafts require confirmation."
               disabled={busy || (!editors.left.path && !editors.right.path)}
               onClick={() =>
                 void attempt(async () => {
                   if (!(await discard("left")) || !(await discard("right")))
                     return;
-                  if (editors.left.path)
-                    await load("left", editors.left.path, null, false);
-                  if (editors.right.path)
-                    await load("right", editors.right.path, null, false);
+                  const inputs = { ...editors };
+                  try {
+                    if (editors.left.path)
+                      inputs.left =
+                        (await load(
+                          "left",
+                          editors.left.path,
+                          null,
+                          false,
+                          true,
+                        )) ?? inputs.left;
+                    if (editors.right.path)
+                      inputs.right =
+                        (await load(
+                          "right",
+                          editors.right.path,
+                          null,
+                          false,
+                          true,
+                        )) ?? inputs.right;
+                    await compareInputs(inputs, selected, minorText, true);
+                  } catch (failure) {
+                    setSpans(null);
+                    throw failure;
+                  }
                 })
               }
             />

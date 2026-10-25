@@ -25,6 +25,8 @@ export interface FolderNode {
   depth: number;
   branch: boolean;
   entry: FolderEntry | null;
+  guides: boolean[];
+  lastSibling: boolean;
 }
 export function matchesFilter(entry: FolderEntry, filter: string) {
   const paired = entry.leftSize !== null && entry.rightSize !== null;
@@ -111,6 +113,8 @@ export function folderRows(
         depth: 0,
         branch: false,
         entry,
+        guides: [],
+        lastSibling: true,
       }))
       .sort(compare);
   const actual = new Map(entries.map((entry) => [entry.relative, entry]));
@@ -128,6 +132,8 @@ export function folderRows(
             index < segments.length - 1 ||
             actual.get(path)?.isDirectory === true,
           entry: actual.get(path) ?? null,
+          guides: [],
+          lastSibling: true,
         });
       if (index < segments.length - 1) {
         const parent = nodes.get(path);
@@ -145,12 +151,15 @@ export function folderRows(
     children.set(parent, group);
   }
   const result: FolderNode[] = [];
-  const visit = (parent: string) => {
-    for (const node of (children.get(parent) ?? []).sort(compare)) {
-      result.push(node);
-      if (!collapsed.has(node.path)) visit(node.path);
+  const visit = (parent: string, guides: boolean[]) => {
+    const siblings = (children.get(parent) ?? []).sort(compare);
+    for (const [index, node] of siblings.entries()) {
+      const lastSibling = index === siblings.length - 1;
+      result.push({ ...node, guides, lastSibling });
+      if (!collapsed.has(node.path))
+        visit(node.path, [...guides, !lastSibling]);
     }
   };
-  visit("");
+  visit("", []);
   return result;
 }

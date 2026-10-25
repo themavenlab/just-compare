@@ -367,8 +367,11 @@ try {
       .waitFor();
   };
   await scanFolders();
-  await row("file01.txt").getByRole("checkbox").check();
-  await row("file02.txt").getByRole("checkbox").check();
+  await row("file01.txt").locator(".folder-side").first().click();
+  await row("file02.txt")
+    .locator(".folder-side")
+    .first()
+    .click({ modifiers: ["Control"] });
   await row("file01.txt")
     .locator(".folder-side")
     .first()

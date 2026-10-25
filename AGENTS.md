@@ -25,5 +25,6 @@ Review the [Product Roadmap & Scope](docs/product/roadmap.md) for product bounda
 
 - For unfinished tasks, leave a structured handoff following [Agent Workflow](docs/engineering/agent-workflow.md#handoff).
 - Human approval is required prior to introducing new dependencies, making breaking contract changes, or executing destructive development actions.
+- For every bug fix, add or extend an automated regression test wherever feasible. Exercise the reported behavior and relevant entry points; for UI/IPC bugs prefer native interaction coverage over checking implementation details. If automation is impractical, explain why and record the manual verification.
 - Tool-specific instruction files, if introduced, must point here rather than duplicate policy. Verify each tool's discovery behavior before relying on it.
 - **Markdown Formatting:** Do not break lines mid-sentence at arbitrary column widths. Write full sentences on continuous lines; allow text editors and Markdown renderers to handle soft wrapping.

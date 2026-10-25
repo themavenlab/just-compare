@@ -722,12 +722,7 @@ try {
     ["right-only.txt", "rightOnly"],
     ["linked-entry", "error"],
   ]) {
-    const row = folderList.locator(".folder-row").filter({
-      has: page.getByRole("checkbox", {
-        name: `Select ${relative}`,
-        exact: true,
-      }),
-    });
+    const row = folderList.locator(`.folder-row[data-relative="${relative}"]`);
     assert.equal(await row.getAttribute("data-status"), status);
     const left = row.locator(".folder-side").nth(0);
     const right = row.locator(".folder-side").nth(1);
@@ -741,8 +736,10 @@ try {
       await right.locator(".file-name").innerText(),
       status === "leftOnly" ? "" : relative,
     );
-    if (status === "error")
-      assert.equal(await row.getByRole("checkbox").isDisabled(), true);
+    if (status === "error") {
+      await left.locator(".file-name").click();
+      assert.equal(await row.getAttribute("aria-selected"), "false");
+    }
   }
   for (const theme of ["light", "dark"]) {
     await togglePanel(page, "preferences");
@@ -806,9 +803,10 @@ try {
     0,
   );
   await page.getByRole("button", { name: "All", exact: true }).click();
-  await page
-    .getByRole("checkbox", { name: "Select left-only.txt", exact: true })
-    .check();
+  await folderList
+    .locator('.folder-row[data-relative="left-only.txt"] .folder-side')
+    .first()
+    .click();
   await togglePanel(page, "rules");
   await page
     .getByLabel("Exclusions (glob per line)", { exact: true })

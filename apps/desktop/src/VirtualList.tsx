@@ -17,6 +17,7 @@ export function VirtualList({
   onKeyDown,
   activeDescendant,
   role = "region",
+  multiselectable = false,
 }: {
   count: number;
   height?: number;
@@ -28,6 +29,7 @@ export function VirtualList({
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   activeDescendant?: string | undefined;
   role?: "region" | "tree";
+  multiselectable?: boolean;
 }) {
   const [scroll, setScroll] = useState(0);
   const [measuredHeight, setMeasuredHeight] = useState(height);
@@ -61,6 +63,7 @@ export function VirtualList({
       className="virtual"
       ref={element}
       role={role}
+      aria-multiselectable={role === "tree" ? multiselectable : undefined}
       aria-label={label}
       aria-activedescendant={activeDescendant}
       tabIndex={0}

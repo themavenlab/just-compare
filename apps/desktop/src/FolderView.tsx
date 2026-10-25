@@ -246,6 +246,7 @@ export function FolderView({
         className="folder-tree"
         role="region"
         aria-label="Folder comparison entries"
+        aria-description="Click to select; Ctrl or Command-click to toggle; Shift-click to select a range. Arrow keys navigate, Space toggles selection, and Enter opens a pair or expands a folder."
       >
         <VirtualList
           count={rows.length}
@@ -253,6 +254,7 @@ export function FolderView({
           fill
           label={tree ? "Paired folder hierarchy" : "Paired folder entries"}
           role={tree ? "tree" : "region"}
+          multiselectable={tree}
           activeIndex={focusedIndex}
           activeDescendant={
             tree && focusedIndex >= 0 ? `${id}-${focusedIndex}` : undefined
@@ -407,27 +409,26 @@ export function FolderView({
                     >
                       <span
                         className="folder-name-cell"
-                        style={{ paddingLeft: node.depth * 14 }}
                         title={
                           entry?.detail
                             ? `${relative}: ${entry.detail}`
                             : relative
                         }
                       >
-                        {pane === "left" && (
-                          <input
-                            type="checkbox"
-                            aria-label={`Select ${node.path}`}
-                            checked={selected.includes(node.path)}
-                            disabled={
-                              busy || !entry || entry.status === "error"
-                            }
-                            onChange={(event) =>
-                              onSelect(node.path, event.target.checked)
-                            }
-                          />
+                        {tree && (
+                          <span className="tree-guides" aria-hidden="true">
+                            {node.guides.map((continues, level) => (
+                              <span
+                                key={level}
+                                className={`tree-guide${continues ? " continues" : ""}`}
+                              />
+                            ))}
+                            <span
+                              className={`tree-elbow${node.lastSibling ? " last-sibling" : ""}`}
+                            />
+                          </span>
                         )}
-                        {node.branch ? (
+                        {tree && node.branch ? (
                           <button
                             disabled={missing}
                             aria-label={`${collapsed.has(node.path) ? "Expand" : "Collapse"} ${node.path} ${pane}`}
@@ -438,20 +439,35 @@ export function FolderView({
                           >
                             {collapsed.has(node.path) ? "+" : "-"}
                           </button>
-                        ) : (
+                        ) : tree ? (
                           <span className="tree-spacer" />
+                        ) : null}
+                        {!missing && (
+                          <svg
+                            className={`entry-icon ${entry?.status === "error" ? "error-icon" : node.branch || entry?.isDirectory ? "folder-icon" : "file-icon"}`}
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            {entry?.status === "error" ? (
+                              <path d="M8 1 15 14H1ZM8 5v4m0 2v1" />
+                            ) : node.branch || entry?.isDirectory ? (
+                              <>
+                                <path d="M1.5 13.5v-11h5l2 2h6v9Z" />
+                                {tree && !collapsed.has(node.path) && (
+                                  <path d="m1.5 13.5 2-7h12l-2 7Z" />
+                                )}
+                              </>
+                            ) : (
+                              <path d="M3 1.5h6l4 4v9H3Zm6 0v4h4M5 8h6m-6 3h6" />
+                            )}
+                          </svg>
                         )}
-                        <span className="entry-symbol" aria-hidden="true">
-                          {entry?.status === "error"
-                            ? "!"
-                            : missing
-                              ? ""
-                              : node.branch
-                                ? "\u25a3"
-                                : "\u25aa"}
-                        </span>
                         <span className="file-name">
-                          {missing ? "" : relative.split("/").at(-1)}
+                          {missing
+                            ? ""
+                            : tree
+                              ? relative.split("/").at(-1)
+                              : relative}
                         </span>
                       </span>
                       <span className="file-size">
