@@ -4,7 +4,7 @@ Thank you for your interest in contributing! We welcome contributions to improve
 
 ## Getting Started
 
-1. Check the [Roadmap & Scope](docs/product/roadmap.md) to understand current milestones and MVP goals.
+1. Check the [Product Roadmap & Scope](docs/product/roadmap.md) to find prioritized Phase 2 work packages (2A-01 through 2A-11, 2B-01 through 2B-08, 2C-01 through 2C-03). Do not introduce new dependencies, formats, or unapproved architectural changes without prior discussion.
 2. Review the [Architecture Overview](docs/architecture/overview.md) to understand component boundaries (Rust domain crates vs. Tauri desktop shell vs. React UI).
 3. Read [AGENTS.md](AGENTS.md) and the [Agent Workflow](docs/engineering/agent-workflow.md) for workflow guidelines and repository conventions.
 4. If tackling a new feature or significant change, please open an issue using the [Engineering Task Template](.github/ISSUE_TEMPLATE/engineering-task.md) first to discuss the approach.
