@@ -88,6 +88,9 @@ try {
         .isChecked(),
       true,
     );
+    await folderList
+      .getByRole("button", { name: "Expand nested left", exact: true })
+      .click();
     await openPair("nested/second.txt");
     await text("Left").waitFor();
     assert.equal(await content("Left"), "second left\n");

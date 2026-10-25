@@ -10,11 +10,13 @@ export function CommandMenu({
   commands,
   position,
   onClose,
+  description,
 }: {
   label: string;
   commands: MenuCommand[];
   position?: { x: number; y: number };
   onClose?: () => void;
+  description?: string;
 }) {
   const [open, setOpen] = useState(position !== undefined);
   const [anchor, setAnchor] = useState(position);
@@ -70,7 +72,7 @@ export function CommandMenu({
           ref={trigger}
           aria-haspopup="menu"
           aria-expanded={open}
-          title={`Open ${label} commands`}
+          title={description ?? `Open ${label} commands`}
           onClick={() => {
             const box = trigger.current?.getBoundingClientRect();
             if (box) setAnchor(clampAnchor(box.left, box.bottom));

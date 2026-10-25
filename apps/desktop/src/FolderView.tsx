@@ -31,7 +31,21 @@ export function FolderView({
   registerCommands: (controller: ((name: string) => void) | null) => void;
 }) {
   const [tree, setTree] = useState(true);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const branches = useMemo(() => {
+    const paths = new Set<string>();
+    for (const entry of entries) {
+      if (entry.isDirectory) paths.add(entry.relative);
+      const parts = entry.relative.split("/");
+      for (let i = 1; i < parts.length; i++)
+        paths.add(parts.slice(0, i).join("/"));
+    }
+    return paths;
+  }, [entries]);
+  const collapsed = useMemo(
+    () => new Set([...branches].filter((path) => !expanded.has(path))),
+    [branches, expanded],
+  );
   const [sort, setSort] = useState<FolderSort>("name");
   const [descending, setDescending] = useState(false);
   const [focused, setFocused] = useState<string | null>(null);
@@ -48,9 +62,25 @@ export function FolderView({
     () => folderRows(entries, filter, tree, collapsed, sort, descending),
     [entries, filter, tree, collapsed, sort, descending],
   );
-  const latest = useRef({ entries, rows, selected, onSelect, onAction, side });
+  const latest = useRef({
+    entries,
+    rows,
+    selected,
+    onSelect,
+    onAction,
+    side,
+    branches,
+  });
   useLayoutEffect(() => {
-    latest.current = { entries, rows, selected, onSelect, onAction, side };
+    latest.current = {
+      entries,
+      rows,
+      selected,
+      onSelect,
+      onAction,
+      side,
+      branches,
+    };
   });
   useLayoutEffect(() => {
     registerCommands((name) => {
@@ -64,15 +94,8 @@ export function FolderView({
       } = latest.current;
       if (name === "tree") setTree(true);
       else if (name === "flat") setTree(false);
-      else if (name === "expand") setCollapsed(new Set());
-      else if (name === "collapse")
-        setCollapsed(
-          new Set(
-            currentEntries
-              .filter((entry) => entry.isDirectory)
-              .map((entry) => entry.relative),
-          ),
-        );
+      else if (name === "expand") setExpanded(new Set(latest.current.branches));
+      else if (name === "collapse") setExpanded(new Set());
       else if (
         name === "selectAll" ||
         name === "selectNone" ||
@@ -100,7 +123,7 @@ export function FolderView({
   }, [registerCommands]);
   const focusedIndex = rows.findIndex((row) => row.path === focused);
   function toggle(path: string) {
-    setCollapsed((prior) => {
+    setExpanded((prior) => {
       const next = new Set(prior);
       if (next.has(path)) next.delete(path);
       else next.add(path);

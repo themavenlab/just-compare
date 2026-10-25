@@ -229,10 +229,7 @@ try {
     name: "Folder comparison entries",
   });
   const row = (path) => list.locator(`.folder-row[data-relative="${path}"]`);
-  await row("nested/second.txt").waitFor();
-  await workspace
-    .getByRole("button", { name: "Collapse nested left", exact: true })
-    .click();
+  await row("nested").waitFor();
   assert.equal(await row("nested/second.txt").count(), 0);
   await workspace
     .getByRole("button", { name: "Expand nested left", exact: true })

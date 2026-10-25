@@ -421,15 +421,16 @@ export function ComparisonWorkspace({
       }
     }
     invalidate();
+    const loaded: Editor = {
+      text: document.text,
+      original: document.text,
+      document,
+      path: document.path,
+      history: [],
+    };
     setEditors((prior) => ({
       ...prior,
-      [side]: {
-        text: document.text,
-        original: document.text,
-        document,
-        path: document.path,
-        history: [],
-      },
+      [side]: loaded,
     }));
     setStaleSides((prior) => prior.filter((value) => value !== side));
     setFileMetadata((prior) => ({ ...prior, [side]: metadata }));
@@ -440,14 +441,18 @@ export function ComparisonWorkspace({
         ...prior.recent.filter((p) => p !== document.path),
       ].slice(0, 20),
     }));
+    return loaded;
   }
   async function loadDialog(side: Side) {
     const path = await open({ multiple: false, directory: mode === "folder" });
     if (typeof path !== "string") return;
     if (mode === "folder") {
       invalidateFolders();
-      if (side !== "base")
-        setFolderRoots((prior) => ({ ...prior, [side]: path }));
+      if (side !== "base") {
+        const next = { ...folderRoots, [side]: path };
+        setFolderRoots(next);
+        await scan(next);
+      }
     } else await load(side, path);
   }
   async function openSide(side: Side, encoding: string | null = null) {
@@ -625,7 +630,7 @@ export function ComparisonWorkspace({
       ),
     ) ?? [];
 
-  async function scan() {
+  async function scan(requestedRoots = folderRoots) {
     discardPreview(tab.id);
     setPreview(null);
     setLocalPreview(null);
@@ -633,13 +638,15 @@ export function ComparisonWorkspace({
     setHasScanned(false);
     setSelectedFiles([]);
     setProgress(0);
-    const roots = await normalizeFolderRoots();
-    rememberRoots(folderRoots);
+    const roots =
+      requestedRoots.left && requestedRoots.right
+        ? await native("normalize_folder_roots", requestedRoots)
+        : requestedRoots;
+    setNativeFolderRoots(roots);
+    rememberRoots(roots);
     setSettings((prior) => ({
       ...prior,
-      recent: [
-        ...new Set([folderRoots.left, folderRoots.right, ...prior.recent]),
-      ]
+      recent: [...new Set([roots.left, roots.right, ...prior.recent])]
         .filter(Boolean)
         .slice(0, 20),
     }));
@@ -654,6 +661,7 @@ export function ComparisonWorkspace({
     });
     setFolders(result);
     const spaceFor = async (side: FolderSide) => {
+      if (!roots[side]) return "";
       try {
         const value = await native("disk_space", { path: roots[side] });
         return `${BigInt(value.availableBytes).toLocaleString()} bytes free`;
@@ -665,7 +673,11 @@ export function ComparisonWorkspace({
     setDiskSpace({ left: space[0], right: space[1] });
     setHasScanned(true);
     setFolderStale(false);
-    setNotice(`Scan complete: ${result.length} file entries.`);
+    setNotice(
+      roots.left && roots.right
+        ? `Scan complete: ${result.length} file entries.`
+        : `Listed ${result.length} entries. Choose the other folder to compare.`,
+    );
   }
   function folderOptions() {
     return {
@@ -700,15 +712,18 @@ export function ComparisonWorkspace({
     rememberRoots(roots);
     invalidateFolders();
     setFolderRoots(roots);
+    await scan(roots);
   }
-  function navigateHistory(side: FolderSide, delta: number) {
+  async function navigateHistory(side: FolderSide, delta: number) {
     const history = rootHistory[side];
     const index = history.index + delta;
     const path = history.paths[index];
     if (path === undefined) return;
     invalidateFolders();
     setRootHistory((prior) => ({ ...prior, [side]: { ...history, index } }));
-    setFolderRoots((prior) => ({ ...prior, [side]: path }));
+    const roots = { ...folderRoots, [side]: path };
+    setFolderRoots(roots);
+    await scan(roots);
   }
   async function normalizeFolderRoots() {
     const roots = await native("normalize_folder_roots", folderRoots);
@@ -871,10 +886,17 @@ export function ComparisonWorkspace({
     void attempt(async () => {
       if (mode === "folder") {
         setFolderRoots({ left: tab.left, right: tab.right });
+        if (tab.left || tab.right)
+          await scan({ left: tab.left, right: tab.right });
       } else {
+        const inputs = { ...editors };
         if (tab.base) await load("base", tab.base);
-        if (tab.left) await load("left", tab.left);
-        if (tab.right) await load("right", tab.right);
+        if (tab.left)
+          inputs.left = (await load("left", tab.left)) ?? inputs.left;
+        if (tab.right)
+          inputs.right = (await load("right", tab.right)) ?? inputs.right;
+        if (mode === "text" && tab.left && tab.right)
+          await compareInputs(inputs);
         if (gitOutput) {
           const document = await native("open_git_output");
           if (document) {
@@ -967,10 +989,12 @@ export function ComparisonWorkspace({
         await attempt(async () => {
           if (mode === "folder") {
             invalidateFolders();
-            setFolderRoots((prior) => ({
-              left: paths[0] ?? prior.left,
-              right: paths[1] ?? prior.right,
-            }));
+            const roots = {
+              left: paths[0] ?? folderRoots.left,
+              right: paths[1] ?? folderRoots.right,
+            };
+            setFolderRoots(roots);
+            await scan(roots);
           } else {
             if (!(await discard("left")) || !(await discard("right"))) return;
             if (paths[0]) await load("left", paths[0], null, false);
@@ -1138,7 +1162,7 @@ export function ComparisonWorkspace({
                 aria-label={`Back ${side}`}
                 title="Navigate back in this side's path history"
                 disabled={busy || rootHistory[side].index === 0}
-                onClick={() => navigateHistory(side, -1)}
+                onClick={() => void attempt(() => navigateHistory(side, -1))}
               >
                 {"<"}
               </button>
@@ -1149,7 +1173,7 @@ export function ComparisonWorkspace({
                   busy ||
                   rootHistory[side].index + 1 >= rootHistory[side].paths.length
                 }
-                onClick={() => navigateHistory(side, 1)}
+                onClick={() => void attempt(() => navigateHistory(side, 1))}
               >
                 {">"}
               </button>
@@ -1267,16 +1291,17 @@ export function ComparisonWorkspace({
                 ? " / disk changed; reopen to refresh"
                 : ""}
             </p>
-            <label>
-              {side === "left"
-                ? "Left text"
-                : side === "right"
-                  ? "Right text"
-                  : "Base text"}
+            <div className="editor-content">
+              <span className="sr-only">
+                {side === "left"
+                  ? "Left text"
+                  : side === "right"
+                    ? "Right text"
+                    : "Base text"}
+              </span>
               <CodeEditor
                 text={e.text}
                 disabled={busy}
-                path={e.path}
                 label={
                   side === "left"
                     ? "Left text"
@@ -1316,7 +1341,7 @@ export function ComparisonWorkspace({
                   mode === "text" && side !== "base" ? setScrollTop : undefined
                 }
               />
-            </label>
+            </div>
           </>
         )}
       </section>
@@ -2354,15 +2379,15 @@ export function ComparisonWorkspace({
               )
               .toLocaleString()}{" "}
             bytes
-            {diskSpace.left && (
+            {(diskSpace.left || diskSpace.right) && (
               <span
                 className="folder-disk-space"
                 title={`Available space at last scan. Left: ${diskSpace.left}. Right: ${diskSpace.right}.`}
               >
                 {" / Free L: "}
-                {diskSpace.left}
+                {diskSpace.left || "no folder"}
                 {" / R: "}
-                {diskSpace.right}
+                {diskSpace.right || "no folder"}
               </span>
             )}
           </span>
@@ -2894,6 +2919,7 @@ export function ComparisonWorkspace({
             />
             <CommandMenu
               label="Diffs"
+              description={`Current filter: ${differenceFilters.find(([value]) => value === filter)?.[1] ?? filter}. Comparison and refresh preserve this choice.`}
               commands={differenceFilters.map(([value, label]) => ({
                 label,
                 run: () => setFilter(value),

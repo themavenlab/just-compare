@@ -927,7 +927,7 @@ body,
   height: 26px;
   font-size: 12px;
 }
-.comparison-workspace .editor > label:last-child {
+.comparison-workspace .editor > .editor-content {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1351,7 +1351,7 @@ body,
 .comparison-workspace .editor > label {
   flex-shrink: 0;
 }
-.comparison-workspace .editor > label:last-child {
+.comparison-workspace .editor > .editor-content {
   flex: 1;
 }
 .comparison-workspace .editor > label > input {

@@ -7,8 +7,8 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { useEffect, useRef, useState } from "react";
-import { errorMessage, type DiffSpan } from "./comparison";
+import { useEffect, useRef } from "react";
+import { type DiffSpan } from "./comparison";
 
 class Gap extends WidgetType {
   constructor(
@@ -98,7 +98,6 @@ export function EditorSurface({
   onChange,
   label,
   disabled = false,
-  path = "",
   gaps = [],
   selectedLine,
   navigation = 0,
@@ -114,7 +113,6 @@ export function EditorSurface({
   onChange: (text: string) => void;
   label: string;
   disabled?: boolean;
-  path?: string;
   gaps?: { line: number; count: number }[] | undefined;
   selectedLine?: number | undefined;
   navigation?: number;
@@ -127,12 +125,10 @@ export function EditorSurface({
   displayMode?: "all" | "differences" | "same" | "context";
 }) {
   const element = useRef<HTMLDivElement>(null);
-  const [syntaxError, setSyntaxError] = useState("");
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
   const updating = useRef(false);
   const readonly = useRef(new Compartment());
-  const language = useRef(new Compartment());
   const alignment = useRef(new Compartment());
   const scrollCallback = useRef(onScroll);
   const copyCallback = useRef(onCopyDifference);
@@ -156,7 +152,6 @@ export function EditorSurface({
         extensions: [
           basicSetup,
           readonly.current.of(EditorState.readOnly.of(disabled)),
-          language.current.of([]),
           alignment.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": label }),
           EditorView.theme({
@@ -404,36 +399,5 @@ export function EditorSurface({
     )
       view.current.scrollDOM.scrollTop = scrollTop;
   }, [scrollTop]);
-  useEffect(() => {
-    let disposed = false;
-    void (async () => {
-      try {
-        const extension = /\.[cm]?[jt]sx?$/i.test(path)
-          ? (await import("@codemirror/lang-javascript")).javascript({
-              jsx: true,
-              typescript: true,
-            })
-          : /\.json$/i.test(path)
-            ? (await import("@codemirror/lang-json")).json()
-            : [];
-        if (!disposed) {
-          setSyntaxError("");
-          view.current?.dispatch({
-            effects: language.current.reconfigure(extension),
-          });
-        }
-      } catch (error) {
-        if (!disposed) setSyntaxError(errorMessage(error));
-      }
-    })();
-    return () => {
-      disposed = true;
-    };
-  }, [path]);
-  return (
-    <>
-      <div ref={element} className="code-editor" />
-      {syntaxError && <p role="alert">Syntax support failed: {syntaxError}</p>}
-    </>
-  );
+  return <div ref={element} className="code-editor" />;
 }

@@ -815,11 +815,39 @@ fn scan_with_selection(
   rules.validate()?;
   cancel(cancelled)?;
   let compiled = compile_rules(&rules.text_rules)?;
-  let (left, right) = roots(left, right)?;
-  let a = collect(&left, options, cancelled, &mut progress)?;
-  let b = collect(&right, options, cancelled, &mut |count| {
-    progress(a.len() + count)
-  })?;
+  let single_side = left.as_os_str().is_empty() || right.as_os_str().is_empty();
+  if left.as_os_str().is_empty() && right.as_os_str().is_empty() {
+    return Err(FileError("Choose at least one folder root.".into()));
+  }
+  if single_side && selected.is_some() {
+    return Err(FileError(
+      "Selected comparison requires both folder roots.".into(),
+    ));
+  }
+  let (left, right) = if single_side {
+    let validate = |path: &Path| {
+      if path.as_os_str().is_empty() {
+        Ok(PathBuf::new())
+      } else {
+        checked_path(path, false)
+      }
+    };
+    (validate(left)?, validate(right)?)
+  } else {
+    roots(left, right)?
+  };
+  let a = if left.as_os_str().is_empty() {
+    BTreeMap::new()
+  } else {
+    collect(&left, options, cancelled, &mut progress)?
+  };
+  let b = if right.as_os_str().is_empty() {
+    BTreeMap::new()
+  } else {
+    collect(&right, options, cancelled, &mut |count| {
+      progress(a.len() + count)
+    })?
+  };
   if let Some(selected) = selected {
     if !refresh
       && selected
@@ -871,7 +899,8 @@ fn scan_with_selection(
       is_directory: lm.or(rm).is_some_and(|m| m.is_dir()),
     };
     let result = (|| -> Result<ComparisonImportance, FileError> {
-      if rules.align_case
+      if !single_side
+        && rules.align_case
         && ln != rn
         && (ln.is_none() || rn.is_none())
         && [ln.as_deref(), rn.as_deref()]
@@ -894,6 +923,10 @@ fn scan_with_selection(
       }
       let (Some(lm), Some(rm)) = (lm, rm) else {
         row.status = if l.is_some() { "leftOnly" } else { "rightOnly" }.into();
+        if single_side {
+          row.detail = Some("Not compared: choose the other folder root.".into());
+          return Ok(ComparisonImportance::Unknown);
+        }
         return Ok(ComparisonImportance::Important);
       };
       if lm.is_dir() != rm.is_dir() {
@@ -1372,6 +1405,73 @@ mod tests {
     assert!(rows
       .iter()
       .all(|r| r.status == "error" && r.error.as_ref().unwrap().contains("non-ASCII")));
+  }
+
+  #[test]
+  fn single_root_listing_is_explicitly_uncompared_and_still_validated() {
+    let fixture = Fixture::new();
+    fixture.files(b"left", b"right");
+    fs::create_dir(fixture.left.join("nested")).unwrap();
+    fs::write(fixture.left.join("nested").join("child"), b"child").unwrap();
+    let cancelled = AtomicBool::new(false);
+    for (left, right, status) in [
+      (fixture.left.as_path(), Path::new(""), "leftOnly"),
+      (Path::new(""), fixture.right.as_path(), "rightOnly"),
+    ] {
+      let rows = scan_pair_with_rules(
+        left,
+        right,
+        &FolderOptions::default(),
+        &FolderRules::default(),
+        &cancelled,
+        |_| {},
+      )
+      .unwrap();
+      assert!(!rows.is_empty());
+      assert!(rows
+        .iter()
+        .all(|row| row.status == status && row.importance == ComparisonImportance::Unknown));
+      assert!(rows
+        .iter()
+        .all(|row| row.detail.as_deref().unwrap().contains("Not compared")));
+    }
+    assert!(scan_pair_with_rules(
+      Path::new(""),
+      Path::new(""),
+      &FolderOptions::default(),
+      &FolderRules::default(),
+      &cancelled,
+      |_| {}
+    )
+    .is_err());
+    assert!(scan_pair_with_rules(
+      &fixture.left.join("missing"),
+      Path::new(""),
+      &FolderOptions::default(),
+      &FolderRules::default(),
+      &cancelled,
+      |_| {}
+    )
+    .is_err());
+    assert!(scan_selected_with_rules(
+      &fixture.left,
+      Path::new(""),
+      &FolderOptions::default(),
+      &FolderRules::default(),
+      &["file".into()],
+      &cancelled,
+      |_| {}
+    )
+    .is_err());
+    let rows = fixture.scan(&FolderRules::default());
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.relative == "file")
+        .unwrap()
+        .status,
+      "different"
+    );
   }
 
   #[test]

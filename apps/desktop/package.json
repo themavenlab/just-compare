@@ -15,17 +15,16 @@
     "test:workflows": "node scripts/workflow-regression.mjs",
     "test:workbench": "node scripts/workbench-regression.mjs",
     "test:compact": "node scripts/compact-workbench.mjs",
+    "test:interactions": "node scripts/interaction-regression.mjs",
     "package:windows": "node scripts/package-windows.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
-    "codemirror": "6.0.2",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.14",
-    "@codemirror/lang-javascript": "6.2.5",
-    "@codemirror/lang-json": "6.0.2",
     "@tauri-apps/api": "2.12.2",
     "@tauri-apps/plugin-dialog": "2.8.2",
+    "codemirror": "6.0.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -35,8 +34,8 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
-    "typescript": "5.9.3",
     "playwright-core": "1.64.0",
+    "typescript": "5.9.3",
     "vite": "8.3.4",
     "vitest": "5.0.3"
   }
