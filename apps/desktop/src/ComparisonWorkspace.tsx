@@ -458,18 +458,20 @@ export function ComparisonWorkspace({
   async function openSide(side: Side, encoding: string | null = null) {
     await load(side, editors[side].path, encoding);
   }
-  function undoSide(side: Side) {
+  async function undoSide(side: Side) {
     const text = editors[side].history.at(-1);
     if (text === undefined) return;
-    invalidate();
-    setEditors((prior) => ({
-      ...prior,
+    const inputs = {
+      ...editors,
       [side]: {
-        ...prior[side],
+        ...editors[side],
         text,
-        history: prior[side].history.slice(0, -1),
+        history: editors[side].history.slice(0, -1),
       },
-    }));
+    };
+    invalidate();
+    setEditors(inputs);
+    if (mode === "text") await compareInputs(inputs, selected);
   }
   async function saveSide(side: Side, asNew = false, convert = false) {
     const e = editors[side];
@@ -1088,7 +1090,8 @@ export function ComparisonWorkspace({
           if (side !== "left" && side !== "right" && side !== "base") return;
           if (action === "browse") void attempt(() => loadDialog(side));
           else if (action === "save") void attempt(() => saveSide(side));
-          else if (action === "undo" && !busy) undoSide(side);
+          else if (action === "undo" && !busy)
+            void attempt(() => undoSide(side));
         }
       },
     });
@@ -1233,7 +1236,7 @@ export function ComparisonWorkspace({
                 aria-label={`Undo ${side}`}
                 title={`Undo the previous ${side} draft change`}
                 disabled={busy || !e.history.length}
-                onClick={() => undoSide(side)}
+                onClick={() => void attempt(() => undoSide(side))}
               >
                 Undo
               </button>
@@ -1310,6 +1313,9 @@ export function ComparisonWorkspace({
                       : "Base text"
                 }
                 onChange={(text) => change(side, text)}
+                onUndo={() => {
+                  if (!busy) void attempt(() => undoSide(side));
+                }}
                 displayMode={mode === "text" ? textFilter : "all"}
                 differences={
                   mode === "text" && side !== "base" ? (spans ?? []) : []

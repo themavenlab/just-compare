@@ -194,6 +194,52 @@ try {
   await idle();
   assert.equal(await content("Right"), leftText);
   assert.equal(await readFile(join(right, "different.js"), "utf8"), rightText);
+  async function restoredDifference() {
+    await workspace
+      .getByRole("heading", { name: "1 changed regions", exact: true })
+      .waitFor();
+    await idle();
+    assert.equal(await content("Left"), leftText);
+    assert.equal(await content("Right"), rightText);
+    assert.equal(
+      await workspace
+        .getByRole("button", {
+          name: "Copy difference 1 to right",
+          exact: true,
+        })
+        .count(),
+      1,
+    );
+  }
+  await workspace
+    .getByRole("button", { name: "Undo right", exact: true })
+    .click();
+  await restoredDifference();
+  await workspace
+    .getByRole("button", { name: "Copy difference 1 to left", exact: true })
+    .click();
+  await workspace
+    .getByRole("heading", { name: "0 changed regions", exact: true })
+    .waitFor();
+  await idle();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Undo left", exact: true }).click();
+  await restoredDifference();
+  await workspace
+    .getByRole("button", { name: "Copy difference 1 to right", exact: true })
+    .click();
+  await workspace
+    .getByRole("heading", { name: "0 changed regions", exact: true })
+    .waitFor();
+  await idle();
+  await text("Right").press("Control+z");
+  await restoredDifference();
+  await text("Right").press("Control+End");
+  await text("Right").press("x");
+  await text("Right").press("Control+z");
+  await restoredDifference();
+  assert.equal(await readFile(join(left, "different.js"), "utf8"), leftText);
+  assert.equal(await readFile(join(right, "different.js"), "utf8"), rightText);
   const singleRight = await call("scan_folders", {
     left: "",
     right,
@@ -208,7 +254,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: Browse lists one side and auto-compares both; Diffs survives browse/refresh; folders start collapsed; file pairs auto-compare; row clicks never copy; arrow copies drafts only; dark source text has no syntax colors.",
+    "PASS: Browse lists one side and auto-compares both; Diffs survives browse/refresh; folders start collapsed; file pairs auto-compare; row clicks never copy; arrow copies drafts only; toolbar/menu/keyboard Undo restores drafts and diffs after copies or edits; dark source text has no syntax colors.",
   );
 } finally {
   if (session) await session.close();

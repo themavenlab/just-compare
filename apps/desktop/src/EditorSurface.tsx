@@ -1,9 +1,10 @@
-import { Compartment, EditorState, RangeSet } from "@codemirror/state";
+import { Compartment, EditorState, Prec, RangeSet } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
   gutter,
   GutterMarker,
+  keymap,
   WidgetType,
 } from "@codemirror/view";
 import { basicSetup } from "codemirror";
@@ -96,6 +97,7 @@ class CopyArrow extends GutterMarker {
 export function EditorSurface({
   text,
   onChange,
+  onUndo,
   label,
   disabled = false,
   gaps = [],
@@ -111,6 +113,7 @@ export function EditorSurface({
 }: {
   text: string;
   onChange: (text: string) => void;
+  onUndo?: () => void;
   label: string;
   disabled?: boolean;
   gaps?: { line: number; count: number }[] | undefined;
@@ -127,6 +130,7 @@ export function EditorSurface({
   const element = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
+  const undoCallback = useRef(onUndo);
   const updating = useRef(false);
   const readonly = useRef(new Compartment());
   const alignment = useRef(new Compartment());
@@ -144,6 +148,9 @@ export function EditorSurface({
     callback.current = onChange;
   }, [onChange]);
   useEffect(() => {
+    undoCallback.current = onUndo;
+  }, [onUndo]);
+  useEffect(() => {
     if (!element.current) return;
     const instance = new EditorView({
       parent: element.current,
@@ -151,6 +158,18 @@ export function EditorSurface({
         doc: text,
         extensions: [
           basicSetup,
+          Prec.highest(
+            keymap.of([
+              {
+                key: "Mod-z",
+                run: () => {
+                  if (!undoCallback.current) return false;
+                  undoCallback.current();
+                  return true;
+                },
+              },
+            ]),
+          ),
           readonly.current.of(EditorState.readOnly.of(disabled)),
           alignment.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": label }),
