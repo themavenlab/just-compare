@@ -45,8 +45,9 @@ Use the tab bar or File menu to open independent Text Compare, Folder Compare, o
 
 ## 5. Preferences & Saved Sessions
 
-- **Theme & Formatting:** Toggle Light and Dark themes, configure global ignore options, and set up filename suffix profiles (e.g. always ignoring whitespace for `.txt` files). Preferences are accessible from View > Preferences.
-- **Saved Sessions:** Save your active directory pairs or merge files as named sessions for quick restoration from the Session menu.
+- **Theme & Formatting:** Toggle Light and Dark themes, configure global ignore options, and set up filename suffix profiles (e.g. always ignoring whitespace for `.txt` files) via **Session > File-format Profiles...** or the toolbar format controls. Preferences are accessible from View > Preferences.
+- **Sessions Menu & Toolbar Dropdown:** The toolbar **Sessions** dropdown beside Home is a compact switch/create menu providing quick access to **New Text Compare**, **New Folder Compare**, **New 3-Way Merge**, and saved session definitions. Opening a session creates a tab while leaving existing drafts intact.
+- **Saving & Managing Sessions:** Use **Session > Save Session...** to name the current comparison in a modal dialog. Saving writes the session immediately without requiring a separate preference save. Empty and duplicate names are rejected with clear inline errors, and save failures retain the dialog input. **Session > Saved Sessions...** opens a management dialog to inspect and remove saved sessions or recent paths. Removing a session requires confirmation and persists immediately without deleting files or closing tabs. Home screen session list additions and removals also persist immediately.
 - **Persistence:** Settings are stored in your operating system's standard application-config directory (`settings.json`). If a settings file is ever corrupted, Just Compare retains the existing file for recovery and reports a clear diagnostic error instead of silently overwriting it.
 
 ---

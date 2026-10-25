@@ -56,6 +56,7 @@ export function HomeScreen({
   openTab,
   openSession,
   savePreferences,
+  saveSessions,
 }: {
   settings: Settings;
   ready: boolean;
@@ -67,10 +68,12 @@ export function HomeScreen({
   ) => void;
   openSession: (session: SavedSession) => void;
   savePreferences: () => void;
+  saveSessions: (sessions: SavedSession[]) => Promise<boolean>;
 }) {
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
+  const [sessionError, setSessionError] = useState("");
   const [mode, setMode] = useState<Workflow>("text");
   const [left, setLeft] = useState("");
   const [right, setRight] = useState("");
@@ -107,23 +110,32 @@ export function HomeScreen({
         {adding && (
           <form
             className="session-create"
-            onSubmit={(event) => {
+            onSubmit={async (event) => {
               event.preventDefault();
-              update((prior) => ({
-                ...prior,
-                sessions: [
-                  ...prior.sessions,
-                  {
-                    name: name.trim(),
-                    mode,
-                    left,
-                    right,
-                    base: mode === "merge" ? base : "",
-                  },
-                ],
-              }));
+              if (
+                !name.trim() ||
+                settings.sessions.some(
+                  (session) =>
+                    session.name.toLowerCase() === name.trim().toLowerCase(),
+                )
+              ) {
+                setSessionError("Enter a unique, non-empty session name.");
+                return;
+              }
+              const saved = await saveSessions([
+                ...settings.sessions,
+                {
+                  name: name.trim(),
+                  mode,
+                  left,
+                  right,
+                  base: mode === "merge" ? base : "",
+                },
+              ]);
+              if (!saved) return;
               setAdding(false);
               setName("");
+              setSessionError("");
             }}
           >
             <label>
@@ -179,6 +191,11 @@ export function HomeScreen({
             >
               Add session
             </button>
+            {sessionError && (
+              <p className="error" role="alert">
+                {sessionError}
+              </p>
+            )}
             <button type="button" onClick={() => setAdding(false)}>
               Cancel
             </button>
@@ -204,10 +221,9 @@ export function HomeScreen({
                   aria-label={`Remove saved session ${session.name}`}
                   title="Remove this session from preferences; files are not deleted"
                   onClick={() =>
-                    update((prior) => ({
-                      ...prior,
-                      sessions: prior.sessions.filter((_, i) => i !== index),
-                    }))
+                    void saveSessions(
+                      settings.sessions.filter((_, i) => i !== index),
+                    )
                   }
                 >
                   −

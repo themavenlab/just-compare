@@ -29,6 +29,23 @@ export async function selectWorkspace(page, mode) {
 
 export async function togglePanel(page, panel) {
   const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
+  if (panel === "sessions") {
+    const dialog = page.getByRole("dialog", {
+      name: "Saved Sessions",
+      exact: true,
+    });
+    if (await dialog.count())
+      await dialog
+        .getByRole("button", { name: "Close Saved Sessions", exact: true })
+        .click();
+    else {
+      await page.getByRole("button", { name: "Session", exact: true }).click();
+      await page
+        .getByRole("menuitem", { name: "Saved Sessions...", exact: true })
+        .click();
+    }
+    return;
+  }
   if (
     panel === "rules" &&
     (await workspace.locator(".folder-workspace").count())
@@ -52,9 +69,8 @@ export async function togglePanel(page, panel) {
     return;
   }
 
-  const menu = panel === "sessions" ? "Session" : "View";
+  const menu = "View";
   const command = {
-    sessions: "Sessions and recent files",
     preferences: "Preferences",
     details: "Aligned view and range details",
     rules: "Comparison rules",

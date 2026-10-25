@@ -1617,6 +1617,51 @@ body,
 .workspace-dialog::backdrop {
   background: #0006;
 }
+.session-form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.workspace-dialog .session-form > label {
+  display: grid;
+  gap: 6px;
+}
+.session-form > label > input {
+  width: 100%;
+}
+.session-paths {
+  margin: 0;
+  font-size: 12px;
+}
+.session-paths > div,
+.saved-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.session-paths dt {
+  min-width: 40px;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+.session-paths dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.session-list {
+  display: grid;
+  gap: 4px;
+  max-height: 45vh;
+  overflow: auto;
+}
+.saved-session-row > :first-child {
+  flex: 1;
+  text-align: left;
+}
+.session-list > button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
 .workspace-dialog header {
   display: flex;
   justify-content: space-between;

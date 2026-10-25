@@ -37,8 +37,8 @@ try {
     await page
       .locator('.workspace-slot[aria-hidden="false"]')
       .locator(".session-panel")
-      .getAttribute("open"),
-    null,
+      .count(),
+    0,
   );
   assert.equal(
     await page

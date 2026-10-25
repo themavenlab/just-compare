@@ -22,6 +22,7 @@ import {
   type LocalActionRequest,
   type LocalPreview,
   type Preview,
+  type Settings,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
 import { CommandMenu } from "./CommandMenu";
@@ -218,6 +219,13 @@ export function ComparisonWorkspace({
     tab.folderRules ?? sharedSettings.folderRules ?? defaultFolderRules,
   );
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [sessionDialog, setSessionDialog] = useState<"save" | "manage" | null>(
+    null,
+  );
+  const [sessionName, setSessionName] = useState("");
+  const [sessionError, setSessionError] = useState("");
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [profileSuffix, setProfileSuffix] = useState("");
   const [localPreview, setLocalPreview] = useState<LocalPreview | null>(null);
   const [overwriteAction, setOverwriteAction] = useState(false);
   const [actionMetadata, setActionMetadata] = useState<
@@ -283,6 +291,16 @@ export function ComparisonWorkspace({
     folderController.current?.(name);
   }
   function controllersCommand(name: string) {
+    if (name === "sessions" || name === "save-session") {
+      setSessionError("");
+      setSessionName("");
+      setSessionDialog(name === "save-session" ? "save" : "manage");
+      return;
+    }
+    if (name === "profiles") {
+      setProfilesOpen(true);
+      return;
+    }
     if (name === "swap") {
       swapInputs();
       return;
@@ -298,6 +316,69 @@ export function ComparisonWorkspace({
       panel.open = !panel.open;
       panel.querySelector("summary")?.focus();
     }
+  }
+  function sessionCommands() {
+    return [
+      {
+        label: "New Text Compare",
+        run: () => openTab("text"),
+        disabled: busy,
+      },
+      {
+        label: "New Folder Compare",
+        run: () => openTab("folder"),
+        disabled: busy,
+      },
+      {
+        label: "New 3-Way Merge",
+        run: () => openTab("merge"),
+        disabled: busy,
+      },
+      ...settings.sessions.map((session) => ({
+        label: `Open ${session.name}`,
+        run: () => openSession(session),
+        disabled: busy,
+      })),
+    ];
+  }
+  async function persistSessions(sessions: SavedSession[]) {
+    await native("write_settings", {
+      settings: { ...sharedSettings, sessions },
+    });
+    setSettings((prior) => ({ ...prior, sessions }));
+  }
+  async function saveSession() {
+    const name = sessionName.trim();
+    if (!name) {
+      setSessionError("Enter a session name.");
+      return;
+    }
+    if (
+      settings.sessions.some(
+        (session) => session.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      setSessionError(
+        "A session with this name already exists. Choose another name.",
+      );
+      return;
+    }
+    const session: SavedSession = {
+      name,
+      left: mode === "folder" ? folderRoots.left : editors.left.path,
+      right: mode === "folder" ? folderRoots.right : editors.right.path,
+      mode,
+      base: mode === "merge" ? editors.base.path : "",
+      ...(mode === "folder" ? { folderRules } : {}),
+    };
+    try {
+      await persistSessions([...settings.sessions, session]);
+    } catch (failure) {
+      setSessionError(errorMessage(failure));
+      throw failure;
+    }
+    setSessionDialog(null);
+    setNotice(`Session "${name}" saved.`);
   }
   function swapInputs() {
     if (busy) return;
@@ -1070,7 +1151,13 @@ export function ComparisonWorkspace({
         }
       },
       command: (name) => {
-        if (name === "run")
+        if (
+          name === "sessions" ||
+          name === "save-session" ||
+          name === "profiles"
+        )
+          controllersCommand(name);
+        else if (name === "run")
           void attempt(() =>
             mode === "folder"
               ? scan()
@@ -1088,7 +1175,6 @@ export function ComparisonWorkspace({
           setRulesOpen(true);
         } else if (
           name === "rules" ||
-          name === "sessions" ||
           name === "preferences" ||
           name === "details"
         ) {
@@ -2440,117 +2526,230 @@ export function ComparisonWorkspace({
           {error}
         </p>
       )}
-      <details className="session-panel floating-panel" data-panel="sessions">
-        <summary>
-          Sessions and recent files{" "}
-          <span className="metadata">
-            ({settings.sessions.length} saved sessions)
-          </span>
-        </summary>
-        <button
-          disabled={!settingsReady || busy}
-          onClick={() => {
-            const name = window.prompt("Session name");
-            if (!name) return;
-            setSettings((prior) => ({
-              ...prior,
-              sessions: [
-                ...prior.sessions,
-                {
-                  name,
-                  left:
-                    mode === "folder" ? folderRoots.left : editors.left.path,
-                  right:
-                    mode === "folder" ? folderRoots.right : editors.right.path,
-                  mode,
-                  base: mode === "merge" ? editors.base.path : "",
-                  ...(mode === "folder" ? { folderRules } : {}),
-                },
-              ],
-            }));
+      {sessionDialog === "save" && (
+        <WorkspaceDialog
+          title="Save Session"
+          onClose={() => {
+            if (!busy) setSessionDialog(null);
           }}
         >
-          Add current session
-        </button>
-        <p>Save preferences to persist changes.</p>
-        {!settings.sessions.length && !settings.recent.length && (
-          <p className="empty-state">
-            No saved sessions yet. Open your files, add the current session,
-            then save preferences to use it again.
-          </p>
-        )}
-        <button
-          disabled={!settingsReady || busy}
-          onClick={() => {
-            const suffix = window.prompt(
-              "File suffix for current compare rules (for example .txt):",
-            );
-            if (!suffix) return;
-            invalidate();
-            setSettings((prior) => ({
-              ...prior,
-              formats: [
-                ...prior.formats.filter((f) => f.suffix !== suffix),
-                {
-                  suffix,
-                  ignoreCase: prior.ignoreCase,
-                  ignoreWhitespace: prior.ignoreWhitespace,
-                  ignoreLineEndings: prior.ignoreLineEndings,
-                  patterns: prior.unimportantPatterns,
-                },
-              ],
-            }));
-          }}
-        >
-          Save current rules as file-format profile
-        </button>
-        {settings.formats.map((format, index) => (
-          <div key={index}>
-            <span>
-              Profile {format.suffix} (overrides global options for matching
-              left-file suffix)
-            </span>
-            <button
-              disabled={busy}
-              onClick={() => {
-                invalidate();
-                setSettings((prior) => ({
-                  ...prior,
-                  formats: prior.formats.filter((_, i) => i !== index),
-                }));
-              }}
-            >
-              Remove profile {format.suffix}
-            </button>
-          </div>
-        ))}
-        {settings.sessions.map((session, index) => (
-          <div key={index}>
-            <button disabled={busy} onClick={() => openSession(session)}>
-              {session.name}
-            </button>
-            <button
-              onClick={() =>
-                setSettings((prior) => ({
-                  ...prior,
-                  sessions: prior.sessions.filter((_, i) => i !== index),
-                }))
-              }
-            >
-              Remove session {index + 1}
-            </button>
-          </div>
-        ))}
-        {settings.recent.map((path) => (
-          <button
-            key={path}
-            disabled={busy}
-            onClick={() => openTab("text", { left: path })}
+          <form
+            className="session-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!busy) void attempt(saveSession);
+            }}
           >
-            {path}
-          </button>
-        ))}
-      </details>
+            <label>
+              Session name
+              <input
+                autoFocus
+                value={sessionName}
+                disabled={busy}
+                maxLength={200}
+                onChange={(event) => {
+                  setSessionName(event.target.value);
+                  setSessionError("");
+                }}
+                aria-invalid={!!sessionError}
+                aria-describedby={
+                  sessionError ? "session-save-error" : undefined
+                }
+              />
+            </label>
+            <p className="metadata">
+              Saves this{" "}
+              {mode === "folder"
+                ? "folder"
+                : mode === "merge"
+                  ? "merge"
+                  : "text"}{" "}
+              comparison's paths{mode === "folder" ? " and folder rules" : ""}.
+              Draft contents are not saved.
+            </p>
+            <dl className="session-paths">
+              {(
+                [
+                  "left",
+                  "right",
+                  ...(mode === "merge" ? (["base"] as const) : []),
+                ] as const
+              ).map((side) => (
+                <div key={side}>
+                  <dt>{side}</dt>
+                  <dd>
+                    {mode === "folder" && side !== "base"
+                      ? folderRoots[side] || "Not selected"
+                      : editors[side].path || "Blank draft"}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {sessionError && (
+              <p id="session-save-error" className="error" role="alert">
+                {sessionError}
+              </p>
+            )}
+            <footer className="dialog-actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setSessionDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="primary"
+                disabled={busy || !settingsReady}
+              >
+                Save
+              </button>
+            </footer>
+          </form>
+        </WorkspaceDialog>
+      )}
+      {sessionDialog === "manage" && (
+        <WorkspaceDialog
+          title="Saved Sessions"
+          onClose={() => {
+            if (!busy) setSessionDialog(null);
+          }}
+        >
+          <div className="session-form">
+            <button
+              disabled={busy || !settingsReady}
+              onClick={() => controllersCommand("save-session")}
+            >
+              Save current session...
+            </button>
+            {!settings.sessions.length && (
+              <p className="empty-state">
+                No saved sessions. Save a comparison to open it again later.
+              </p>
+            )}
+            <div className="session-list">
+              {settings.sessions.map((session, index) => (
+                <div key={index} className="saved-session-row">
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      setSessionDialog(null);
+                      openSession(session);
+                    }}
+                  >
+                    {session.name}
+                  </button>
+                  <span className="metadata">{session.mode}</span>
+                  <button
+                    disabled={busy || !settingsReady}
+                    aria-label={`Remove session ${session.name}`}
+                    onClick={() =>
+                      void attempt(async () => {
+                        if (
+                          !(await confirmAction(
+                            `Remove saved session "${session.name}"? Source files and open tabs are not changed.`,
+                          ))
+                        )
+                          return;
+                        await persistSessions(
+                          settings.sessions.filter((_, i) => i !== index),
+                        );
+                        setNotice(`Session "${session.name}" removed.`);
+                      })
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+            <details>
+              <summary>Recent files</summary>
+              <div className="session-list">
+                {settings.recent.map((path) => (
+                  <button
+                    key={path}
+                    disabled={busy}
+                    onClick={() => {
+                      setSessionDialog(null);
+                      openTab("text", { left: path });
+                    }}
+                  >
+                    {path}
+                  </button>
+                ))}
+              </div>
+            </details>
+          </div>
+        </WorkspaceDialog>
+      )}
+      {profilesOpen && (
+        <WorkspaceDialog
+          title="File-format Profiles"
+          onClose={() => setProfilesOpen(false)}
+        >
+          <form
+            className="session-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const suffix = profileSuffix.trim();
+              if (!suffix || busy) return;
+              invalidate();
+              setSettings((prior) => ({
+                ...prior,
+                formats: [
+                  ...prior.formats.filter((f) => f.suffix !== suffix),
+                  {
+                    suffix,
+                    ignoreCase: prior.ignoreCase,
+                    ignoreWhitespace: prior.ignoreWhitespace,
+                    ignoreLineEndings: prior.ignoreLineEndings,
+                    patterns: prior.unimportantPatterns,
+                  },
+                ],
+              }));
+              setProfileSuffix("");
+            }}
+          >
+            <label>
+              File suffix
+              <input
+                autoFocus
+                required
+                placeholder=".txt"
+                value={profileSuffix}
+                onChange={(event) => setProfileSuffix(event.target.value)}
+              />
+            </label>
+            <button disabled={!settingsReady || busy}>
+              Save current rules as file-format profile
+            </button>
+            <p className="metadata">
+              Profiles override comparison options for matching left-file
+              suffixes. Save preferences to persist profile changes.
+            </p>
+            {settings.formats.map((format, index) => (
+              <div key={index} className="saved-session-row">
+                <span>Profile {format.suffix}</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    invalidate();
+                    setSettings((prior) => ({
+                      ...prior,
+                      formats: prior.formats.filter((_, i) => i !== index),
+                    }));
+                  }}
+                >
+                  Remove profile {format.suffix}
+                </button>
+              </div>
+            ))}
+          </form>
+        </WorkspaceDialog>
+      )}
       {mode === "text" && (
         <details className="text-rules floating-panel" data-panel="rules">
           <summary>Comparison rules</summary>
@@ -2618,11 +2817,10 @@ export function ComparisonWorkspace({
               description="Return to Home, keeping this workspace and unsaved drafts."
               onClick={onHome}
             />
-            <ToolButton
+            <CommandMenu
               label="Sessions"
-              symbol="▣"
-              description="Open saved sessions and comparison profiles."
-              onClick={() => controllersCommand("sessions")}
+              description="Start a new comparison or open a saved session."
+              commands={sessionCommands()}
             />
             <ToolButton
               label="All"
@@ -2678,7 +2876,7 @@ export function ComparisonWorkspace({
               label="Format"
               symbol="▤"
               description="Manage comparison-format profiles, not source-code formatting."
-              onClick={() => controllersCommand("sessions")}
+              onClick={() => controllersCommand("profiles")}
             />
             <button
               className="primary"
@@ -2951,11 +3149,10 @@ export function ComparisonWorkspace({
               description="Return to Home without closing this workspace."
               onClick={onHome}
             />
-            <ToolButton
+            <CommandMenu
               label="Sessions"
-              symbol="▣"
-              description="Open saved sessions and recent paths."
-              onClick={() => controllersCommand("sessions")}
+              description="Start a new comparison or open a saved session."
+              commands={sessionCommands()}
             />
             <ToolButton
               label="All"

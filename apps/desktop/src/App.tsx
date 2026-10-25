@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaults, native, type Settings } from "./api";
 import { CommandMenu } from "./CommandMenu";
@@ -166,6 +167,29 @@ export function App() {
     },
     [openTab],
   );
+  async function saveHomeSessions(sessions: SavedSession[]) {
+    if (!acquire("home-sessions")) {
+      setError("Wait for the active operation to finish.");
+      return false;
+    }
+    try {
+      if (
+        sessions.length < settings.sessions.length &&
+        !(await confirmAction(
+          "Remove this saved session? Source files and open tabs are not changed.",
+        ))
+      )
+        return false;
+      await native("write_settings", { settings: { ...settings, sessions } });
+      setSettings((prior) => ({ ...prior, sessions }));
+      return true;
+    } catch (failure) {
+      setError(errorMessage(failure));
+      return false;
+    } finally {
+      release("home-sessions");
+    }
+  }
   async function closeWindow() {
     const id = latest.current.active ?? "window-close";
     if (!acquire(id)) {
@@ -488,9 +512,34 @@ export function App() {
           label="Session"
           commands={[
             {
-              label: "Sessions and recent files",
+              label: "New Text Compare",
+              run: () => openTab("text"),
+              disabled: blocked,
+            },
+            {
+              label: "New Folder Compare",
+              run: () => openTab("folder"),
+              disabled: blocked,
+            },
+            {
+              label: "New 3-Way Merge",
+              run: () => openTab("merge"),
+              disabled: blocked,
+            },
+            {
+              label: "Save Session...",
+              run: () => command("save-session"),
+              disabled: !active || blocked || !settingsAvailable,
+            },
+            {
+              label: "Saved Sessions...",
               run: () => command("sessions"),
-              disabled: !active,
+              disabled: !active || blocked,
+            },
+            {
+              label: "File-format Profiles...",
+              run: () => command("profiles"),
+              disabled: !active || blocked,
             },
             ...settings.sessions.map((session) => ({
               label: `Open ${session.name}`,
@@ -725,6 +774,7 @@ export function App() {
             update={setSettings}
             openTab={openTab}
             openSession={openSession}
+            saveSessions={saveHomeSessions}
             savePreferences={() => {
               void native("write_settings", { settings })
                 .then(() => setInfo("Preferences saved."))
