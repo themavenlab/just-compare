@@ -35,6 +35,7 @@ export interface Settings {
   recent: string[];
   recentFolders?: string[];
   recentComparisons?: RecentComparison[];
+  lineDetail?: { collapsed: boolean; height: number };
   sessions: {
     name: string;
     left: string;

@@ -26,6 +26,7 @@ import {
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
 import { FolderPathInput } from "./FolderPathInput";
+import { LineInspector } from "./LineInspector";
 import { RefinedRegion } from "./RefinedRegion";
 import { ToolButton } from "./ToolButton";
 import { VirtualList } from "./VirtualList";
@@ -155,6 +156,7 @@ export function ComparisonWorkspace({
   const [spans, setSpans] = useState<DiffSpan[] | null>(null);
   const [current, setCurrent] = useState(0);
   const [refinement, setRefinement] = useState<DiffSpan[] | null>(null);
+  const [detailRow, setDetailRow] = useState<number | null>(null);
   const [folders, setFolders] = useState<FolderEntry[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
   const [folderStale, setFolderStale] = useState(false);
@@ -417,6 +419,7 @@ export function ComparisonWorkspace({
   function invalidate(clearComparison = true) {
     revision.current += 1;
     if (clearComparison) setSpans(null);
+    if (clearComparison) setDetailRow(null);
     setRefinement(null);
     setBlocks(null);
     setChoices({});
@@ -689,6 +692,7 @@ export function ComparisonWorkspace({
   function selectDifference(index: number) {
     if (textFilter === "same") setTextFilter("all");
     setCurrent(index);
+    setDetailRow(null);
     setRefinement(null);
     setNavigation((value) => value + 1);
   }
@@ -748,6 +752,7 @@ export function ComparisonWorkspace({
         },
         (_, offset) => ({
           kind: span.kind,
+          minor: span.minor ?? false,
           left:
             offset < span.leftEnd - span.leftStart
               ? span.leftStart + offset
@@ -759,6 +764,27 @@ export function ComparisonWorkspace({
         }),
       ),
     ) ?? [];
+  const detailIndex = Math.min(
+    detailRow ??
+      Math.max(
+        0,
+        aligned.findIndex((row) =>
+          selected
+            ? row.left === selected.leftStart ||
+              row.right === selected.rightStart
+            : true,
+        ),
+      ),
+    Math.max(0, aligned.length - 1),
+  );
+  const detailLine = aligned[detailIndex];
+  async function saveDetailLayout(lineDetail: {
+    collapsed: boolean;
+    height: number;
+  }) {
+    await native("write_settings", { settings: { ...settings, lineDetail } });
+    updateSettings((prior) => ({ ...prior, lineDetail }));
+  }
 
   async function scan(requestedRoots = folderRoots) {
     discardPreview(tab.id);
@@ -1478,6 +1504,16 @@ export function ComparisonWorkspace({
                       : "Base text"
                 }
                 onChange={(text) => change(side, text)}
+                onSelectLine={
+                  mode === "text" && side !== "base"
+                    ? (line) => {
+                        const index = aligned.findIndex(
+                          (row) => row[side] === line,
+                        );
+                        if (index >= 0) setDetailRow(index);
+                      }
+                    : undefined
+                }
                 onUndo={() => {
                   if (!busy) void attempt(() => undoSide(side));
                 }}
@@ -3067,6 +3103,26 @@ export function ComparisonWorkspace({
             )}
           </div>
           {inputs}
+          <LineInspector
+            row={detailLine}
+            left={
+              detailLine?.left == null
+                ? ""
+                : (leftLines[detailLine.left]?.full ?? "")
+            }
+            right={
+              detailLine?.right == null
+                ? ""
+                : (rightLines[detailLine.right]?.full ?? "")
+            }
+            index={detailIndex}
+            count={aligned.length}
+            select={setDetailRow}
+            layout={
+              sharedSettings.lineDetail ?? { collapsed: false, height: 140 }
+            }
+            onLayout={(layout) => void attempt(() => saveDetailLayout(layout))}
+          />
           {spans && (
             <p className={`diff-legend ${showLegend ? "show-legend" : ""}`}>
               <span className="legend-replace">Changed</span>
@@ -3090,29 +3146,6 @@ export function ComparisonWorkspace({
                   ? `Difference ${current + 1} of ${changes.length}. Use Previous / Next or Alt+Up / Alt+Down to navigate.`
                   : "No differences under the current comparison rules."}
               </p>
-              <div
-                className="selected-line-detail"
-                aria-label="Selected difference detail"
-              >
-                <code
-                  title={selected ? leftLines[selected.leftStart]?.content : ""}
-                >
-                  L{" "}
-                  {selected
-                    ? `${selected.leftStart + 1}: ${leftLines[selected.leftStart]?.content ?? "(no line)"}`
-                    : "No selected difference"}
-                </code>
-                <code
-                  title={
-                    selected ? rightLines[selected.rightStart]?.content : ""
-                  }
-                >
-                  R{" "}
-                  {selected
-                    ? `${selected.rightStart + 1}: ${rightLines[selected.rightStart]?.content ?? "(no line)"}`
-                    : "No selected difference"}
-                </code>
-              </div>
               <details className="comparison-details" data-panel="details">
                 <summary>Aligned read-only view &amp; range details</summary>
                 <VirtualList
@@ -3123,6 +3156,12 @@ export function ComparisonWorkspace({
                     if (!row) return null;
                     return (
                       <div className={`aligned ${row.kind}`}>
+                        <button
+                          aria-label={`Inspect aligned line ${index + 1}`}
+                          onClick={() => setDetailRow(index)}
+                        >
+                          Detail
+                        </button>
                         <code>
                           {row.left === null
                             ? ""

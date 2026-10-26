@@ -1822,19 +1822,48 @@ body,
   background: var(--accent);
   box-shadow: 0 0 0 1px var(--text);
 }
-.selected-line-detail {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  height: 20px;
-  background: var(--surface-alt);
+.line-inspector {
+  order: 11;
+  flex: 0 0 auto;
+  min-width: 0;
   border-top: 1px solid var(--border);
+  background: var(--surface-alt);
 }
-.selected-line-detail code {
-  padding: 1px 5px;
-  overflow: hidden;
+.line-inspector .toolbar {
+  padding: 2px 5px;
+}
+.line-inspector-content {
+  overflow: auto;
+  min-width: 0;
+}
+.line-inspector .panes {
+  display: block;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+}
+.line-inspector pre {
+  margin: 0;
+  padding: 5px;
+  overflow: visible;
   white-space: pre;
-  text-overflow: ellipsis;
+  tab-size: 4;
+  min-height: 28px;
+}
+.inspector-source {
+  color: var(--muted);
+  user-select: none;
+}
+.line-coordinates {
+  display: flex;
+  gap: 20px;
+  padding: 2px 5px;
   font-size: 11px;
+}
+.line-inspector mark {
+  background: #f4b95c;
+  color: #211900;
 }
 .home-preferences input[type="checkbox"] {
   width: auto;

@@ -8,7 +8,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { type DiffSpan } from "./comparison";
 
 class Gap extends WidgetType {
@@ -110,6 +110,7 @@ export function EditorSurface({
   selectedDifference,
   onCopyDifference,
   displayMode = "all",
+  onSelectLine,
 }: {
   text: string;
   onChange: (text: string) => void;
@@ -126,11 +127,16 @@ export function EditorSurface({
   selectedDifference?: DiffSpan | undefined;
   onCopyDifference?: ((span: DiffSpan) => void) | undefined;
   displayMode?: "all" | "differences" | "same" | "context";
+  onSelectLine?: ((line: number) => void) | undefined;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
   const undoCallback = useRef(onUndo);
+  const lineCallback = useRef(onSelectLine);
+  useEffect(() => {
+    lineCallback.current = onSelectLine;
+  }, [onSelectLine]);
   const updating = useRef(false);
   const readonly = useRef(new Compartment());
   const alignment = useRef(new Compartment());
@@ -139,6 +145,10 @@ export function EditorSurface({
   const copyEnabled = onCopyDifference !== undefined;
   const lastNavigation = useRef(-1);
   const restoringScroll = useRef(false);
+  const pairedScroll = useRef(scrollTop);
+  useLayoutEffect(() => {
+    pairedScroll.current = scrollTop;
+  }, [scrollTop]);
   const scrollFrame = useRef<number | null>(null);
   useEffect(() => {
     copyCallback.current = onCopyDifference;
@@ -183,6 +193,15 @@ export function EditorSurface({
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !updating.current)
               callback.current(update.state.doc.toString());
+            if (
+              !updating.current &&
+              update.view.hasFocus &&
+              (update.selectionSet || update.focusChanged)
+            )
+              lineCallback.current?.(
+                update.state.doc.lineAt(update.state.selection.main.head)
+                  .number - 1,
+              );
           }),
         ],
       }),
@@ -211,7 +230,7 @@ export function EditorSurface({
   useEffect(() => {
     const instance = view.current;
     if (!instance) return;
-    const top = instance.scrollDOM.scrollTop;
+    const top = pairedScroll.current ?? instance.scrollDOM.scrollTop;
     const left = instance.scrollDOM.scrollLeft;
     const preserveScroll =
       selectedLine === undefined || lastNavigation.current === navigation;

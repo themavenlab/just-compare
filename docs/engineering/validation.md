@@ -79,6 +79,7 @@ npm run test:compact --workspace apps/desktop
 npm run test:interactions --workspace apps/desktop
 npm run test:sessions --workspace apps/desktop
 npm run test:history --workspace apps/desktop
+npm run test:inspector --workspace apps/desktop
 ```
 
 Use `npm ci` for a fresh checkout. Native suites require an embedded-assets debug build, launch only owned processes, and write only owned temporary fixture trees. They are Windows WebView2/CDP tests, not browser mocks or other-platform evidence.
@@ -113,6 +114,10 @@ The scoped stable toolchain used here reports 1.99.0. Reproduction should select
 ### Phase 2A-01 Recent History (Windows/MSVC)
 
 Windows MSVC: settings migration/restart/bounds tests, TypeScript check, all 16 Vitest frontend tests, ESLint, production frontend build, and embedded-assets native build passed. `node apps/desktop/scripts/history-regression.mjs` verifies empty history, typed path submission without per-keystroke scans, single- and two-root loading, collapsed initial trees, keyboard filtering and selection, retained results on missing roots, deduplication, complete Home tuple reopening across restart, and real failed persistence.
+
+### Phase 2A-02 Line Inspector (Windows/MSVC)
+
+Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests, production frontend build, and embedded-assets native build passed. `node apps/desktop/scripts/inspector-regression.mjs` verifies multiline detail navigation, missing lines, Unicode/tabs/long-line horizontal overflow, caret selection with retained editor focus, zero draft mutation, invalidation, Undo/copy refresh, resize/collapse, and layout-only persistence across restart. Native interaction tests passed with stable aligned two-way scrolling during asynchronous result and persistence updates.
 
 | Area | Evidence |
 | :--- | :--- |

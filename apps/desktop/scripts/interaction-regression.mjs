@@ -238,6 +238,10 @@ try {
   await page.screenshot({ path: join(screenshots, "plain-text-dark.png") });
   await folderTab.click();
   await workspace.getByRole("button", { name: "All", exact: true }).click();
+  // Browse reloads start collapsed under the recent-folder loading contract.
+  await row("nested")
+    .getByRole("button", { name: "Expand nested left", exact: true })
+    .click();
   await row("nested/different.txt").waitFor();
   await page.screenshot({ path: join(screenshots, "folder-tree-dark.png") });
   await page

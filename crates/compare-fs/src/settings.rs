@@ -26,6 +26,8 @@ pub struct Settings {
   pub recent_folders: Option<Vec<String>>,
   #[serde(default)]
   pub recent_comparisons: Vec<RecentComparison>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub line_detail: Option<LineDetail>,
   pub sessions: Vec<Session>,
   pub ignore_case: bool,
   pub ignore_whitespace: bool,
@@ -37,6 +39,13 @@ pub struct Settings {
   pub folder_rules: Option<crate::FolderRules>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub content_comparison: Option<ContentComparison>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LineDetail {
+  pub collapsed: bool,
+  pub height: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,6 +130,7 @@ impl Default for Settings {
       recent: Vec::new(),
       recent_folders: Some(Vec::new()),
       recent_comparisons: Vec::new(),
+      line_detail: None,
       sessions: Vec::new(),
       ignore_case: false,
       ignore_whitespace: false,
@@ -134,6 +144,15 @@ impl Default for Settings {
 }
 
 fn validate(settings: &Settings) -> Result<(), FileError> {
+  if settings
+    .line_detail
+    .as_ref()
+    .is_some_and(|layout| !(80..=320).contains(&layout.height))
+  {
+    return Err(FileError(
+      "Line detail height must be between 80 and 320 pixels.".into(),
+    ));
+  }
   if settings
     .recent_folders
     .as_ref()
@@ -321,10 +340,17 @@ mod tests {
     let path = root.path().join("settings.json");
     let mut settings = Settings {
       theme: "dark".into(),
+      line_detail: Some(LineDetail {
+        collapsed: true,
+        height: 220,
+      }),
       ..Settings::default()
     };
     save_settings(&path, &settings).unwrap();
     assert_eq!(load_settings(&path).unwrap(), settings);
+    settings.line_detail.as_mut().unwrap().height = 321;
+    assert!(save_settings(&path, &settings).is_err());
+    settings.line_detail.as_mut().unwrap().height = 220;
     settings.version = 99;
     assert!(save_settings(&path, &settings).is_err());
     std::fs::write(&path, "{broken").unwrap();
