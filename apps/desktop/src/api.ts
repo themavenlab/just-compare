@@ -260,6 +260,7 @@ interface Commands {
       jobId: string;
       options: CompareOptions;
       showMinor?: boolean;
+      documents?: { left: string | null; right: string | null };
     };
     result: DiffSpan[];
   };

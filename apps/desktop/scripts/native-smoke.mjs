@@ -154,6 +154,9 @@ try {
     1,
   );
   await page.getByRole("textbox", { name: "Right text" }).fill("same\nold\n");
+  await page
+    .getByRole("heading", { name: "0 changed regions", exact: true })
+    .waitFor();
   assert.equal(
     await page
       .locator('.workspace-slot[aria-hidden="false"]')

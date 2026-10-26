@@ -80,9 +80,11 @@ npm run test:interactions --workspace apps/desktop
 npm run test:sessions --workspace apps/desktop
 npm run test:history --workspace apps/desktop
 npm run test:inspector --workspace apps/desktop
+npm run test:explorer --workspace apps/desktop
+node apps/desktop/scripts/editing-regression.mjs
 ```
 
-Use `npm ci` for a fresh checkout. Native suites require an embedded-assets debug build, launch only owned processes, and write only owned temporary fixture trees. They are Windows WebView2/CDP tests, not browser mocks or other-platform evidence.
+Use `npm ci` for a fresh checkout. Native suites require an embedded-assets debug build, launch only owned processes, and write only owned temporary fixture trees. They are Windows WebView2/CDP tests, not browser mocks or other-platform evidence. Native runners also honor `COMPARE_TEST_DESKTOP` for an alternate embedded-assets executable.
 
 ### Optimized Local Package
 
@@ -122,6 +124,10 @@ Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests,
 ### Phase 2A-03 Windows Explorer Commands (Windows/MSVC)
 
 `node apps/desktop/scripts/explorer-regression.mjs` verifies owned HKCU registration, removal, single-item commands, private selection state across restart, argument handoff to the running instance without losing tabs, missing/linked/mixed path rejection, and isolated test-registry safety. CLI waiting launches and native smoke tests also passed.
+
+### Phase 2A-04 Manual-Edit Comparison Refresh (Windows/MSVC)
+
+Windows MSVC: TypeScript, ESLint, Prettier, all 16 frontend Vitest tests, production frontend build, and embedded-assets debug and release builds passed. `node apps/desktop/scripts/editing-regression.mjs` verifies actual keyboard typing, automatic localized CRLF differences and explicit recompare, CR and mixed-EOL restoration, significant real EOL differences, serialized superseded responses, retained alignment with stale copy arrows unavailable, insertion gaps, Undo, explicit refresh failure and recovery, invalid document handles, and unchanged source bytes on disk. Native inspector, smoke, interaction, and Git suites also passed. Smoke and inspector assertions now expect automatic refresh instead of manual edit invalidation.
 
 | Area | Evidence |
 | :--- | :--- |

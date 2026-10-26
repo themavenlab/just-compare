@@ -20,9 +20,19 @@ pub struct Resources {
   pub git_accepted: AtomicBool,
   merge_blocks: Mutex<Option<Vec<Block>>>,
   saved_output: Mutex<Option<String>>,
+  shell_requests: Mutex<std::collections::VecDeque<Vec<String>>>,
 }
 
 impl Resources {
+  #[cfg(windows)]
+  pub fn queue_shell(&self, args: Vec<String>) -> Result<(), String> {
+    let mut queue = self.shell_requests.lock().map_err(|e| e.to_string())?;
+    if queue.len() >= 32 {
+      return Err("Too many pending shell requests; wait and retry.".into());
+    }
+    queue.push_back(args);
+    Ok(())
+  }
   fn id(&self) -> String {
     self.next.fetch_add(1, Ordering::Relaxed).to_string()
   }
@@ -97,10 +107,17 @@ fn begin(resources: &Resources, id: &str) -> Result<Arc<AtomicBool>, String> {
   Ok(flag)
 }
 
+#[derive(Deserialize)]
+pub struct CompareDocuments {
+  left: Option<String>,
+  right: Option<String>,
+}
+
 #[tauri::command]
 pub async fn compare_text(
   left: String,
   right: String,
+  documents: Option<CompareDocuments>,
   options: Options,
   show_minor: Option<bool>,
   job_id: String,
@@ -108,7 +125,26 @@ pub async fn compare_text(
 ) -> Result<Vec<Span>, String> {
   let resources = state.inner().clone();
   let flag = begin(&resources, &job_id)?;
+  let snapshots = resources.clone();
   let result = worker(move || {
+    let restore = |text: String, id: Option<String>| -> Result<String, String> {
+      match id {
+        Some(id) => snapshots
+          .documents
+          .lock()
+          .map_err(|e| e.to_string())?
+          .get(&id)
+          .ok_or("Document is closed.")?
+          .restore_endings(&text)
+          .map_err(|e| e.to_string()),
+        None => Ok(text),
+      }
+    };
+    let (left_document, right_document) = documents
+      .map(|documents| (documents.left, documents.right))
+      .unwrap_or_default();
+    let left = restore(left, left_document)?;
+    let right = restore(right, right_document)?;
     if options.patterns.len() > 16 {
       return Err("At most 16 rules are supported.".into());
     }
@@ -872,13 +908,13 @@ pub async fn read_settings(app: tauri::AppHandle) -> Result<Settings, String> {
 
 #[tauri::command]
 pub async fn remember_history(
-  mut settings: Settings,
   folders: Vec<String>,
   comparison: Option<compare_fs::RecentComparison>,
   app: tauri::AppHandle,
 ) -> Result<Settings, String> {
   let path = settings_path(&app)?;
   worker(move || {
+    let mut settings = compare_fs::load_settings(&path).map_err(|e| e.to_string())?;
     compare_fs::remember_history(&mut settings, folders, comparison).map_err(|e| e.to_string())?;
     compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())?;
     Ok(settings)

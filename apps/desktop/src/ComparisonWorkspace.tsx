@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -163,6 +164,9 @@ export function ComparisonWorkspace({
   const [working, setWorking] = useState(false);
   const busy = globalBusy;
   const [spans, setSpans] = useState<DiffSpan[] | null>(null);
+  const [pendingEdit, setPendingEdit] = useState<number | null>(null);
+  const [editRefresh, setEditRefresh] = useState(0);
+  const editInFlight = useRef(false);
   const [current, setCurrent] = useState(0);
   const [refinement, setRefinement] = useState<DiffSpan[] | null>(null);
   const [detailRow, setDetailRow] = useState<number | null>(null);
@@ -427,6 +431,7 @@ export function ComparisonWorkspace({
 
   function invalidate(clearComparison = true) {
     revision.current += 1;
+    setPendingEdit(null);
     if (clearComparison) setSpans(null);
     if (clearComparison) setDetailRow(null);
     setRefinement(null);
@@ -447,7 +452,9 @@ export function ComparisonWorkspace({
     setNotice("");
   }
   function change(side: Side, text: string) {
-    invalidate();
+    const refresh = mode === "text" && (spans !== null || pendingEdit !== null);
+    invalidate(!refresh);
+    if (refresh) setPendingEdit(revision.current);
     setEditors((previous) => ({
       ...previous,
       [side]: {
@@ -628,10 +635,14 @@ export function ComparisonWorkspace({
     afterCopy?: DiffSpan,
     includeMinor = minorText,
     preserveViewport = afterCopy !== undefined,
+    background = false,
   ) {
     const request = ++revision.current;
     const jobId = crypto.randomUUID();
-    startJob(jobId);
+    if (!background) {
+      setPendingEdit(null);
+      startJob(jobId);
+    }
     if (!preserveViewport) setSpans(null);
     setRefinement(null);
     const profile = settings.formats.find((f) =>
@@ -642,6 +653,10 @@ export function ComparisonWorkspace({
     const result = await native("compare_text", {
       left: inputs.left.text,
       right: inputs.right.text,
+      documents: {
+        left: inputs.left.document?.id ?? null,
+        right: inputs.right.document?.id ?? null,
+      },
       jobId,
       showMinor: includeMinor,
       options: {
@@ -678,7 +693,7 @@ export function ComparisonWorkspace({
           ),
         );
       }
-      if (inputs.left.document && inputs.right.document)
+      if (!background && inputs.left.document && inputs.right.document)
         await recordHistory([], {
           mode: "text",
           left: inputs.left.document.path,
@@ -687,7 +702,32 @@ export function ComparisonWorkspace({
         });
     }
   }
-  const changes = spans?.filter((s) => s.kind !== "equal") ?? [];
+  const refreshEditedComparison = useEffectEvent(async () => {
+    if (editInFlight.current || pendingEdit === null) return;
+    const edit = pendingEdit;
+    editInFlight.current = true;
+    const request = revision.current + 1;
+    try {
+      await compareInputs(editors, undefined, minorText, true, true);
+    } catch (failure) {
+      if (request === revision.current) setError(errorMessage(failure));
+    } finally {
+      editInFlight.current = false;
+      setPendingEdit((value) => (value === edit ? null : value));
+      setEditRefresh((value) => value + 1);
+    }
+  });
+  useEffect(() => {
+    if (pendingEdit === null || busy) return;
+    const timer = window.setTimeout(() => {
+      void refreshEditedComparison();
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [pendingEdit, busy, editRefresh]);
+  const changes =
+    pendingEdit === null
+      ? (spans?.filter((s) => s.kind !== "equal") ?? [])
+      : [];
   const editorGaps = useMemo(
     () => ({
       left: alignmentGaps(spans ?? [], "left"),
@@ -1145,6 +1185,7 @@ export function ComparisonWorkspace({
           (e) => e.text !== e.original,
         ) || latest.current.output !== latest.current.outputSaved,
       dispose: async () => {
+        invalidate();
         for (const side of ["left", "right", "base"] as const) {
           const document = latest.current.editors[side].document;
           if (document) {
@@ -1516,7 +1557,7 @@ export function ComparisonWorkspace({
                 }
                 onChange={(text) => change(side, text)}
                 onSelectLine={
-                  mode === "text" && side !== "base"
+                  mode === "text" && side !== "base" && pendingEdit === null
                     ? (line) => {
                         const index = aligned.findIndex(
                           (row) => row[side] === line,
@@ -1537,7 +1578,7 @@ export function ComparisonWorkspace({
                 side={side === "right" ? "right" : "left"}
                 selectedDifference={mode === "text" ? selected : undefined}
                 onCopyDifference={
-                  mode === "text" && side !== "base"
+                  mode === "text" && side !== "base" && pendingEdit === null
                     ? (span) => void attempt(() => copyDifference(side, span))
                     : undefined
                 }
@@ -3125,7 +3166,7 @@ export function ComparisonWorkspace({
           </div>
           {inputs}
           <LineInspector
-            row={detailLine}
+            row={pendingEdit === null ? detailLine : undefined}
             left={
               detailLine?.left == null
                 ? ""
@@ -3156,21 +3197,27 @@ export function ComparisonWorkspace({
           {!spans && (
             <p className="empty-state">
               Run Compare to highlight changed lines. Copies refresh differences
-              automatically; compare again after manual edits.
+              automatically, as do manual edits after the first comparison.
             </p>
           )}
           {spans && (
             <section aria-live="polite">
-              <h2>{changes.length} changed regions</h2>
+              <h2>
+                {pendingEdit === null
+                  ? `${changes.length} changed regions`
+                  : "Refreshing comparison..."}
+              </h2>
               <p className="result-summary">
-                {changes.length
-                  ? `Difference ${current + 1} of ${changes.length}. Use Previous / Next or Alt+Up / Alt+Down to navigate.`
-                  : "No differences under the current comparison rules."}
+                {pendingEdit !== null
+                  ? "Updating differences for the latest edits. Files are not saved."
+                  : changes.length
+                    ? `Difference ${current + 1} of ${changes.length}. Use Previous / Next or Alt+Up / Alt+Down to navigate.`
+                    : "No differences under the current comparison rules."}
               </p>
               <details className="comparison-details" data-panel="details">
                 <summary>Aligned read-only view &amp; range details</summary>
                 <VirtualList
-                  count={aligned.length}
+                  count={pendingEdit === null ? aligned.length : 0}
                   label="Aligned line comparison"
                   render={(index) => {
                     const row = aligned[index];

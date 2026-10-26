@@ -98,6 +98,7 @@ export async function launchNative(config, args = [], options = {}) {
     throw new Error("Native harness requires Windows WebView2.");
   const executable =
     options.desktop ??
+    process.env.COMPARE_TEST_DESKTOP ??
     fileURLToPath(
       new URL("../src-tauri/target/debug/compare-desktop.exe", import.meta.url),
     );

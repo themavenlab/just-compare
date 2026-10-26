@@ -122,10 +122,10 @@ try {
     .click();
   await idle();
   await editor("Left").fill("edited\n");
-  await inspector()
-    .getByText("No selection / comparison stale", { exact: true })
+  await workspace()
+    .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
-  assert.equal(await inspector().locator("pre").count(), 0);
+  assert.equal(await inspector().locator("pre").count(), 2);
   await workspace()
     .getByRole("button", { name: "Undo left", exact: true })
     .click();
