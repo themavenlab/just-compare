@@ -25,7 +25,16 @@ import {
   type Settings,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
+import { CommandMenu } from "./CommandMenu";
+import { errorMessage, type DiffSpan } from "./comparison";
 import { FolderPathInput } from "./FolderPathInput";
+import {
+  differenceFilters,
+  matchesFilter,
+  matchesName,
+} from "./folderPresentation";
+import { FolderRulesDialog } from "./FolderRulesDialog";
+import { FolderView, type FolderSide } from "./FolderView";
 import { LineInspector } from "./LineInspector";
 import { RefinedRegion } from "./RefinedRegion";
 import { ToolButton } from "./ToolButton";
@@ -542,7 +551,6 @@ export function ComparisonWorkspace({
     comparison: import("./api").RecentComparison | null,
   ) {
     const saved = await native("remember_history", {
-      settings: settingsSnapshot.current,
       folders,
       comparison,
     });
@@ -553,8 +561,7 @@ export function ComparisonWorkspace({
     }));
   }
   async function saveFolderHistory(recentFolders: string[]) {
-    const next = { ...settings, recentFolders };
-    await native("write_settings", { settings: next });
+    await native("write_history", { recentFolders, recentComparisons: null });
     updateSettings((prior) => ({ ...prior, recentFolders }));
   }
   async function chooseFolder(side: FolderSide, path: string) {
@@ -782,7 +789,7 @@ export function ComparisonWorkspace({
     collapsed: boolean;
     height: number;
   }) {
-    await native("write_settings", { settings: { ...settings, lineDetail } });
+    await native("write_line_detail", { lineDetail });
     updateSettings((prior) => ({ ...prior, lineDetail }));
   }
 
@@ -880,6 +887,10 @@ export function ComparisonWorkspace({
     await scan(roots);
   }
   async function normalizeFolderRoots() {
+    if (folderStale)
+      throw new Error(
+        "Folder results are stale. Refresh the current roots before using folder actions.",
+      );
     const roots = await native("normalize_folder_roots", folderRoots);
     setNativeFolderRoots(roots);
     return roots;
@@ -1043,8 +1054,8 @@ export function ComparisonWorkspace({
 
   useEffect(() => {
     if (globalBusy || initialized.current) return;
-    initialized.current = true;
     void attempt(async () => {
+      initialized.current = true;
       if (mode === "folder") {
         setFolderRoots({ left: tab.left, right: tab.right });
         if (tab.left || tab.right)
@@ -1569,6 +1580,10 @@ export function ComparisonWorkspace({
     matchesFilter(row, peek ? "all" : filter),
   );
   async function openPair(row: FolderEntry) {
+    if (folderStale)
+      throw new Error(
+        "Folder results are stale. Refresh the current roots before opening a listed pair.",
+      );
     const left = await join(
       folderRoots.left,
       ...(row.leftRelative ?? row.relative).split("/"),
@@ -1584,6 +1599,12 @@ export function ComparisonWorkspace({
     entries: FolderEntry[],
     side: FolderSide,
   ) {
+    if (folderStale) {
+      setError(
+        "Folder results are stale. Refresh the current roots before using folder actions.",
+      );
+      return;
+    }
     if (busy) {
       setError("Wait for the active operation to finish.");
       return;

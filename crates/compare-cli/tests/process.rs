@@ -2,6 +2,11 @@ use std::process::Command;
 
 #[test]
 fn cli_exit_codes_and_output_integrity() {
+  if std::env::var_os("COMPARE_CLI_TEST_CHILD").is_some() {
+    assert_eq!(std::env::var("COMPARE_WAIT_FOR_CLOSE").unwrap(), "1");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    return;
+  }
   let root = tempfile::tempdir().unwrap();
   let a = root.path().join("a.txt");
   let b = root.path().join("b.txt");
@@ -56,4 +61,13 @@ fn cli_exit_codes_and_output_integrity() {
     1
   );
   assert!(!never_created.exists());
+  let started = std::time::Instant::now();
+  let status = Command::new(env!("CARGO_BIN_EXE_compare"))
+    .arg("gui")
+    .env("COMPARE_DESKTOP", std::env::current_exe().unwrap())
+    .env("COMPARE_CLI_TEST_CHILD", "1")
+    .status()
+    .unwrap();
+  assert!(status.success());
+  assert!(started.elapsed() >= std::time::Duration::from_millis(150));
 }

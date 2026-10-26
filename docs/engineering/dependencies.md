@@ -24,6 +24,8 @@ This document tracks approved direct dependencies, licensing terms, and transiti
 | **blake3 (`pure`)** | Streaming content hashing without native C compiler requirements | CC0-1.0 OR Apache-2.0 |
 | **trash** | Recoverable local file deletion | MIT |
 | **tauri-plugin-dialog** | Native file picker and confirmation dialogs | MIT OR Apache-2.0 |
+| **winreg (0.56.0, Windows only)** | Owned, opt-in per-user Windows Explorer context menu registration | MIT |
+| **tauri-plugin-single-instance (2.5.4, Windows only)** | Queued normal-app shell launch handoff, excluding Git waiting launches | MIT OR Apache-2.0 |
 | **WebView2Loader.dll (1.0.3800.47)** | GNU Windows desktop loader companion | Microsoft Redistributable License |
 
 ---

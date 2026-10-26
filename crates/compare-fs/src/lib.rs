@@ -2,6 +2,7 @@ mod document;
 pub mod file_actions;
 mod folder;
 mod settings;
+pub mod shell;
 mod windows_metadata;
 
 pub use document::{checked_path, Document, FileError};
@@ -12,6 +13,6 @@ pub use folder::{
   SyncMode,
 };
 pub use settings::{
-  load_settings, remember_history, save_settings, RecentComparison, Session, Settings,
+  load_settings, remember_history, save_settings, LineDetail, RecentComparison, Session, Settings,
 };
 pub use windows_metadata::{disk_space, DiskSpace};

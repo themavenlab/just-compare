@@ -119,6 +119,10 @@ Windows MSVC: settings migration/restart/bounds tests, TypeScript check, all 16 
 
 Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests, production frontend build, and embedded-assets native build passed. `node apps/desktop/scripts/inspector-regression.mjs` verifies multiline detail navigation, missing lines, Unicode/tabs/long-line horizontal overflow, caret selection with retained editor focus, zero draft mutation, invalidation, Undo/copy refresh, resize/collapse, and layout-only persistence across restart. Native interaction tests passed with stable aligned two-way scrolling during asynchronous result and persistence updates.
 
+### Phase 2A-03 Windows Explorer Commands (Windows/MSVC)
+
+`node apps/desktop/scripts/explorer-regression.mjs` verifies owned HKCU registration, removal, single-item commands, private selection state across restart, argument handoff to the running instance without losing tabs, missing/linked/mixed path rejection, and isolated test-registry safety. CLI waiting launches and native smoke tests also passed.
+
 | Area | Evidence |
 | :--- | :--- |
 | **Rust core** | 21 text tests, 13 Windows filesystem/settings/folder tests, 5 merge tests and 1 CLI process test |

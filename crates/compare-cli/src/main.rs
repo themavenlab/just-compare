@@ -68,6 +68,7 @@ fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
         return Err("COMPARE_DESKTOP must be absolute.".into());
       }
       let mut process = std::process::Command::new(exe);
+      process.env("COMPARE_WAIT_FOR_CLOSE", "1");
       if !rest.is_empty() {
         let paths = rest
           .iter()

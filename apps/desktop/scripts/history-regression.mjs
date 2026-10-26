@@ -103,6 +103,23 @@ try {
     (await session.call("read_settings")).recentComparisons.length,
     1,
   );
+  const persisted = await session.call("read_settings");
+  await session.call("write_settings", {
+    settings: { ...persisted, theme: "dark" },
+  });
+  await session.call("remember_history", { folders: [left], comparison: null });
+  await session.call("write_history", {
+    recentFolders: [],
+    recentComparisons: null,
+  });
+  await session.call("write_line_detail", {
+    lineDetail: { height: 220, collapsed: true },
+  });
+  assert.equal(
+    (await session.call("read_settings")).theme,
+    "dark",
+    "Automatic history/layout writes must preserve other persisted preferences",
+  );
   console.log(
     "Native history regression passed: submission, one/two roots, keyboard picker, retained stale results, bounded persisted tuples, restart and failed persistence.",
   );

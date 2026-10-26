@@ -167,6 +167,49 @@ export function App() {
     },
     [openTab],
   );
+  const handleShell = useCallback(
+    async (args: string[]) => {
+      if (!args.length) return;
+      if (args[0] === "gui" && args.length === 3) {
+        openTab("folder", { left: args[1] ?? "", right: args[2] ?? "" });
+        return;
+      }
+      const action = await native("shell_action", { args });
+      if (action.kind === "selected")
+        setInfo(
+          `Selected for Compare: ${action.path}. Right-click another file or folder and choose Compare with Selected.`,
+        );
+      else openTab(action.mode, { left: action.left, right: action.right });
+    },
+    [openTab],
+  );
+  async function changeExplorerIntegration(enabled: boolean | null) {
+    if (!acquire("explorer-integration")) {
+      setError("Wait for the active operation to finish.");
+      return;
+    }
+    try {
+      if (
+        enabled !== null &&
+        !(await confirmAction(
+          enabled
+            ? "Add Compare Workbench right-click commands for this Windows user? Windows 11 shows them under Show more options. No administrator access or file associations are changed."
+            : "Remove this installation's Explorer commands and clear its selected compare path? Source files and open tabs are unchanged.",
+        ))
+      )
+        return;
+      const installed = await native("explorer_integration", { enabled });
+      setInfo(
+        installed
+          ? "Explorer integration is enabled for this executable."
+          : "Explorer integration is not enabled for this executable.",
+      );
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      release("explorer-integration");
+    }
+  }
   async function saveHomeSessions(sessions: SavedSession[]) {
     if (!acquire("home-sessions")) {
       setError("Wait for the active operation to finish.");
@@ -297,9 +340,12 @@ export function App() {
             left: args[1] ?? "",
             right: args[2] ?? "",
           };
-        else if (args.length) throw new Error("Unsupported desktop arguments.");
-        setTabs(args.length ? [tab] : []);
-        setActive(args.length ? tab.id : null);
+        else if (args.length && !args[0]?.startsWith("shell-"))
+          throw new Error("Unsupported desktop arguments.");
+        const shell = args[0]?.startsWith("shell-");
+        setTabs(args.length && !shell ? [tab] : []);
+        setActive(args.length && !shell ? tab.id : null);
+        if (shell) await handleShell(args);
         setReady(true);
       } catch (failure) {
         if (!disposed) {
@@ -391,6 +437,60 @@ export function App() {
     // Native listeners belong to the shell; they route through current tab/controller refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (!isTauri() || !ready) return;
+    let disposed = false;
+    let draining = false;
+    const cleanup: (() => void)[] = [];
+    const drain = async () => {
+      if (draining || disposed) return;
+      draining = true;
+      try {
+        for (;;) {
+          const requests = await native("take_shell_requests", {});
+          if (!requests.length || disposed) break;
+          for (const args of requests) {
+            try {
+              await handleShell(args);
+            } catch (failure) {
+              setError(errorMessage(failure));
+            }
+          }
+        }
+      } catch (failure) {
+        setError(errorMessage(failure));
+      } finally {
+        draining = false;
+      }
+    };
+    void (async () => {
+      try {
+        const unlisten = await listen("shell-requests", () => {
+          void drain();
+        });
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        cleanup.push(unlisten);
+        const errors = await listen<string>("shell-error", (event) =>
+          setError(event.payload),
+        );
+        if (disposed) {
+          errors();
+          return;
+        }
+        cleanup.push(errors);
+        await drain();
+      } catch (failure) {
+        setError(errorMessage(failure));
+      }
+    })();
+    return () => {
+      disposed = true;
+      for (const unlisten of cleanup) unlisten();
+    };
+  }, [ready, handleShell]);
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
   }, [settings.theme]);
@@ -570,6 +670,41 @@ export function App() {
               label: "Next difference",
               run: () => command("next"),
               disabled: !active || blocked || !summaries[active]?.differences,
+            },
+          ]}
+        />
+        <CommandMenu
+          label="Integration"
+          commands={[
+            {
+              label: "Enable Explorer commands...",
+              run: () => {
+                void changeExplorerIntegration(true);
+              },
+              disabled: blocked,
+            },
+            {
+              label: "Remove Explorer commands...",
+              run: () => {
+                void changeExplorerIntegration(false);
+              },
+              disabled: blocked,
+            },
+            {
+              label: "Check Explorer integration",
+              run: () => {
+                void changeExplorerIntegration(null);
+              },
+              disabled: blocked,
+            },
+            {
+              label: "Clear selected compare path",
+              run: () => {
+                void native("clear_shell_selection", {})
+                  .then(() => setInfo("Selected compare path cleared."))
+                  .catch((failure) => setError(errorMessage(failure)));
+              },
+              disabled: blocked,
             },
           ]}
         />
@@ -777,8 +912,9 @@ export function App() {
             saveSessions={saveHomeSessions}
             saveHistory={(recentComparisons) => {
               if (!acquire("home-history")) return;
-              void native("write_settings", {
-                settings: { ...settings, recentComparisons },
+              void native("write_history", {
+                recentFolders: null,
+                recentComparisons,
               })
                 .then(() =>
                   setSettings((prior) => ({ ...prior, recentComparisons })),

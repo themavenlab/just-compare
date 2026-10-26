@@ -205,13 +205,37 @@ interface FolderOptions {
   exclude: string[];
 }
 interface Commands {
+  take_shell_requests: { args: Record<string, never>; result: string[][] };
+  shell_action: {
+    args: { args: string[] };
+    result:
+      | { kind: "selected"; path: string }
+      | {
+          kind: "compare";
+          mode: "text" | "folder";
+          left: string;
+          right: string;
+        };
+  };
+  clear_shell_selection: { args: Record<string, never>; result: void };
+  explorer_integration: { args: { enabled: boolean | null }; result: boolean };
   remember_history: {
     args: {
-      settings: Settings;
       folders: string[];
       comparison: RecentComparison | null;
     };
     result: Settings;
+  };
+  write_history: {
+    args: {
+      recentFolders: string[] | null;
+      recentComparisons: RecentComparison[] | null;
+    };
+    result: Settings;
+  };
+  write_line_detail: {
+    args: { lineDetail: { collapsed: boolean; height: number } };
+    result: void;
   };
   validate_folder_rules: {
     args: { rules: FolderRules; options: FolderOptions };

@@ -651,6 +651,8 @@ try {
     "ignoreLineEndings",
     "ignoreWhitespace",
     "recent",
+    "recentComparisons",
+    "recentFolders",
     "sessions",
     "theme",
     "unimportantPatterns",

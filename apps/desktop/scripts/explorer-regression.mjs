@@ -1,0 +1,217 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { launchNative, selectWorkspace } from "./native-harness.mjs";
+
+const root = await mkdtemp(join(tmpdir(), "compare-explorer-"));
+const config = join(root, "config");
+const originalExecutable = fileURLToPath(
+  new URL("../src-tauri/target/debug/compare-desktop.exe", import.meta.url),
+);
+const executable = join(root, "program files café", "compare-desktop.exe");
+let session;
+const launch = async (args, raw = false) => {
+  const child = spawn(executable, args, {
+    env: { ...process.env, COMPARE_TEST_CONFIG: config },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: raw,
+    ...(raw ? { argv0: `"${executable}"` } : {}),
+  });
+  const timer = setTimeout(() => child.kill(), 15000);
+  try {
+    const [code] = await once(child, "exit");
+    assert.equal(code, 0, "Secondary shell launch must deliver and exit");
+  } finally {
+    clearTimeout(timer);
+  }
+};
+try {
+  await mkdir(join(root, "program files café"));
+  await copyFile(originalExecutable, executable);
+  const left = join(root, "left & café %.txt"),
+    right = join(root, "right & 日本語.txt");
+  const leftFolder = join(root, "left folder"),
+    rightFolder = join(root, "right folder");
+  for (const directory of [config, leftFolder, rightFolder])
+    await mkdir(directory);
+  await writeFile(left, "left\tcafé\n");
+  await writeFile(right, "right\t日本語\n");
+  for (const directory of [leftFolder, rightFolder])
+    await writeFile(join(directory, "file.txt"), directory);
+  session = await launchNative(config, [], { desktop: executable });
+  let page = session.page;
+  const workspace = () => page.locator('.workspace-slot[aria-hidden="false"]');
+  const idle = () =>
+    page.waitForFunction(
+      () => !document.querySelector(".new-comparisons button")?.disabled,
+    );
+  const menu = async (name) => {
+    await page
+      .getByRole("button", { name: "Integration", exact: true })
+      .click();
+    await page.getByRole("menuitem", { name, exact: true }).click();
+  };
+  assert.equal(
+    await session.call("explorer_integration", { enabled: null }),
+    false,
+  );
+  await menu("Enable Explorer commands...");
+  await page
+    .getByRole("dialog", { name: "Confirm action" })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await idle();
+  assert.equal(
+    await session.call("explorer_integration", { enabled: null }),
+    false,
+  );
+  await menu("Enable Explorer commands...");
+  await page
+    .getByRole("dialog", { name: "Confirm action" })
+    .getByRole("button", { name: "Confirm", exact: true })
+    .click();
+  await idle();
+  assert.equal(
+    await session.call("explorer_integration", { enabled: null }),
+    true,
+  );
+  const registered = execFileSync(
+    join(process.env.SystemRoot, "System32", "reg.exe"),
+    [
+      "query",
+      "HKCU\\Software\\CompareWorkbench\\Tests",
+      "/s",
+      "/f",
+      "shell-select",
+      "/d",
+    ],
+    { encoding: "utf8" },
+  );
+  const command = registered
+    .split(/\r?\n/)
+    .find(
+      (line) => line.includes('shell-select "%1"') && line.includes("REG_SZ"),
+    );
+  assert.ok(
+    command,
+    "The isolated registry must contain the real quoted launch command",
+  );
+  const rawArguments = command
+    .slice(command.indexOf('" shell-select ') + 2)
+    .replace("%1", left);
+  await selectWorkspace(page, "text");
+  const draft = workspace().getByRole("textbox", {
+    name: "Left text",
+    exact: true,
+  });
+  await draft.locator(".cm-line").first().waitFor();
+  await draft.fill("unsaved original draft");
+  await launch([rawArguments], true);
+  await page.getByText(/Selected for Compare:/).waitFor();
+  assert.equal(await page.getByRole("tab").count(), 1);
+  await launch(["shell-compare", right]);
+  await workspace()
+    .getByRole("heading", { name: "1 changed regions", exact: true })
+    .waitFor();
+  await idle();
+  assert.equal(await page.getByRole("tab").count(), 2);
+  assert.ok(
+    (
+      await workspace()
+        .getByRole("combobox", { name: "left path", exact: true })
+        .inputValue()
+    ).endsWith("left & café %.txt"),
+  );
+  await page.getByRole("tab").first().click();
+  assert.match(await draft.innerText(), /unsaved original draft/);
+  await launch(["shell-compare", leftFolder]);
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "two files or two folders" })
+    .waitFor();
+  await launch(["shell-open", join(root, "missing")]);
+  await page
+    .getByRole("alert")
+    .filter({ hasText: /cannot find|not find/i })
+    .waitFor();
+  await launch(["shell-select", leftFolder]);
+  await launch(["shell-compare", rightFolder]);
+  await workspace().locator('.folder-row[data-relative="file.txt"]').waitFor();
+  await idle();
+  assert.equal(await page.getByRole("tab").count(), 3);
+  await launch(["shell-open", left]);
+  await workspace()
+    .getByRole("textbox", { name: "Left text", exact: true })
+    .locator(".cm-line")
+    .first()
+    .waitFor();
+  await idle();
+  assert.equal(await page.getByRole("tab").count(), 4);
+  await Promise.all(
+    Array.from({ length: 3 }, () => launch(["shell-open", left])),
+  );
+  await page.waitForFunction(() => {
+    const slots = [...document.querySelectorAll(".workspace-slot")];
+    return (
+      slots.length === 7 &&
+      slots
+        .slice(-3)
+        .every((slot) =>
+          slot
+            .querySelector('.cm-content[aria-label="Left text"]')
+            ?.textContent?.includes("left\tcafé"),
+        )
+    );
+  });
+  await idle();
+  await launch(["shell-select", left]);
+  await session.close();
+  // Cold startup revalidates the persisted selection and automatically compares.
+  session = await launchNative(config, ["shell-compare", right], {
+    desktop: executable,
+  });
+  page = session.page;
+  await workspace()
+    .getByRole("heading", { name: "1 changed regions", exact: true })
+    .waitFor();
+  await idle();
+  await menu("Remove Explorer commands...");
+  await page
+    .getByRole("dialog", { name: "Confirm action" })
+    .getByRole("button", { name: "Confirm", exact: true })
+    .click();
+  await idle();
+  assert.equal(
+    await session.call("explorer_integration", { enabled: null }),
+    false,
+  );
+  await assert.rejects(
+    session.call("shell_action", { args: ["shell-compare", right] }),
+    /No selected path/,
+  );
+  assert.equal(await readFile(left, "utf8"), "left\tcafé\n");
+  assert.equal(await readFile(right, "utf8"), "right\t日本語\n");
+  console.log(
+    "Native Explorer regression passed: opt-in/removal, isolated registry, real secondary-process handoff, Unicode/metacharacters, files/folders, dirty tabs, invalid inputs, cold restart and selection cleanup.",
+  );
+} finally {
+  if (session) {
+    try {
+      await session.call("explorer_integration", { enabled: false });
+    } finally {
+      await session.close();
+    }
+  }
+  await rm(root, { recursive: true, force: true });
+}

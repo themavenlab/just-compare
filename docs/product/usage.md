@@ -106,3 +106,16 @@ git mergetool --no-prompt
 # Compare entire directories in Git
 git -c 'difftool.justcompare.cmd="C:/path/to/just-compare/compare.exe" gui "$LOCAL" "$REMOTE"' difftool --dir-diff --no-symlinks --no-prompt
 ```
+
+---
+
+## 8. Windows Explorer Integration
+
+From a stable executable location, choose **Integration > Enable Explorer commands...** and confirm. This integration is opt-in for the current Windows user only, requiring no administrator elevation, default file-association changes, or shell extension DLLs. On Windows 11, these static commands appear under **Show more options** (or `Shift+F10`).
+
+1. **Select for Compare:** Right-click a single file or directory and choose **Select for Compare**. The selected path is saved privately in `shell-selection.json` without modifying disk files.
+2. **Compare with Selected:** Right-click a second file or folder of the same kind and choose **Compare with Selected**. The pair opens in a new comparison tab within the running application without disturbing dirty drafts.
+3. **Compare:** Alternatively, right-click any supported file or directory and choose **Compare** to open it on the left side, ready for you to specify a counterpart.
+
+Use **Integration > Check Explorer integration** to view current registration status, **Integration > Clear selected compare path** to clear the pending selection, or **Integration > Remove Explorer commands...** to cleanly remove all owned registry entries.
+

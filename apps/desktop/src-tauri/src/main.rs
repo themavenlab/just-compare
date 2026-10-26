@@ -1,10 +1,63 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod commands;
+#[cfg(windows)]
+use tauri::Emitter;
 use tauri::Manager;
 
 fn main() {
   let is_merge = std::env::args().nth(1).as_deref() == Some("git-merge");
-  let result = tauri::Builder::default()
+  #[cfg(not(windows))]
+  let builder = tauri::Builder::default();
+  #[cfg(windows)]
+  let mut builder = tauri::Builder::default();
+  #[cfg(all(windows, debug_assertions))]
+  let mut context = tauri::generate_context!();
+  #[cfg(not(all(windows, debug_assertions)))]
+  let context = tauri::generate_context!();
+  #[cfg(windows)]
+  {
+    #[cfg(debug_assertions)]
+    if let Some(config) = std::env::var_os("COMPARE_TEST_CONFIG") {
+      use std::hash::{Hash, Hasher};
+      let mut hash = std::hash::DefaultHasher::new();
+      match compare_fs::checked_path(std::path::Path::new(&config), false) {
+        Ok(path) => path.hash(&mut hash),
+        Err(error) => {
+          eprintln!("Invalid test configuration: {error}");
+          std::process::exit(2);
+        }
+      }
+      context.config_mut().identifier = format!("dev.compare-workbench.test-{:x}", hash.finish());
+    }
+    let is_git = std::env::args()
+      .nth(1)
+      .is_some_and(|arg| arg == "git-diff" || arg == "git-merge");
+    let waiting = std::env::var("COMPARE_WAIT_FOR_CLOSE").as_deref() == Ok("1");
+    if !is_git && !waiting {
+      builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        let result = app
+          .state::<std::sync::Arc<commands::Resources>>()
+          .queue_shell(args.into_iter().skip(1).collect())
+          .and_then(|()| app.emit("shell-requests", ()).map_err(|e| e.to_string()));
+        if let Err(error) = result {
+          eprintln!("Shell handoff failed: {error}");
+          if let Err(error) = app.emit("shell-error", error) {
+            eprintln!("Cannot report shell handoff failure: {error}");
+          }
+        }
+        if let Some(window) = app.get_webview_window("main") {
+          if let Err(error) = window
+            .unminimize()
+            .and_then(|()| window.show())
+            .and_then(|()| window.set_focus())
+          {
+            eprintln!("Cannot focus comparison window: {error}");
+          }
+        }
+      }));
+    }
+  }
+  let result = builder
     .plugin(tauri_plugin_dialog::init())
     .manage(std::sync::Arc::new(commands::Resources::default()))
     .invoke_handler(tauri::generate_handler![
@@ -33,10 +86,16 @@ fn main() {
       commands::read_settings,
       commands::write_settings,
       commands::remember_history,
+      commands::write_history,
+      commands::write_line_detail,
       commands::launch_arguments,
+      commands::take_shell_requests,
+      commands::shell_action,
+      commands::clear_shell_selection,
+      commands::explorer_integration,
       commands::finish_git_merge,
     ])
-    .build(tauri::generate_context!());
+    .build(context);
   match result {
     Ok(app) => app.run(move |handle, event| {
       if is_merge && matches!(event, tauri::RunEvent::Exit) {

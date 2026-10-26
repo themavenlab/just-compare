@@ -19,6 +19,7 @@
     "test:sessions": "node scripts/session-regression.mjs",
     "test:history": "node scripts/history-regression.mjs",
     "test:inspector": "node scripts/inspector-regression.mjs",
+    "test:explorer": "node scripts/explorer-regression.mjs",
     "package:windows": "node scripts/package-windows.mjs",
     "tauri": "tauri"
   },

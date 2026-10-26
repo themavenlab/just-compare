@@ -887,6 +887,41 @@ pub async fn remember_history(
 }
 
 #[tauri::command]
+pub async fn write_history(
+  recent_folders: Option<Vec<String>>,
+  recent_comparisons: Option<Vec<compare_fs::RecentComparison>>,
+  app: tauri::AppHandle,
+) -> Result<Settings, String> {
+  let path = settings_path(&app)?;
+  worker(move || {
+    let mut settings = compare_fs::load_settings(&path).map_err(|e| e.to_string())?;
+    if let Some(folders) = recent_folders {
+      settings.recent_folders = Some(folders);
+    }
+    if let Some(comparisons) = recent_comparisons {
+      settings.recent_comparisons = comparisons;
+    }
+    compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())?;
+    Ok(settings)
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn write_line_detail(
+  line_detail: compare_fs::LineDetail,
+  app: tauri::AppHandle,
+) -> Result<(), String> {
+  let path = settings_path(&app)?;
+  worker(move || {
+    let mut settings = compare_fs::load_settings(&path).map_err(|e| e.to_string())?;
+    settings.line_detail = Some(line_detail);
+    compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())
+  })
+  .await
+}
+
+#[tauri::command]
 pub async fn write_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
   let path = settings_path(&app)?;
   worker(move || compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())).await
@@ -913,6 +948,70 @@ fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
 #[tauri::command]
 pub fn launch_arguments() -> Vec<String> {
   std::env::args().skip(1).collect()
+}
+
+#[tauri::command]
+pub fn take_shell_requests(state: State<'_, Arc<Resources>>) -> Result<Vec<Vec<String>>, String> {
+  Ok(
+    state
+      .shell_requests
+      .lock()
+      .map_err(|e| e.to_string())?
+      .drain(..)
+      .collect(),
+  )
+}
+
+#[tauri::command]
+pub async fn shell_action(
+  args: Vec<String>,
+  app: tauri::AppHandle,
+) -> Result<compare_fs::shell::ShellAction, String> {
+  let config = settings_path(&app)?
+    .parent()
+    .ok_or("Missing configuration directory.")?
+    .to_owned();
+  worker(move || {
+    let ancestor = config
+      .ancestors()
+      .find(|path| path.exists())
+      .ok_or("Missing configuration ancestor.")?;
+    compare_fs::checked_path(ancestor, false).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&config).map_err(|e| e.to_string())?;
+    compare_fs::shell::request(&config, &args).map_err(|e| e.to_string())
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn clear_shell_selection(app: tauri::AppHandle) -> Result<(), String> {
+  let config = settings_path(&app)?
+    .parent()
+    .ok_or("Missing configuration directory.")?
+    .to_owned();
+  worker(move || compare_fs::shell::clear_selection(&config).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn explorer_integration(
+  enabled: Option<bool>,
+  app: tauri::AppHandle,
+) -> Result<bool, String> {
+  let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+  worker(move || compare_fs::shell::registration(&executable, enabled).map_err(|e| e.to_string()))
+    .await
+    .and_then(|installed| {
+      if enabled == Some(false) {
+        let config = settings_path(&app)?
+          .parent()
+          .ok_or("Missing configuration directory.")?
+          .to_owned();
+        if config.exists() {
+          compare_fs::shell::clear_selection(&config).map_err(|e| e.to_string())?;
+        }
+      }
+      Ok(installed)
+    })
 }
 
 #[tauri::command]
