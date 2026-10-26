@@ -114,20 +114,6 @@ export function LineInspector({
             </p>
           ) : (
             <>
-              <div className="line-coordinates">
-                <span>
-                  Left{" "}
-                  {row.left === null
-                    ? "(missing line)"
-                    : `line ${row.left + 1}`}
-                </span>
-                <span>
-                  Right{" "}
-                  {row.right === null
-                    ? "(missing line)"
-                    : `line ${row.right + 1}`}
-                </span>
-              </div>
               {current?.error ? (
                 <p role="alert">Line detail unavailable: {current.error}</p>
               ) : current?.spans ? (
@@ -137,10 +123,10 @@ export function LineInspector({
                   spans={current.spans}
                   labels={[
                     row.left === null
-                      ? "Left: (missing line)"
+                      ? "Left (missing line)"
                       : `Left ${row.left + 1}`,
                     row.right === null
-                      ? "Right: (missing line)"
+                      ? "Right (missing line)"
                       : `Right ${row.right + 1}`,
                   ]}
                 />

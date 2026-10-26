@@ -117,7 +117,7 @@ Windows MSVC: settings migration/restart/bounds tests, TypeScript check, all 16 
 
 ### Phase 2A-02 Line Inspector (Windows/MSVC)
 
-Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests, production frontend build, and embedded-assets native build passed. `node apps/desktop/scripts/inspector-regression.mjs` verifies multiline detail navigation, missing lines, Unicode/tabs/long-line horizontal overflow, caret selection with retained editor focus, zero draft mutation, invalidation, Undo/copy refresh, resize/collapse, and layout-only persistence across restart. Native interaction tests passed with stable aligned two-way scrolling during asynchronous result and persistence updates.
+Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests, production frontend build, and embedded-assets native build passed. `node apps/desktop/scripts/inspector-regression.mjs` verifies multiline detail navigation, missing lines, Unicode/tabs/long-line horizontal overflow, caret selection with retained editor focus, zero draft mutation, invalidation, Undo/copy refresh, resize/collapse, and layout-only persistence across restart. The inspector alignment regression also passed on a separate embedded-assets debug profile: both source text starts share the same column (within one CSS pixel), including missing-side rows, with no duplicate coordinate header. Native interaction tests passed with stable aligned two-way scrolling during asynchronous result and persistence updates.
 
 ### Phase 2A-03 Windows Explorer Commands (Windows/MSVC)
 

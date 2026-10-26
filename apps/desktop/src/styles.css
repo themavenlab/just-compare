@@ -1837,7 +1837,9 @@ body,
   min-width: 0;
 }
 .line-inspector .panes {
-  display: block;
+  display: grid;
+  grid-template-columns: max-content minmax(max-content, 1fr);
+  align-items: baseline;
   height: auto;
   min-height: 0;
   padding: 0;
@@ -1854,12 +1856,9 @@ body,
 .inspector-source {
   color: var(--muted);
   user-select: none;
-}
-.line-coordinates {
-  display: flex;
-  gap: 20px;
   padding: 2px 5px;
   font-size: 11px;
+  white-space: nowrap;
 }
 .line-inspector mark {
   background: #f4b95c;

@@ -38,6 +38,25 @@ try {
   const originalLeft = await editor("Left").innerText();
   const originalRight = await editor("Right").innerText();
   assert.match(await inspector().textContent(), /Left 2/);
+  async function assertAlignedStarts() {
+    const starts = await inspector()
+      .locator("pre")
+      .evaluateAll((lines) =>
+        lines.map((line) => {
+          const range = document.createRange();
+          range.selectNodeContents(line);
+          return range.getBoundingClientRect().x;
+        }),
+      );
+    assert.equal(starts.length, 2);
+    assert.ok(
+      Math.abs(starts[0] - starts[1]) <= 1,
+      `Source text must start at the same column: ${starts}`,
+    );
+    assert.equal(await inspector().locator(".inspector-source").count(), 2);
+    assert.equal(await inspector().locator(".line-coordinates").count(), 0);
+  }
+  await assertAlignedStarts();
   await inspector()
     .getByRole("button", { name: "Next detail line", exact: true })
     .click();
@@ -58,15 +77,30 @@ try {
   await inspector()
     .getByText("Right (missing line)", { exact: true })
     .waitFor();
+  const boxes = await inspector()
+    .locator("pre")
+    .evaluateAll((lines) =>
+      lines.map((line) => line.getBoundingClientRect().x),
+    );
+  assert.ok(
+    Math.abs(boxes[0] - boxes[1]) <= 1,
+    "Missing-line labels must not shift the source column",
+  );
   assert.equal(await editor("Left").innerText(), originalLeft);
   assert.equal(await editor("Right").innerText(), originalRight);
   // Caret selection updates detail without taking focus from the editor.
   await editor("Left").locator(".cm-line").first().click();
-  await page.waitForFunction(() =>
-    document
-      .querySelector(".line-inspector pre")
-      ?.textContent?.startsWith("Left 1:"),
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".line-inspector .inspector-source")
+        ?.textContent === "Left 1",
   );
+  await inspector()
+    .locator("pre")
+    .first()
+    .filter({ hasText: "equal" })
+    .waitFor();
+  await assertAlignedStarts();
   assert.equal(
     await editor("Left").evaluate(
       (element) => element === document.activeElement,

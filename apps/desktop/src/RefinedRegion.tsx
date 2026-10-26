@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { type DiffSpan } from "./comparison";
 
 export function RefinedRegion({
@@ -17,25 +18,27 @@ export function RefinedRegion({
   return (
     <section aria-label="Intraline highlight" className="panes">
       {(["left", "right"] as const).map((side) => (
-        <pre key={side}>
+        <Fragment key={side}>
           {labels && (
             <span className="inspector-source">
-              {labels[side === "left" ? 0 : 1]}:{" "}
+              {labels[side === "left" ? 0 : 1]}
             </span>
           )}
-          {spans.map((span, index) => {
-            const text = decoder.decode(
-              side === "left"
-                ? a.subarray(span.leftStart, span.leftEnd)
-                : b.subarray(span.rightStart, span.rightEnd),
-            );
-            return span.kind === "equal" ? (
-              <span key={index}>{text}</span>
-            ) : (
-              <mark key={index}>{text}</mark>
-            );
-          })}
-        </pre>
+          <pre>
+            {spans.map((span, index) => {
+              const text = decoder.decode(
+                side === "left"
+                  ? a.subarray(span.leftStart, span.leftEnd)
+                  : b.subarray(span.rightStart, span.rightEnd),
+              );
+              return span.kind === "equal" ? (
+                <span key={index}>{text}</span>
+              ) : (
+                <mark key={index}>{text}</mark>
+              );
+            })}
+          </pre>
+        </Fragment>
       ))}
     </section>
   );

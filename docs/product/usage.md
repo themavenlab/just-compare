@@ -14,7 +14,7 @@ Use the tab bar or File menu to open independent Text Compare, Folder Compare, o
 
 1. **Opening Files:** Select a text tab, enter file paths and click **Open**, or use the file browse dialogs.
 2. **Comparing:** Edit either pane directly. Clicking **Compare** (or pressing `Ctrl+Enter` / `Cmd+Enter`) calculates aligned editable lines and an interactive overview map. Ignore options (case, whitespace, line endings) and regex rules affect comparison keys only, never your source bytes on disk.
-3. **Navigation & Merging:** Navigate differences with the overview buttons or by pressing `Alt+ArrowUp` / `Alt+ArrowDown`. Copy the selected difference block in either direction, use Undo, or click **Refine selected region** for character/word-level intraline highlighting. Each changed region also features an inline gutter arrow: the left pane's right arrow copies that region into the right draft, and the right pane's left arrow copies it into the left draft. Gutter arrows operate directly on their own region regardless of current selection; clicking or selecting a source line never activates a copy arrow. An arrow beside an empty gap copies the deletion to the counterpart pane. Region copies refresh differences automatically while preserving editor scroll positions without implicit disk writes. Undo restores the previous draft and refreshes differences automatically, whether invoked by the pane button, Edit menu, or `Ctrl+Z` / `Cmd+Z`. Manual edits invalidate the old comparison; run Compare after those.
+3. **Navigation & Merging:** Navigate differences with the overview buttons or by pressing `Alt+ArrowUp` / `Alt+ArrowDown`. Copy the selected difference block in either direction, use Undo, or click **Refine selected region** for character/word-level intraline highlighting. The docked bottom inspector follows the caret or selected aligned row. Labels occupy one shared gutter so both source versions begin at the same column, without duplicate inline prefixes. **Previous line / Next line** inspects every line of multiline regions; stacked versions include source numbers, missing-line placeholders and character-level Rust highlights. Long lines scroll horizontally. **Detail height** resizes it and **Collapse line detail** hides it; these controls persist layout only, never text. Each changed region also features an inline gutter arrow: the left pane's right arrow copies that region into the right draft, and the right pane's left arrow copies it into the left draft. Gutter arrows operate directly on their own region regardless of current selection; clicking or selecting a source line never activates a copy arrow. An arrow beside an empty gap copies the deletion to the counterpart pane. Region copies refresh differences automatically while preserving editor scroll positions without implicit disk writes. Undo restores the previous draft and refreshes differences automatically, whether invoked by the pane button, Edit menu, or `Ctrl+Z` / `Cmd+Z`. Manual edits invalidate the old comparison; run Compare after those.
 4. **Saving & Reloading:** Press `Ctrl+S` / `Cmd+S` to save the active pane. Saving refreshes comparison differences automatically, including after manual edits. **Reload** rereads both file inputs and compares the loaded contents; dirty drafts require confirmation before discarding edits. Both retain the viewport and aligned, linked vertical scrolling without requiring a second Compare click. Save As will prompt before overwriting any existing destination. Explicit legacy or UTF-16 encodings can be selected from the encoding menu under **More**.
 5. **Safety Protections:** External modifications to an open file trigger conflict alerts. Unsaved edits require confirmation before loading a new file or closing the window.
 
@@ -75,6 +75,7 @@ compare git-merge BASE_FILE LEFT_FILE RIGHT_FILE OUTPUT_FILE
 ```
 
 ### Exit Codes
+
 - `0`: Files/folders are identical, or merge completed cleanly.
 - `1`: Differences found, conflicts remained unresolved, or operation was cancelled.
 - `2`: Invalid arguments, I/O errors, or scan failures.
@@ -96,6 +97,7 @@ git config --local mergetool.justcompare.trustExitCode true
 ```
 
 ### Running Git Diff and Merge
+
 ```powershell
 # Compare files in working tree
 git difftool --no-prompt
@@ -118,4 +120,3 @@ From a stable executable location, choose **Integration > Enable Explorer comman
 3. **Compare:** Alternatively, right-click any supported file or directory and choose **Compare** to open it on the left side, ready for you to specify a counterpart.
 
 Use **Integration > Check Explorer integration** to view current registration status, **Integration > Clear selected compare path** to clear the pending selection, or **Integration > Remove Explorer commands...** to cleanly remove all owned registry entries.
-
