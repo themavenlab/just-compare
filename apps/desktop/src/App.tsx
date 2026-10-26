@@ -9,6 +9,7 @@ import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { HomeScreen } from "./HomeScreen";
 import {
+  fileName,
   sameSummary,
   sessionWorkflow,
   type SavedSession,
@@ -177,7 +178,7 @@ export function App() {
       const action = await native("shell_action", { args });
       if (action.kind === "selected")
         setInfo(
-          `Selected for Compare: ${action.path}. Right-click another file or folder and choose Compare with Selected.`,
+          `Selected for Compare: ${action.path}. Right-click another item of the same type and choose Compare to ${fileName(action.path)}.`,
         );
       else openTab(action.mode, { left: action.left, right: action.right });
     },
@@ -757,7 +758,7 @@ export function App() {
               label: "About Phase 1",
               run: () =>
                 setInfo(
-                  "Original local text/folder/merge workbench. Copies in text edit drafts; folder actions require previews. No uploads.",
+                  "Original local text/folder/merge workbench. Copies in text edit drafts; folder actions require previews. No uploads. Not complete Beyond Compare parity.",
                 ),
             },
           ]}

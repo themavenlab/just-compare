@@ -16,18 +16,34 @@ import { launchNative, selectWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-explorer-"));
 const config = join(root, "config");
-const originalExecutable = fileURLToPath(
-  new URL("../src-tauri/target/debug/compare-desktop.exe", import.meta.url),
-);
+const originalExecutable =
+  process.env.COMPARE_TEST_DESKTOP ??
+  fileURLToPath(
+    new URL("../src-tauri/target/debug/compare-desktop.exe", import.meta.url),
+  );
 const executable = join(root, "program files café", "compare-desktop.exe");
+let registeredExecutable = executable;
 let session;
 const launch = async (args, raw = false) => {
-  const child = spawn(executable, args, {
-    env: { ...process.env, COMPARE_TEST_CONFIG: config },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: raw,
-    ...(raw ? { argv0: `"${executable}"` } : {}),
-  });
+  const child = spawn(
+    raw ? "powershell.exe" : executable,
+    raw
+      ? [
+          "-NoProfile",
+          "-Command",
+          '$ErrorActionPreference = "Stop"; $child = Start-Process -FilePath $env:COMPARE_TEST_LAUNCH -ArgumentList $env:COMPARE_TEST_ARGUMENTS -PassThru -Wait; exit $child.ExitCode',
+        ]
+      : args,
+    {
+      env: {
+        ...process.env,
+        COMPARE_TEST_CONFIG: config,
+        COMPARE_TEST_LAUNCH: registeredExecutable,
+        COMPARE_TEST_ARGUMENTS: args[0] ?? "",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   const timer = setTimeout(() => child.kill(), 15000);
   try {
     const [code] = await once(child, "exit");
@@ -107,9 +123,35 @@ try {
     command,
     "The isolated registry must contain the real quoted launch command",
   );
-  const rawArguments = command
-    .slice(command.indexOf('" shell-select ') + 2)
-    .replace("%1", left);
+  const registeredCommand = command.match(/"([^"]+)" (shell-select "%1")/);
+  assert.ok(registeredCommand);
+  registeredExecutable = registeredCommand[1];
+  const rawArguments = registeredCommand[2].replace("%1", left);
+  assert.ok(
+    !command.includes("\\\\?\\"),
+    "Shell activation must not use a device path",
+  );
+  const readMenus = () => {
+    const registry = execFileSync(
+      join(process.env.SystemRoot, "System32", "reg.exe"),
+      ["query", "HKCU\\Software\\CompareWorkbench\\Tests", "/s"],
+      { encoding: "utf8" },
+    );
+    const blocks = registry.split(/\r?\n(?=HKEY_)/);
+    return ["*", "Directory"].map((type) => {
+      const block = blocks.find((value) =>
+        value
+          .split(/\r?\n/)[0]
+          .endsWith(`\\${type}\\shell\\CompareWorkbench.compare`),
+      );
+      assert.ok(block);
+      return { hidden: block.includes("LegacyDisable"), text: block };
+    });
+  };
+  assert.deepEqual(
+    readMenus().map((menu) => menu.hidden),
+    [true, true],
+  );
   await selectWorkspace(page, "text");
   const draft = workspace().getByRole("textbox", {
     name: "Left text",
@@ -120,6 +162,11 @@ try {
   await launch([rawArguments], true);
   await page.getByText(/Selected for Compare:/).waitFor();
   assert.equal(await page.getByRole("tab").count(), 1);
+  assert.deepEqual(
+    readMenus().map((menu) => menu.hidden),
+    [false, true],
+  );
+  assert.ok(readMenus()[0].text.includes("Compare to left && café %.txt"));
   await launch(["shell-compare", right]);
   await workspace()
     .getByRole("heading", { name: "1 changed regions", exact: true })
@@ -146,6 +193,12 @@ try {
     .filter({ hasText: /cannot find|not find/i })
     .waitFor();
   await launch(["shell-select", leftFolder]);
+  await page.getByText(/Selected for Compare:.*left folder/).waitFor();
+  assert.deepEqual(
+    readMenus().map((menu) => menu.hidden),
+    [true, false],
+  );
+  assert.ok(readMenus()[1].text.includes("Compare to left folder"));
   await launch(["shell-compare", rightFolder]);
   await workspace().locator('.folder-row[data-relative="file.txt"]').waitFor();
   await idle();
@@ -175,7 +228,13 @@ try {
     );
   });
   await idle();
+  await session.call("clear_shell_selection");
+  assert.deepEqual(
+    readMenus().map((menu) => menu.hidden),
+    [true, true],
+  );
   await launch(["shell-select", left]);
+  await page.getByText(/Selected for Compare:.*left & café %\.txt/).waitFor();
   await session.close();
   // Cold startup revalidates the persisted selection and automatically compares.
   session = await launchNative(config, ["shell-compare", right], {

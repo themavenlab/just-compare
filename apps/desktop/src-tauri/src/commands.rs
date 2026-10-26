@@ -1014,7 +1014,12 @@ pub async fn shell_action(
       .ok_or("Missing configuration ancestor.")?;
     compare_fs::checked_path(ancestor, false).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&config).map_err(|e| e.to_string())?;
-    compare_fs::shell::request(&config, &args).map_err(|e| e.to_string())
+    let result = compare_fs::shell::request(&config, &args).map_err(|e| e.to_string())?;
+    if matches!(result, compare_fs::shell::ShellAction::Selected { .. }) {
+      let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+      compare_fs::shell::refresh_registration(&executable, &config).map_err(|e| e.to_string())?;
+    }
+    Ok(result)
   })
   .await
 }
@@ -1025,7 +1030,12 @@ pub async fn clear_shell_selection(app: tauri::AppHandle) -> Result<(), String> 
     .parent()
     .ok_or("Missing configuration directory.")?
     .to_owned();
-  worker(move || compare_fs::shell::clear_selection(&config).map_err(|e| e.to_string())).await
+  worker(move || {
+    compare_fs::shell::clear_selection(&config).map_err(|e| e.to_string())?;
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    compare_fs::shell::refresh_registration(&executable, &config).map_err(|e| e.to_string())
+  })
+  .await
 }
 
 #[tauri::command]
@@ -1034,20 +1044,26 @@ pub async fn explorer_integration(
   app: tauri::AppHandle,
 ) -> Result<bool, String> {
   let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-  worker(move || compare_fs::shell::registration(&executable, enabled).map_err(|e| e.to_string()))
-    .await
-    .and_then(|installed| {
-      if enabled == Some(false) {
-        let config = settings_path(&app)?
-          .parent()
-          .ok_or("Missing configuration directory.")?
-          .to_owned();
-        if config.exists() {
-          compare_fs::shell::clear_selection(&config).map_err(|e| e.to_string())?;
-        }
+  let config = settings_path(&app)?
+    .parent()
+    .ok_or("Missing configuration directory.")?
+    .to_owned();
+  worker(move || {
+    compare_fs::shell::registration(&executable, &config, enabled).map_err(|e| e.to_string())
+  })
+  .await
+  .and_then(|installed| {
+    if enabled == Some(false) {
+      let config = settings_path(&app)?
+        .parent()
+        .ok_or("Missing configuration directory.")?
+        .to_owned();
+      if config.exists() {
+        compare_fs::shell::clear_selection(&config).map_err(|e| e.to_string())?;
       }
-      Ok(installed)
-    })
+    }
+    Ok(installed)
+  })
 }
 
 #[tauri::command]

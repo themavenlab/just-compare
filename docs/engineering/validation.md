@@ -123,7 +123,7 @@ Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests,
 
 ### Phase 2A-03 Windows Explorer Commands (Windows/MSVC)
 
-`node apps/desktop/scripts/explorer-regression.mjs` verifies owned HKCU registration, removal, single-item commands, private selection state across restart, argument handoff to the running instance without losing tabs, missing/linked/mixed path rejection, and isolated test-registry safety. CLI waiting launches and native smoke tests also passed.
+`node apps/desktop/scripts/explorer-regression.mjs` verifies owned HKCU registration, removal, single-item commands, private selection state across restart, argument handoff to the running instance without losing tabs, missing/linked/mixed path rejection, and isolated test-registry safety. The updated Explorer suite also passed Windows Shell activation (`Start-Process`) using the executable and quoted arguments read from the isolated registry. It verifies standard drive/UNC launch paths without filesystem device prefixes, hidden compare commands without a selection, type-specific left-selection labels, named compare visibility for matching files/folders, selection updates and clear, owned legacy-verb removal, and refusal of foreign-owned registrations. CLI waiting launches and native smoke tests also passed.
 
 ### Phase 2A-04 Manual-Edit Comparison Refresh (Windows/MSVC)
 

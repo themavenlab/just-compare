@@ -100,7 +100,7 @@ Within a stage, follow the package dependencies below, not merely table order. T
 #### 2A-03: Windows Explorer Comparison Commands
 
 - Explicitly enable or remove per-user commands from the Integration menu; no elevation, default file associations, Explorer DLL, or automatic registration.
-- Register Select for Compare, Compare with Selected, and Compare for files and directories. Static verbs appear in Windows 11's Show more options menu. Compare opens one side; the two-step selection workflow compares a pair. Multi-select invocation and top-level Windows 11 COM commands are not included.
+- Register type-specific Select as left file/folder for compare and a selection-aware Compare to name command for files and directories. Hide the compare command without a left selection or on the opposite item kind. Static verbs appear in Windows 11's Show more options menu; there is no always-visible one-sided Compare verb. Multi-select invocation and top-level Windows 11 COM commands are not included.
 - Validate absolute existing regular files and directories in Rust; reject mixed file/folder pairs, missing paths, links, and unsupported arguments explicitly. Preserve Unicode and quote executable and path arguments without a command shell.
 - Retain one private selected path locally across restarts, never file contents; clear it explicitly or when removing integration. Revalidate on every use.
 - Shell launches append a tab in the running normal app, preserving all drafts. Queue requests during startup or active work and focus the window. Git launches remain separate waiting processes with unchanged completion and exit contracts.
