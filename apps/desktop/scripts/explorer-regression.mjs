@@ -200,6 +200,8 @@ try {
   assert.ok(readMenus()[1].text.includes("Compare to left folder"));
   // Empty folder space passes the open folder through %V.
   assert.ok(readMenus()[2].text.includes("Compare to left folder"));
+  // Explorer omits background verbs that declare MultiSelectModel.
+  assert.ok(!readMenus()[2].text.includes("MultiSelectModel"));
   assert.match(
     execFileSync(
       join(process.env.SystemRoot, "System32", "reg.exe"),

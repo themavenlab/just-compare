@@ -157,6 +157,7 @@ mod windows {
 
   const VERBS: [&str; 3] = ["select", "compare", "open"];
   // Folder-background verbs receive the open folder through %V rather than %1.
+  // Explorer omits background verbs that declare MultiSelectModel.
   const CLASSES: [(&str, bool, &str); 3] = [
     ("*", false, "%1"),
     ("Directory", true, "%1"),
@@ -318,23 +319,34 @@ mod windows {
             },
           )
         };
+        let background = argument == "%V";
         let hidden = action == "compare"
           && selection.is_none_or(|(_, selected_directory)| *selected_directory != directory);
+        let remove = |key: &RegKey, name: &str| match key.delete_value(name) {
+          Ok(()) => Ok(()),
+          Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+          Err(e) => Err(FileError::from(e)),
+        };
+        let present = |key: &RegKey, name: &str| match key.get_value::<String, _>(name) {
+          Ok(_) => Ok(true),
+          Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+          Err(e) => Err(FileError::from(e)),
+        };
         match enabled {
           Some(true) => {
             let (key, _) = root.create_subkey(&path)?;
             key.set_value("CompareWorkbenchOwner", &executable)?;
             key.set_value("", &title)?;
             key.set_value("Icon", &format!("\"{launch_path}\",0"))?;
-            key.set_value("MultiSelectModel", &"Single")?;
+            if background {
+              remove(&key, "MultiSelectModel")?;
+            } else {
+              key.set_value("MultiSelectModel", &"Single")?;
+            }
             if hidden {
               key.set_value("LegacyDisable", &"")?;
             } else {
-              match key.delete_value("LegacyDisable") {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-              }
+              remove(&key, "LegacyDisable")?;
             }
             let (command_key, _) = key.create_subkey("command")?;
             command_key.set_value("", &command)?;
@@ -350,12 +362,11 @@ mod windows {
                 let command_key = key.open_subkey("command")?;
                 let actual: String = command_key.get_value("")?;
                 let actual_title: String = key.get_value("")?;
-                let actual_hidden = match key.get_value::<String, _>("LegacyDisable") {
-                  Ok(_) => true,
-                  Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                  Err(e) => return Err(e.into()),
-                };
-                actual == command && actual_title == title && actual_hidden == hidden
+                let actual_hidden = present(&key, "LegacyDisable")?;
+                actual == command
+                  && actual_title == title
+                  && actual_hidden == hidden
+                  && present(&key, "MultiSelectModel")? != background
               }
               None => false,
             };
@@ -450,6 +461,23 @@ mod windows {
       assert!(background("compare")
         .get_value::<String, _>("LegacyDisable")
         .is_err());
+      assert!(background("select")
+        .get_value::<String, _>("MultiSelectModel")
+        .is_err());
+      assert!(menu("Directory", "select")
+        .get_value::<String, _>("MultiSelectModel")
+        .is_ok());
+      root
+        .open_subkey_with_flags(
+          format!(r"{base}\Directory\Background\shell\CompareWorkbench.select"),
+          winreg::enums::KEY_SET_VALUE,
+        )
+        .unwrap()
+        .set_value("MultiSelectModel", &"Single")
+        .unwrap();
+      assert!(!registration_at(&root, &base, exe, None, Some(&folder)).unwrap());
+      registration_at(&root, &base, exe, Some(true), Some(&folder)).unwrap();
+      assert!(registration_at(&root, &base, exe, None, Some(&folder)).unwrap());
       let drive = (r"\\?\C:\".into(), true);
       registration_at(&root, &base, exe, Some(true), Some(&drive)).unwrap();
       assert_eq!(
