@@ -118,6 +118,7 @@ From a stable executable location, choose **Integration > Enable Explorer comman
 1. **Select as Left File/Folder:** With no left selection, a file shows **Select as left file for compare**; a folder shows **Select as left folder for compare**. The selected path is saved privately in `shell-selection.json` without modifying disk files, and its basename appears in the owned menu title.
 2. **Compare to Name:** After selecting the left item, another item of the same kind shows **Compare to [name]**, using the selected item's name. This command is hidden for the opposite kind. The pair opens and compares in a new tab within the running application without disturbing dirty drafts.
 3. **Changing or Clearing Selection:** The selection command remains available to replace the left item. Clearing the selection hides **Compare to [name]** again. There is no always-visible one-sided Compare command.
+4. **Folder Background Commands:** Right-clicking empty space inside an open folder shows the same folder commands for that open folder, including drive roots such as `C:\`.
 
 Selecting a left item runs briefly in the background: it records the path, refreshes the menu, and exits without opening or focusing the app. If selection fails, the app opens so the error is visible. Only **Compare to [name]** opens or focuses the app.
 

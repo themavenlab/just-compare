@@ -42,6 +42,15 @@ pub fn request(config: &Path, args: &[String]) -> Result<ShellAction, FileError>
   if !["shell-select", "shell-compare", "shell-open"].contains(&command.as_str()) {
     return Err(FileError("Unknown shell action.".into()));
   }
+  // Explorer passes drive-root backgrounds as "C:\", which argv parsing turns into C:".
+  let restored;
+  let path = match path.trim_end().strip_suffix('"') {
+    Some(prefix) if cfg!(windows) => {
+      restored = format!("{prefix}\\");
+      &restored
+    }
+    _ => path,
+  };
   let (path, directory) = source(path)?;
   let config = checked_path(config, false)?;
   if !config.is_dir() {
@@ -147,6 +156,12 @@ mod windows {
   };
 
   const VERBS: [&str; 3] = ["select", "compare", "open"];
+  // Folder-background verbs receive the open folder through %V rather than %1.
+  const CLASSES: [(&str, bool, &str); 3] = [
+    ("*", false, "%1"),
+    ("Directory", true, "%1"),
+    (r"Directory\Background", true, "%V"),
+  ];
 
   fn shell_path(executable: &str) -> String {
     if let Some(unc) = executable.strip_prefix(r"\\?\UNC\") {
@@ -254,7 +269,7 @@ mod windows {
     selection: Option<&(String, bool)>,
   ) -> Result<bool, FileError> {
     // Check every legacy/current key before changing any of them.
-    for class in ["*", "Directory"] {
+    for (class, _, _) in CLASSES {
       for action in VERBS {
         let path = format!(r"{base}\{class}\shell\CompareWorkbench.{action}");
         match root.open_subkey_with_flags(path, KEY_READ) {
@@ -271,12 +286,11 @@ mod windows {
     }
     let launch_path = shell_path(executable);
     let mut complete = true;
-    for class in ["*", "Directory"] {
-      let directory = class == "Directory";
+    for (class, directory, argument) in CLASSES {
       let kind = if directory { "folder" } else { "file" };
       for action in VERBS {
         let path = format!(r"{base}\{class}\shell\CompareWorkbench.{action}");
-        let command = format!("\"{launch_path}\" shell-{action} \"%1\"");
+        let command = format!("\"{launch_path}\" shell-{action} \"{argument}\"");
         let key = match root.open_subkey_with_flags(&path, KEY_READ) {
           Ok(key) => Some(key),
           Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -296,10 +310,11 @@ mod windows {
           selection.map_or_else(
             || "Compare to selected item".into(),
             |(path, _)| {
-              let name = Path::new(path)
-                .file_name()
-                .unwrap_or_else(|| Path::new(path).as_os_str());
-              format!("Compare to {}", name.to_string_lossy().replace('&', "&&"))
+              let name = Path::new(path).file_name().map_or_else(
+                || shell_path(path),
+                |name| name.to_string_lossy().into_owned(),
+              );
+              format!("Compare to {}", name.replace('&', "&&"))
             },
           )
         };
@@ -419,6 +434,33 @@ mod windows {
           .unwrap(),
         "Compare to left folder"
       );
+      let background = |action: &str| menu(r"Directory\Background", action);
+      assert_eq!(
+        background("select").get_value::<String, _>("").unwrap(),
+        "Select as left folder for compare"
+      );
+      assert_eq!(
+        background("compare")
+          .open_subkey("command")
+          .unwrap()
+          .get_value::<String, _>("")
+          .unwrap(),
+        "\"C:\\Synthetic Folder\\Unicode-é\\compare-desktop.exe\" shell-compare \"%V\""
+      );
+      assert!(background("compare")
+        .get_value::<String, _>("LegacyDisable")
+        .is_err());
+      let drive = (r"\\?\C:\".into(), true);
+      registration_at(&root, &base, exe, Some(true), Some(&drive)).unwrap();
+      assert_eq!(
+        background("compare").get_value::<String, _>("").unwrap(),
+        r"Compare to C:\"
+      );
+      registration_at(&root, &base, exe, Some(true), Some(&selected)).unwrap();
+      assert!(background("compare")
+        .get_value::<String, _>("LegacyDisable")
+        .is_ok());
+      registration_at(&root, &base, exe, Some(true), Some(&folder)).unwrap();
       let (legacy, _) = root
         .create_subkey(format!(r"{base}\*\shell\CompareWorkbench.open"))
         .unwrap();
@@ -471,6 +513,20 @@ mod tests {
     assert!(request(root.path(), &args("shell-compare", root.path())).is_err());
     assert!(request(root.path(), &args("shell-open", Path::new("relative"))).is_err());
     assert!(request(root.path(), &[]).is_err());
+    #[cfg(windows)]
+    {
+      let drive = std::env::current_dir()
+        .unwrap()
+        .ancestors()
+        .last()
+        .unwrap()
+        .to_owned();
+      let escaped = drive.display().to_string().replace('\\', "\" ");
+      assert!(matches!(
+          request(root.path(), &["shell-open".into(), escaped]).unwrap(),
+          ShellAction::Compare { mode, .. } if mode == "folder"
+      ));
+    }
     assert_eq!(std::fs::read_to_string(&right).unwrap(), "right");
     std::fs::remove_file(&left).unwrap();
     assert!(request(root.path(), &args("shell-compare", &right)).is_err());

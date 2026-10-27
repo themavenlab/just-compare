@@ -138,7 +138,7 @@ try {
       { encoding: "utf8" },
     );
     const blocks = registry.split(/\r?\n(?=HKEY_)/);
-    return ["*", "Directory"].map((type) => {
+    return ["*", "Directory", "Directory\\Background"].map((type) => {
       const block = blocks.find((value) =>
         value
           .split(/\r?\n/)[0]
@@ -150,7 +150,7 @@ try {
   };
   assert.deepEqual(
     readMenus().map((menu) => menu.hidden),
-    [true, true],
+    [true, true, true],
   );
   await selectWorkspace(page, "text");
   const draft = workspace().getByRole("textbox", {
@@ -162,7 +162,7 @@ try {
   await launch([rawArguments], true);
   assert.deepEqual(
     readMenus().map((menu) => menu.hidden),
-    [false, true],
+    [false, true, true],
   );
   assert.equal(await page.getByRole("tab").count(), 1);
   assert.equal(await page.getByText(/Selected for Compare:/).count(), 0);
@@ -195,9 +195,26 @@ try {
   await launch(["shell-select", leftFolder]);
   assert.deepEqual(
     readMenus().map((menu) => menu.hidden),
-    [true, false],
+    [true, false, false],
   );
   assert.ok(readMenus()[1].text.includes("Compare to left folder"));
+  // Empty folder space passes the open folder through %V.
+  assert.ok(readMenus()[2].text.includes("Compare to left folder"));
+  assert.match(
+    execFileSync(
+      join(process.env.SystemRoot, "System32", "reg.exe"),
+      [
+        "query",
+        "HKCU\\Software\\CompareWorkbench\\Tests",
+        "/s",
+        "/f",
+        "%V",
+        "/d",
+      ],
+      { encoding: "utf8" },
+    ),
+    /shell-compare "%V"/,
+  );
   await launch(["shell-compare", rightFolder]);
   await workspace().locator('.folder-row[data-relative="file.txt"]').waitFor();
   await idle();
@@ -230,7 +247,7 @@ try {
   await session.call("clear_shell_selection");
   assert.deepEqual(
     readMenus().map((menu) => menu.hidden),
-    [true, true],
+    [true, true, true],
   );
   await session.close();
   // Selection with no running app must exit without starting a window.

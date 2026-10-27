@@ -11,7 +11,7 @@ The portable desktop has no installer or app identity. Windows supports static p
 ## Decision
 
 - Rust filesystem code owns registration and one persisted selected path. React provides explicit enable/remove/status/clear commands and opens new tabs.
-- Use quoted static verbs under HKCU Software\Classes for `*` and `Directory`, each with MultiSelectModel=Single and an executable ownership marker. Never invoke a command shell, change default associations or require elevation.
+- Use quoted static verbs under HKCU Software\Classes for `*`, `Directory`, and `Directory\Background` (empty folder space, passing the open folder via `%V`), each with MultiSelectModel=Single and an executable ownership marker. Never invoke a command shell, change default associations or require elevation.
 - Only Select as left file/folder for compare is visible without a selection. Selection updates the matching class's Compare to name title and visibility; clear hides both compare verbs. Remove the original one-sided open verb on re-enable. Use LegacyDisable and SHChangeNotify rather than adding an Explorer DLL. This state refresh is application-driven, not an Explorer-time watcher for external renames/deletions.
 - Left selection is windowless: before Tauri or singleton handoff starts, the executable persists the selection in Tauri's resolved config directory, refreshes owned registration and exits. Failures fall through to the normal app so they are visible. Only compare/open launches create or focus a window.
 - Keep canonical executable identity for key ownership, but use ordinary drive/UNC paths in launch commands and icons. Filesystem device prefixes such as `\\?\` are not shell-activation paths.
