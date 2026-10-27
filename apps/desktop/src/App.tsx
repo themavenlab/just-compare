@@ -618,6 +618,30 @@ export function App() {
               run: () => command("redo:right"),
               disabled: !active || blocked || !summaries[active]?.redoRight,
             },
+            {
+              label: "Find...",
+              run: () => command("find"),
+              disabled:
+                !active ||
+                blocked ||
+                tabs.find((tab) => tab.id === active)?.mode !== "text",
+            },
+            {
+              label: "Replace...",
+              run: () => command("replace"),
+              disabled:
+                !active ||
+                blocked ||
+                tabs.find((tab) => tab.id === active)?.mode !== "text",
+            },
+            {
+              label: "Go to Line...",
+              run: () => command("goto"),
+              disabled:
+                !active ||
+                blocked ||
+                tabs.find((tab) => tab.id === active)?.mode !== "text",
+            },
           ]}
         />
         <CommandMenu
@@ -762,7 +786,7 @@ export function App() {
               label: "Keyboard shortcuts",
               run: () =>
                 setInfo(
-                  "Shortcuts: Ctrl+Enter run; Ctrl+S save focused editor; Ctrl+Z undo; Ctrl+Y redo; Alt+Up/Down differences; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
+                  "Shortcuts: Ctrl+Enter run; Ctrl+S save focused editor; Ctrl+Z undo; Ctrl+Y redo; Ctrl+F find; Ctrl+H replace; Ctrl+G go to line; Alt+Up/Down differences; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
                 ),
             },
             {

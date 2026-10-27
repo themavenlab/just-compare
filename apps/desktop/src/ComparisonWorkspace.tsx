@@ -38,6 +38,7 @@ import { FolderRulesDialog } from "./FolderRulesDialog";
 import { FolderView, type FolderSide } from "./FolderView";
 import { LineInspector } from "./LineInspector";
 import { RefinedRegion } from "./RefinedRegion";
+import { TextSearchPanel } from "./TextSearchPanel";
 import { ToolButton } from "./ToolButton";
 import { VirtualList } from "./VirtualList";
 import {
@@ -240,6 +241,16 @@ export function ComparisonWorkspace({
   );
   const [sessionName, setSessionName] = useState("");
   const [sessionError, setSessionError] = useState("");
+  const [searchMode, setSearchMode] = useState<
+    "find" | "replace" | "goto" | null
+  >(null);
+  const [searchSelection, setSearchSelection] = useState<{
+    side: "left" | "right";
+    from: number;
+    to: number;
+    token: number;
+  } | null>(null);
+  const searchToken = useRef(0);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [profileSuffix, setProfileSuffix] = useState("");
   const [localPreview, setLocalPreview] = useState<LocalPreview | null>(null);
@@ -307,6 +318,10 @@ export function ComparisonWorkspace({
     folderController.current?.(name);
   }
   function controllersCommand(name: string) {
+    if (name === "find" || name === "replace" || name === "goto") {
+      setSearchMode(name);
+      return;
+    }
     if (name === "sessions" || name === "save-session") {
       setSessionError("");
       setSessionName("");
@@ -467,6 +482,16 @@ export function ComparisonWorkspace({
         future: [],
       },
     }));
+  }
+  function navigateText(side: "left" | "right", from: number, to: number) {
+    setTextFilter("all");
+    setSearchSelection({ side, from, to, token: ++searchToken.current });
+  }
+  function replaceDrafts(changes: Partial<Record<"left" | "right", string>>) {
+    for (const side of ["left", "right"] as const) {
+      const text = changes[side];
+      if (text !== undefined && text !== editors[side].text) change(side, text);
+    }
   }
   async function attempt(operation: () => Promise<void>) {
     if (!acquire(tab.id)) {
@@ -746,6 +771,19 @@ export function ComparisonWorkspace({
     }, 150);
     return () => window.clearTimeout(timer);
   }, [pendingEdit, busy, editRefresh]);
+  useEffect(() => {
+    if (!active || mode !== "text") return;
+    const keys = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const key = event.key.toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && ["f", "h", "g"].includes(key)) {
+        event.preventDefault();
+        setSearchMode(key === "h" ? "replace" : key === "g" ? "goto" : "find");
+      }
+    };
+    document.addEventListener("keydown", keys);
+    return () => document.removeEventListener("keydown", keys);
+  }, [active, mode]);
   const changes =
     pendingEdit === null
       ? (spans?.filter((s) => s.kind !== "equal") ?? [])
@@ -1314,7 +1352,10 @@ export function ComparisonWorkspace({
         if (
           name === "sessions" ||
           name === "save-session" ||
-          name === "profiles"
+          name === "profiles" ||
+          name === "find" ||
+          name === "replace" ||
+          name === "goto"
         )
           controllersCommand(name);
         else if (name === "run")
@@ -1611,6 +1652,11 @@ export function ComparisonWorkspace({
                       : "Base text"
                 }
                 onChange={(text) => change(side, text)}
+                selection={
+                  side !== "base" && searchSelection?.side === side
+                    ? searchSelection
+                    : undefined
+                }
                 onSelectLine={
                   mode === "text" && side !== "base" && pendingEdit === null
                     ? (line) => {
@@ -2722,7 +2768,7 @@ export function ComparisonWorkspace({
           </span>
         )}
         <span className="shortcut-hint">
-          Ctrl+Enter: run / Ctrl+S: save focused editor
+          Ctrl+Enter: run / Ctrl+S: save / Ctrl+F: find
         </span>
         {working && cancellableJob && (
           <button
@@ -3095,6 +3141,12 @@ export function ComparisonWorkspace({
               description="Manage comparison-format profiles, not source-code formatting."
               onClick={() => controllersCommand("profiles")}
             />
+            <ToolButton
+              label="Find / Replace"
+              symbol="⌕"
+              description="Search either text pane, replace with preview and Undo, or go to a source line (Ctrl+F)."
+              onClick={() => controllersCommand("find")}
+            />
             <button
               className="primary"
               title="Compare the current drafts (Ctrl+Enter); does not save either file."
@@ -3222,6 +3274,16 @@ export function ComparisonWorkspace({
               </>
             )}
           </div>
+          {searchMode && (
+            <TextSearchPanel
+              texts={{ left: editors.left.text, right: editors.right.text }}
+              mode={searchMode}
+              onModeChange={setSearchMode}
+              onClose={() => setSearchMode(null)}
+              onNavigate={navigateText}
+              onReplace={replaceDrafts}
+            />
+          )}
           {inputs}
           <LineInspector
             row={pendingEdit === null ? detailLine : undefined}

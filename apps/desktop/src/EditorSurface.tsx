@@ -112,6 +112,7 @@ export function EditorSurface({
   onCopyDifference,
   displayMode = "all",
   onSelectLine,
+  selection,
 }: {
   text: string;
   onChange: (text: string) => void;
@@ -130,6 +131,7 @@ export function EditorSurface({
   onCopyDifference?: ((span: DiffSpan) => void) | undefined;
   displayMode?: "all" | "differences" | "same" | "context";
   onSelectLine?: ((line: number) => void) | undefined;
+  selection?: { from: number; to: number; token: number } | undefined;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -241,6 +243,20 @@ export function EditorSurface({
       effects: readonly.current.reconfigure(EditorState.readOnly.of(disabled)),
     });
   }, [disabled]);
+  useEffect(() => {
+    const instance = view.current;
+    if (!instance || !selection) return;
+    const from = Math.min(selection.from, instance.state.doc.length);
+    const to = Math.min(
+      Math.max(selection.to, from),
+      instance.state.doc.length,
+    );
+    instance.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: "center" }),
+    });
+    instance.focus();
+  }, [selection]);
   useEffect(() => {
     const instance = view.current;
     if (!instance) return;

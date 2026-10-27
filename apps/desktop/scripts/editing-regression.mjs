@@ -48,6 +48,104 @@ try {
   await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await regions(0);
   await idle();
+  await workspace
+    .getByRole("button", { name: "Find / Replace", exact: true })
+    .click();
+  await workspace.getByRole("textbox", { name: "Find text" }).fill("three");
+  await workspace
+    .getByRole("button", { name: "Find Next", exact: true })
+    .click();
+  await workspace
+    .getByRole("status")
+    .filter({ hasText: "Match 1 of 2 in the left pane." })
+    .waitFor();
+  assert.equal(
+    await editor("Left").evaluate(() => window.getSelection()?.toString()),
+    "three",
+  );
+  await workspace
+    .getByRole("button", { name: "Find Next", exact: true })
+    .click();
+  await workspace
+    .getByRole("status")
+    .filter({ hasText: "Match 2 of 2 in the right pane." })
+    .waitFor();
+  await workspace.getByRole("tab", { name: "Replace", exact: true }).click();
+  await workspace.getByRole("textbox", { name: "Replace with" }).fill("THREE");
+  await workspace
+    .getByRole("button", { name: "Preview Replace All...", exact: true })
+    .click();
+  const replacementDialog = workspace.getByRole("dialog", {
+    name: "Review Replace All",
+  });
+  await replacementDialog
+    .getByText("Replace 2 matches across both panes.", { exact: false })
+    .waitFor();
+  assert.equal(await replacementDialog.locator("del").count(), 2);
+  await replacementDialog
+    .getByRole("button", { name: "Replace All", exact: true })
+    .click();
+  await idle();
+  assert.match(await editor("Left").innerText(), /THREE/);
+  assert.match(await editor("Right").innerText(), /THREE/);
+  assert.equal(await readFile(left, "utf8"), original);
+  assert.equal(await readFile(right, "utf8"), original);
+  await workspace
+    .getByRole("button", { name: "Undo left", exact: true })
+    .click();
+  await idle();
+  await workspace
+    .getByRole("button", { name: "Undo right", exact: true })
+    .click();
+  await idle();
+  await regions(0);
+  await workspace
+    .getByRole("button", { name: "Redo left", exact: true })
+    .click();
+  await regions(1);
+  await editor("Right").press("Control+y");
+  await page.waitForFunction(() =>
+    document
+      .querySelector('[aria-label="Right text"]')
+      ?.textContent?.includes("THREE"),
+  );
+  await regions(0);
+  await editor("Left").press("Control+z");
+  await regions(1);
+  await editor("Right").press("Control+z");
+  await regions(0);
+  await workspace
+    .getByRole("button", { name: "Close Find and Replace", exact: true })
+    .click();
+  await page.keyboard.press("Control+g");
+  const lineInput = workspace.getByRole("spinbutton", {
+    name: "Go to line number",
+  });
+  await lineInput.fill("99");
+  await workspace.getByRole("button", { name: "Go", exact: true }).click();
+  await workspace
+    .getByRole("alert")
+    .filter({ hasText: "Enter a line number from 1 to 6." })
+    .waitFor();
+  await lineInput.fill("3");
+  await workspace.getByRole("button", { name: "Go", exact: true }).click();
+  await workspace
+    .getByRole("status")
+    .filter({ hasText: "Moved to line 3 in the left pane." })
+    .waitFor();
+  assert.equal(
+    await editor("Left").evaluate((node) => {
+      const selection = window.getSelection();
+      const anchor = selection?.anchorNode;
+      const element =
+        anchor instanceof Element ? anchor : (anchor?.parentElement ?? null);
+      return element?.closest(".cm-line")?.textContent ?? null;
+    }),
+    "three",
+  );
+  await workspace
+    .getByRole("button", { name: "Close Find and Replace", exact: true })
+    .click();
   await editor("Left").locator(".cm-line").nth(2).click();
   await page.keyboard.press("End");
   await page.keyboard.type("X");
@@ -256,7 +354,7 @@ try {
   assert.equal(await readFile(right, "utf8"), original);
   assert.deepEqual(errors, []);
   console.log(
-    "Native editing regression passed: live typing, localized CRLF differences, manual recompare, superseded responses, insertion alignment, Undo, explicit errors, original EOL significance and read-only sources.",
+    "Native editing/search regression passed: left/right search, replace preview and Undo/Redo, line navigation/errors, live typing and refresh, superseded responses, insertion alignment, original EOL significance and unchanged source files.",
   );
 } finally {
   if (session) await session.close();

@@ -6,11 +6,13 @@
 
 mod comparison;
 mod encoding;
+mod search;
 pub use comparison::{
   compare, compare_classified, compare_with_rules, intraline, ClassifiedSpan, CompareError,
   CompareOptions, DiffKind, DiffSpan, IntralineSpan, UnimportantRule, WorkControl,
 };
 pub use encoding::{decode, DecodedText, TextEncoding, TextError};
+pub use search::{find_matches, SearchMatch, SearchOptions};
 
 /// The exact terminator of a logical line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

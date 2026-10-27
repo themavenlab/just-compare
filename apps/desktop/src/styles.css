@@ -1693,6 +1693,68 @@ body,
   gap: 8px;
   margin-top: 12px;
 }
+.text-search-panel {
+  display: grid;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.search-tabs,
+.search-controls,
+.search-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.search-tabs [aria-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.search-controls label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.search-controls input:not([type="checkbox"]),
+.search-controls select {
+  min-width: 120px;
+  padding: 3px 5px;
+}
+.search-controls input[type="number"] {
+  width: 90px;
+}
+.search-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.replace-preview {
+  display: grid;
+  gap: 8px;
+  max-height: 40vh;
+  overflow: auto;
+  padding-left: 24px;
+}
+.replace-preview li {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.replace-preview del,
+.replace-preview ins {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.replace-preview del {
+  color: var(--danger);
+}
+.replace-preview ins {
+  color: var(--success, #187544);
+}
 .comparison-fold {
   height: 18px;
   line-height: 18px;

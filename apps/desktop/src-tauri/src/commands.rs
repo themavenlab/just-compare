@@ -1,6 +1,7 @@
 use compare_fs::{Document, FolderOptions, Plan, Settings, SyncMode};
 use compare_text::{
-  compare_with_rules, intraline, CompareOptions, DiffKind, UnimportantRule, WorkControl,
+  compare_with_rules, find_matches, intraline, CompareOptions, DiffKind, SearchOptions,
+  UnimportantRule, WorkControl,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -75,6 +76,15 @@ pub struct DocumentView {
   text: String,
   encoding: String,
   bom: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+  start: usize,
+  end: usize,
+  source_start: usize,
+  source_end: usize,
 }
 fn document_view(id: String, document: &Document) -> DocumentView {
   DocumentView {
@@ -223,6 +233,39 @@ pub fn cancel_job(job_id: String, state: State<'_, Arc<Resources>>) -> Result<()
   let flag = jobs.get(&job_id).ok_or("Job is not active.")?;
   flag.store(true, Ordering::Relaxed);
   Ok(())
+}
+
+#[tauri::command]
+pub async fn search_text(
+  text: String,
+  query: String,
+  match_case: bool,
+  whole_word: bool,
+  regex: bool,
+) -> Result<Vec<SearchResult>, String> {
+  worker(move || {
+    find_matches(
+      &text,
+      &query,
+      SearchOptions {
+        match_case,
+        whole_word,
+        regex,
+      },
+    )
+    .map(|matches| {
+      matches
+        .into_iter()
+        .map(|found| SearchResult {
+          start: found.start,
+          end: found.end,
+          source_start: found.source_start,
+          source_end: found.source_end,
+        })
+        .collect()
+    })
+  })
+  .await
 }
 
 #[tauri::command]

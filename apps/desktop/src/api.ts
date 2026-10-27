@@ -264,6 +264,21 @@ interface Commands {
     };
     result: DiffSpan[];
   };
+  search_text: {
+    args: {
+      text: string;
+      query: string;
+      matchCase: boolean;
+      wholeWord: boolean;
+      regex: boolean;
+    };
+    result: {
+      start: number;
+      end: number;
+      sourceStart: number;
+      sourceEnd: number;
+    }[];
+  };
   refine_text: { args: { left: string; right: string }; result: DiffSpan[] };
   open_document: {
     args: { path: string; encoding: string | null };
