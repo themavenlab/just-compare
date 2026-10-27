@@ -17,6 +17,7 @@ The portable desktop has no installer or app identity. Windows supports static p
 - Keep canonical executable identity for key ownership, but use ordinary drive/UNC paths in launch commands and icons. Filesystem device prefixes such as `\\?\` are not shell-activation paths.
 - Adopt Windows-only winreg 0.56.0 (MIT) for safe registry access and tauri-plugin-single-instance 2.5.4 (MIT OR Apache-2.0) for normal-app handoff. Pin both and update both Cargo graphs; no frontend dependency is needed.
 - The Tauri callback queues at most 32 requests and emits a notification; React subscribes before draining, avoiding startup listener races. It appends workspaces, never replaces dirty tabs. Selection IO and comparison remain Rust.
+- Explorer grants foreground rights only to the launched secondary process, so it calls AllowSetForegroundWindow(ASFW_ANY) before handoff; otherwise Windows blocks the running window from raising itself and the new tab stays hidden.
 - Exclude Git diff/merge and CLI waiting launches from singleton routing, preserving process waiting, temporary directory lifetime, cancellation and saved-output exit semantics. The CLI sets COMPARE_WAIT_FOR_CLOSE=1 only in its child environment; direct shell launches do not use that flag.
 - Debug native tests isolate singleton identity by canonical test-config path and registry writes under a test-only HKCU subtree, not Explorer associations. Release builds do not honor test overrides.
 

@@ -40,6 +40,13 @@ fn main() {
       .is_some_and(|arg| arg == "git-diff" || arg == "git-merge");
     let waiting = std::env::var("COMPARE_WAIT_FOR_CLOSE").as_deref() == Ok("1");
     if !is_git && !waiting {
+      // Explorer grants foreground rights to this launch, not to an already-running
+      // instance; share them so the primary can raise itself after handoff.
+      unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(
+          windows_sys::Win32::UI::WindowsAndMessaging::ASFW_ANY,
+        );
+      }
       builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         let result = app
           .state::<std::sync::Arc<commands::Resources>>()
