@@ -25,7 +25,7 @@ try {
   }
   await mkdir(join(root, "config"));
   session = await launchNative(join(root, "config"));
-  const { page } = session;
+  const { page, call } = session;
   const failures = [];
   const text = (side) =>
     page.getByRole("textbox", { name: `${side} text`, exact: true });
@@ -36,8 +36,8 @@ try {
     await page.getByRole("heading", { name: /changed regions/ }).waitFor();
   };
   await selectWorkspace(page, "folder");
-  const leftRoot = `\\\\?\\${left}`;
-  const rightRoot = `\\\\?\\${right}`;
+  const roots = await call("normalize_folder_roots", { left, right });
+  const { left: leftRoot, right: rightRoot } = roots;
   await page
     .getByRole("combobox", { name: "left path", exact: true })
     .fill(leftRoot);
@@ -292,10 +292,16 @@ try {
     .getByRole("combobox", { name: "left path", exact: true })
     .fill(boundedLeft);
   await page.getByRole("button", { name: "Open left", exact: true }).click();
+  await page.waitForFunction(
+    () => !document.querySelector(".new-comparisons button")?.disabled,
+  );
   await page
     .getByRole("combobox", { name: "right path", exact: true })
     .fill(boundedRight);
   await page.getByRole("button", { name: "Open right", exact: true }).click();
+  await page.waitForFunction(
+    () => !document.querySelector(".new-comparisons button")?.disabled,
+  );
   await compare();
   await page
     .getByRole("button", { name: "Copy difference 1 to right", exact: true })

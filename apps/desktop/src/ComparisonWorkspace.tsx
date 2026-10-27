@@ -57,6 +57,7 @@ interface Editor {
   document: DocumentView | null;
   path: string;
   history: string[];
+  future: string[];
 }
 const editor = (text = ""): Editor => ({
   text,
@@ -64,6 +65,7 @@ const editor = (text = ""): Editor => ({
   document: null,
   path: "",
   history: [],
+  future: [],
 });
 type Editors = Record<Side, Editor>;
 const noDifferences: DiffSpan[] = [];
@@ -88,7 +90,7 @@ interface WorkspaceProps {
     >,
   ) => void;
   openSession: (session: SavedSession) => void;
-  diskChanged: (paths: string[]) => void;
+  diskChanged: (paths: string[], refreshFolders?: boolean) => void;
   confirmAction: (message: string) => Promise<boolean>;
   confirmGitExit: (id: string) => Promise<boolean>;
   onHome: () => void;
@@ -173,6 +175,7 @@ export function ComparisonWorkspace({
   const [folders, setFolders] = useState<FolderEntry[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
   const [folderStale, setFolderStale] = useState(false);
+  const [pendingFolderRefresh, setPendingFolderRefresh] = useState(false);
   const [staleSides, setStaleSides] = useState<Side[]>([]);
   const [staleOutput, setStaleOutput] = useState(false);
   const [folderRoots, setFolderRoots] = useState({ left: "", right: "" });
@@ -461,6 +464,7 @@ export function ComparisonWorkspace({
         ...previous[side],
         text,
         history: [...previous[side].history.slice(-49), previous[side].text],
+        future: [],
       },
     }));
   }
@@ -525,6 +529,7 @@ export function ComparisonWorkspace({
       document,
       path: document.path,
       history: [],
+      future: [],
     };
     setEditors((prior) => ({
       ...prior,
@@ -589,6 +594,23 @@ export function ComparisonWorkspace({
         ...editors[side],
         text,
         history: editors[side].history.slice(0, -1),
+        future: [...editors[side].future.slice(-49), editors[side].text],
+      },
+    };
+    invalidate();
+    setEditors(inputs);
+    if (mode === "text") await compareInputs(inputs, selected, minorText, true);
+  }
+  async function redoSide(side: Side) {
+    const text = editors[side].future.at(-1);
+    if (text === undefined) return;
+    const inputs = {
+      ...editors,
+      [side]: {
+        ...editors[side],
+        text,
+        history: [...editors[side].history.slice(-49), editors[side].text],
+        future: editors[side].future.slice(0, -1),
       },
     };
     invalidate();
@@ -625,7 +647,7 @@ export function ComparisonWorkspace({
     setEditors(inputs);
     setNotice(`${side} saved.`);
     setStaleSides((prior) => prior.filter((value) => value !== side));
-    diskChanged([document.path]);
+    diskChanged([document.path], true);
     const metadata = await native("path_metadata", { path: document.path });
     setFileMetadata((prior) => ({ ...prior, [side]: metadata }));
     if (mode === "text") await compareInputs(inputs, selected, minorText, true);
@@ -762,6 +784,7 @@ export function ComparisonWorkspace({
           ...editors[destination].history.slice(-49),
           editors[destination].text,
         ],
+        future: [],
       },
     };
     revision.current += 1;
@@ -880,6 +903,19 @@ export function ComparisonWorkspace({
       roots.left && roots.right ? { mode: "folder", ...roots, base: "" } : null,
     );
   }
+  const runPendingFolderRefresh = useEffectEvent(() => {
+    if (!pendingFolderRefresh || mode !== "folder" || globalBusy || !hasScanned)
+      return;
+    void attempt(async () => {
+      setPendingFolderRefresh(false);
+      await scan();
+    });
+  });
+  useEffect(() => {
+    if (!pendingFolderRefresh || globalBusy || !hasScanned) return;
+    const timer = window.setTimeout(() => runPendingFolderRefresh(), 0);
+    return () => window.clearTimeout(timer);
+  }, [pendingFolderRefresh, globalBusy, hasScanned]);
   function folderOptions() {
     return {
       criterion: "content",
@@ -1149,6 +1185,8 @@ export function ComparisonWorkspace({
     output !== outputSaved;
   const undoLeft = !!editors.left.history.length;
   const undoRight = !!editors.right.history.length;
+  const redoLeft = !!editors.left.future.length;
+  const redoRight = !!editors.right.future.length;
   const differenceCount = changes.length;
   const canSaveOutput = mode === "merge" && blocks !== null && unresolved === 0;
   useEffect(() => {
@@ -1158,6 +1196,8 @@ export function ComparisonWorkspace({
       error,
       undoLeft,
       undoRight,
+      redoLeft,
+      redoRight,
       differences: differenceCount,
       canSaveOutput,
       status: working
@@ -1175,6 +1215,8 @@ export function ComparisonWorkspace({
     report,
     undoLeft,
     undoRight,
+    redoLeft,
+    redoRight,
     differenceCount,
     canSaveOutput,
   ]);
@@ -1230,7 +1272,7 @@ export function ComparisonWorkspace({
         setPreview(null);
         setLocalPreview(null);
       },
-      diskChanged: (paths) => {
+      diskChanged: (paths, refreshFolders = false) => {
         const affected = (path: string) =>
           paths.some((changed) => relatedPaths(path, changed));
         const changedSides = (["left", "right", "base"] as const).filter(
@@ -1239,14 +1281,16 @@ export function ComparisonWorkspace({
         if (changedSides.length)
           setStaleSides((prior) => [...new Set([...prior, ...changedSides])]);
         if (affected(outputDocument?.path ?? "")) setStaleOutput(true);
-        if (
+        const affectedFolderRoots =
           mode === "folder" &&
           (affected(folderRoots.left) ||
             affected(folderRoots.right) ||
             affected(nativeFolderRoots.left) ||
-            affected(nativeFolderRoots.right))
-        )
+            affected(nativeFolderRoots.right));
+        if (affectedFolderRoots) {
           setFolderStale(true);
+          if (refreshFolders && hasScanned) setPendingFolderRefresh(true);
+        }
         if (
           affected(folderRoots.left) ||
           affected(folderRoots.right) ||
@@ -1260,9 +1304,10 @@ export function ComparisonWorkspace({
           discardPreview(tab.id);
           setPreview(null);
           setLocalPreview(null);
-          setNotice(
-            "Files changed on disk. Rescan folders or reopen inputs to refresh; drafts are retained.",
-          );
+          if (!refreshFolders || !affectedFolderRoots)
+            setNotice(
+              "Files changed on disk. Rescan folders or reopen inputs to refresh; drafts are retained.",
+            );
         }
       },
       command: (name) => {
@@ -1311,6 +1356,8 @@ export function ComparisonWorkspace({
           else if (action === "save") void attempt(() => saveSide(side));
           else if (action === "undo" && !busy)
             void attempt(() => undoSide(side));
+          else if (action === "redo" && !busy)
+            void attempt(() => redoSide(side));
         }
       },
     });
@@ -1483,6 +1530,14 @@ export function ComparisonWorkspace({
               >
                 Undo
               </button>
+              <button
+                aria-label={`Redo ${side}`}
+                title={`Redo the previous ${side} draft change`}
+                disabled={busy || !e.future.length}
+                onClick={() => void attempt(() => redoSide(side))}
+              >
+                Redo
+              </button>
               <details className="file-options">
                 <summary>More</summary>
                 <div className="toolbar compact">
@@ -1568,6 +1623,9 @@ export function ComparisonWorkspace({
                 }
                 onUndo={() => {
                   if (!busy) void attempt(() => undoSide(side));
+                }}
+                onRedo={() => {
+                  if (!busy) void attempt(() => redoSide(side));
                 }}
                 displayMode={mode === "text" ? textFilter : "all"}
                 differences={

@@ -224,6 +224,8 @@ describe("folder presentation", () => {
       status: "Ready",
       undoLeft: false,
       undoRight: false,
+      redoLeft: false,
+      redoRight: false,
       differences: 0,
       canSaveOutput: false,
     };
@@ -231,6 +233,8 @@ describe("folder presentation", () => {
     expect(sameSummary(summary, { ...summary, dirty: true })).toBe(false);
     expect(sameSummary(summary, { ...summary, undoLeft: true })).toBe(false);
     expect(sameSummary(summary, { ...summary, undoRight: true })).toBe(false);
+    expect(sameSummary(summary, { ...summary, redoLeft: true })).toBe(false);
+    expect(sameSummary(summary, { ...summary, redoRight: true })).toBe(false);
     expect(sameSummary(summary, { ...summary, differences: 1 })).toBe(false);
     expect(sameSummary(summary, { ...summary, canSaveOutput: true })).toBe(
       false,

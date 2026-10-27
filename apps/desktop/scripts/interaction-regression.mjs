@@ -39,6 +39,22 @@ try {
     await text(side).locator(".cm-line").first().waitFor();
     return (await text(side).locator(".cm-line").allTextContents()).join("\n");
   };
+  async function waitForContent(side, expected) {
+    await page.waitForFunction(
+      ({ side, expected }) => {
+        const pane = document.querySelector(
+          `.workspace-slot[aria-hidden="false"] [aria-label="${side} text"]`,
+        );
+        return (
+          pane &&
+          [...pane.querySelectorAll(".cm-line")]
+            .map((line) => line.textContent)
+            .join("\n") === expected
+        );
+      },
+      { side, expected },
+    );
+  }
   const idle = () =>
     page.waitForFunction(
       () =>
@@ -301,8 +317,54 @@ try {
   await text("Right").press("x");
   await text("Right").press("Control+z");
   await restoredDifference();
+  assert.equal(
+    await workspace
+      .getByRole("button", { name: "Redo right", exact: true })
+      .isEnabled(),
+    true,
+  );
+  await text("Right").press("Control+y");
+  await waitForContent("Right", `${rightText}x`);
+  assert.equal(await content("Right"), `${rightText}x`);
+  await workspace
+    .getByRole("button", { name: "Undo right", exact: true })
+    .click();
+  await restoredDifference();
+  await workspace
+    .getByRole("button", { name: "Redo right", exact: true })
+    .click();
+  await waitForContent("Right", `${rightText}x`);
+  assert.equal(await content("Right"), `${rightText}x`);
+  await workspace
+    .getByRole("button", { name: "Undo right", exact: true })
+    .click();
+  await restoredDifference();
   assert.equal(await readFile(join(left, "different.js"), "utf8"), leftText);
   assert.equal(await readFile(join(right, "different.js"), "utf8"), rightText);
+  await workspace
+    .getByRole("button", { name: "Copy difference 1 to right", exact: true })
+    .click();
+  await workspace
+    .getByRole("button", { name: "Save right", exact: true })
+    .click();
+  await folderTab.click();
+  await idle();
+  await workspace.getByRole("button", { name: "All", exact: true }).click();
+  await page.waitForFunction(() => {
+    const row = document.querySelector(
+      '.workspace-slot[aria-hidden="false"] .paired-folder-row[data-relative="different.js"]',
+    );
+    return row?.getAttribute("data-status") === "same";
+  });
+  assert.doesNotMatch(
+    await workspace.locator(".status-bar").innerText(),
+    /Results stale/,
+  );
+  assert.equal(await readFile(join(right, "different.js"), "utf8"), leftText);
+  await page
+    .getByRole("tab")
+    .filter({ hasText: "different.js / different.js" })
+    .click();
   const singleRight = await call("scan_folders", {
     left: "",
     right,

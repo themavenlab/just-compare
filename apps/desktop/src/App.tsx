@@ -108,9 +108,10 @@ export function App() {
     },
     [confirmAction],
   );
-  const diskChanged = useCallback((paths: string[]) => {
+  const diskChanged = useCallback((paths: string[], refreshFolders = false) => {
     for (const [id, controller] of controllers.current)
-      if (id !== operation.current) controller.diskChanged(paths);
+      if (id !== operation.current)
+        controller.diskChanged(paths, refreshFolders);
   }, []);
   const confirmGitExit = useCallback(
     async (id: string) => {
@@ -607,6 +608,16 @@ export function App() {
               run: () => command("undo:right"),
               disabled: !active || blocked || !summaries[active]?.undoRight,
             },
+            {
+              label: "Redo left",
+              run: () => command("redo:left"),
+              disabled: !active || blocked || !summaries[active]?.redoLeft,
+            },
+            {
+              label: "Redo right",
+              run: () => command("redo:right"),
+              disabled: !active || blocked || !summaries[active]?.redoRight,
+            },
           ]}
         />
         <CommandMenu
@@ -751,7 +762,7 @@ export function App() {
               label: "Keyboard shortcuts",
               run: () =>
                 setInfo(
-                  "Shortcuts: Ctrl+Enter run; Ctrl+S save focused editor; Alt+Up/Down differences; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
+                  "Shortcuts: Ctrl+Enter run; Ctrl+S save focused editor; Ctrl+Z undo; Ctrl+Y redo; Alt+Up/Down differences; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
                 ),
             },
             {

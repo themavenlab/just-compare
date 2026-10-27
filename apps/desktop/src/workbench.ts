@@ -19,6 +19,8 @@ export interface WorkspaceSummary {
   error: string;
   undoLeft: boolean;
   undoRight: boolean;
+  redoLeft: boolean;
+  redoRight: boolean;
   differences: number;
   canSaveOutput: boolean;
 }
@@ -29,7 +31,7 @@ export interface WorkspaceController {
   progress: (jobId: string, count: number) => void;
   cancel: () => Promise<void>;
   clearPreview: () => void;
-  diskChanged: (paths: string[]) => void;
+  diskChanged: (paths: string[], refreshFolders?: boolean) => void;
   command: (name: string) => void;
 }
 export function fileName(path: string) {
@@ -69,6 +71,8 @@ export function sameSummary(
     a.error === b.error &&
     a.undoLeft === b.undoLeft &&
     a.undoRight === b.undoRight &&
+    a.redoLeft === b.redoLeft &&
+    a.redoRight === b.redoRight &&
     a.differences === b.differences &&
     a.canSaveOutput === b.canSaveOutput
   );

@@ -98,6 +98,7 @@ export function EditorSurface({
   text,
   onChange,
   onUndo,
+  onRedo,
   label,
   disabled = false,
   gaps = [],
@@ -115,6 +116,7 @@ export function EditorSurface({
   text: string;
   onChange: (text: string) => void;
   onUndo?: () => void;
+  onRedo?: () => void;
   label: string;
   disabled?: boolean;
   gaps?: { line: number; count: number }[] | undefined;
@@ -133,6 +135,7 @@ export function EditorSurface({
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
   const undoCallback = useRef(onUndo);
+  const redoCallback = useRef(onRedo);
   const lineCallback = useRef(onSelectLine);
   useEffect(() => {
     lineCallback.current = onSelectLine;
@@ -163,6 +166,9 @@ export function EditorSurface({
     undoCallback.current = onUndo;
   }, [onUndo]);
   useEffect(() => {
+    redoCallback.current = onRedo;
+  }, [onRedo]);
+  useEffect(() => {
     if (!element.current) return;
     const instance = new EditorView({
       parent: element.current,
@@ -177,6 +183,14 @@ export function EditorSurface({
                 run: () => {
                   if (!undoCallback.current) return false;
                   undoCallback.current();
+                  return true;
+                },
+              },
+              {
+                key: "Mod-y",
+                run: () => {
+                  if (!redoCallback.current) return false;
+                  redoCallback.current();
                   return true;
                 },
               },
