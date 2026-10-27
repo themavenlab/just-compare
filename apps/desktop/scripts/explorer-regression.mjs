@@ -160,12 +160,12 @@ try {
   await draft.locator(".cm-line").first().waitFor();
   await draft.fill("unsaved original draft");
   await launch([rawArguments], true);
-  await page.getByText(/Selected for Compare:/).waitFor();
-  assert.equal(await page.getByRole("tab").count(), 1);
   assert.deepEqual(
     readMenus().map((menu) => menu.hidden),
     [false, true],
   );
+  assert.equal(await page.getByRole("tab").count(), 1);
+  assert.equal(await page.getByText(/Selected for Compare:/).count(), 0);
   assert.ok(readMenus()[0].text.includes("Compare to left && café %.txt"));
   await launch(["shell-compare", right]);
   await workspace()
@@ -193,7 +193,6 @@ try {
     .filter({ hasText: /cannot find|not find/i })
     .waitFor();
   await launch(["shell-select", leftFolder]);
-  await page.getByText(/Selected for Compare:.*left folder/).waitFor();
   assert.deepEqual(
     readMenus().map((menu) => menu.hidden),
     [true, false],
@@ -233,9 +232,13 @@ try {
     readMenus().map((menu) => menu.hidden),
     [true, true],
   );
-  await launch(["shell-select", left]);
-  await page.getByText(/Selected for Compare:.*left & café %\.txt/).waitFor();
   await session.close();
+  // Selection with no running app must exit without starting a window.
+  await launch(["shell-select", left]);
+  assert.match(
+    await readFile(join(config, "shell-selection.json"), "utf8"),
+    /left & café %\.txt/,
+  );
   // Cold startup revalidates the persisted selection and automatically compares.
   session = await launchNative(config, ["shell-compare", right], {
     desktop: executable,

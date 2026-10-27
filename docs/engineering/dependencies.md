@@ -26,6 +26,7 @@ This document tracks approved direct dependencies, licensing terms, and transiti
 | **tauri-plugin-dialog** | Native file picker and confirmation dialogs | MIT OR Apache-2.0 |
 | **winreg (0.56.0, Windows only)** | Owned, opt-in per-user Windows Explorer context menu registration | MIT |
 | **tauri-plugin-single-instance (2.5.4, Windows only)** | Queued normal-app shell launch handoff, excluding Git waiting launches | MIT OR Apache-2.0 |
+| **dirs (7.0.0, Windows only, already in Tauri graph)** | Windowless Explorer selection resolves Tauri config directory | MIT OR Apache-2.0 |
 | **WebView2Loader.dll (1.0.3800.47)** | GNU Windows desktop loader companion | Microsoft Redistributable License |
 
 ---
