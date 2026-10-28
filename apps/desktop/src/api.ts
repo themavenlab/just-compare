@@ -285,6 +285,7 @@ interface Commands {
     result: DocumentView;
   };
   close_document: { args: { id: string }; result: void };
+  document_changed: { args: { id: string }; result: boolean };
   save_document: {
     args: {
       id: string | null;

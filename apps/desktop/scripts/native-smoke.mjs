@@ -490,7 +490,9 @@ try {
     convertUtf8: false,
   });
   assert.equal(await readFile(leftFile, "utf8"), "edited\r\n");
+  assert.equal(await call("document_changed", { id: saved.id }), false);
   await writeFile(leftFile, "external\r\n");
+  assert.equal(await call("document_changed", { id: saved.id }), true);
   await assert.rejects(
     call("save_document", {
       id: saved.id,
@@ -828,6 +830,45 @@ try {
   await page.getByRole("button", { name: "Scan folders", exact: true }).click();
   await folderList.getByText("copy.txt", { exact: true }).first().waitFor();
   assert.equal(await page.getByRole("alert").count(), 0);
+  await writeFile(
+    join(leftFolder, "external-recheck.txt"),
+    "external folder update",
+  );
+  await page.getByRole("button", { name: "Actions", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Recheck disk", exact: true })
+    .click();
+  await page.waitForFunction(
+    () => !document.querySelector(".new-comparisons button")?.disabled,
+  );
+  assert.match(
+    await page
+      .locator('.workspace-slot[aria-hidden="false"] .result-summary')
+      .last()
+      .innerText(),
+    /folder results may be stale/,
+  );
+  assert.equal(
+    await folderList
+      .locator('.folder-row[data-relative="external-recheck.txt"]')
+      .count(),
+    0,
+    "Folder recheck must retain the old listing until a scan refreshes it.",
+  );
+  await page.getByRole("button", { name: "Scan folders", exact: true }).click();
+  await folderList
+    .locator('.folder-row[data-relative="external-recheck.txt"]')
+    .waitFor();
+  await page.waitForFunction(
+    () => !document.querySelector(".new-comparisons button")?.disabled,
+  );
+  assert.doesNotMatch(
+    await page
+      .locator('.workspace-slot[aria-hidden="false"] .result-summary')
+      .last()
+      .innerText(),
+    /stale/,
+  );
   for (const width of [1100, 900, 640]) {
     await page.setViewportSize({ width, height: 800 });
     assert.equal(
@@ -898,7 +939,7 @@ try {
     "base\n",
   );
   console.log(
-    "PASS: native text/limits, CRLF and UTF-16 saves, stale-save rejection, folder scan/sync/stale/consumed previews, merge/conflicts, settings persistence/corruption, and folder UI.",
+    "PASS: native text/limits, CRLF and UTF-16 saves, exact stale-save/recheck checks, folder recheck/scan/sync/stale/consumed previews, merge/conflicts, settings persistence/corruption, and folder UI.",
   );
 } finally {
   if (session) await session.close();

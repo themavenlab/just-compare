@@ -332,6 +332,23 @@ pub fn close_document(id: String, state: State<'_, Arc<Resources>>) -> Result<()
 }
 
 #[tauri::command]
+pub async fn document_changed(
+  id: String,
+  state: State<'_, Arc<Resources>>,
+) -> Result<bool, String> {
+  let resources = state.inner().clone();
+  worker(move || {
+    let documents = resources.documents.lock().map_err(|e| e.to_string())?;
+    documents
+      .get(&id)
+      .ok_or("Document is closed.")?
+      .has_changed()
+      .map_err(|e| e.to_string())
+  })
+  .await
+}
+
+#[tauri::command]
 pub async fn save_document(
   id: Option<String>,
   text: String,

@@ -70,6 +70,12 @@ const editor = (text = ""): Editor => ({
 });
 type Editors = Record<Side, Editor>;
 const noDifferences: DiffSpan[] = [];
+interface DiskComparison {
+  side: Side;
+  draft: string;
+  disk: string;
+  spans: DiffSpan[];
+}
 
 interface WorkspaceProps {
   tab: WorkspaceTab;
@@ -186,6 +192,10 @@ export function ComparisonWorkspace({
   const [pendingFolderRefresh, setPendingFolderRefresh] = useState(false);
   const [staleSides, setStaleSides] = useState<Side[]>([]);
   const [staleOutput, setStaleOutput] = useState(false);
+  const [diskChanges, setDiskChanges] = useState<Side[]>([]);
+  const [diskComparison, setDiskComparison] = useState<DiskComparison | null>(
+    null,
+  );
   const [folderRoots, setFolderRoots] = useState({ left: "", right: "" });
   const [diskSpace, setDiskSpace] = useState({ left: "", right: "" });
   const [rootHistory, setRootHistory] = useState({
@@ -329,6 +339,10 @@ export function ComparisonWorkspace({
     folderController.current?.(name);
   }
   function controllersCommand(name: string) {
+    if (name === "recheck-disk") {
+      void attempt(recheckDisk);
+      return;
+    }
     if (name === "find" || name === "replace" || name === "goto") {
       setSearchMode(name);
       return;
@@ -1021,6 +1035,136 @@ export function ComparisonWorkspace({
       roots.left && roots.right ? { mode: "folder", ...roots, base: "" } : null,
     );
   }
+  async function recheckDisk() {
+    if (mode === "folder") {
+      if (!folderRoots.left && !folderRoots.right)
+        throw new Error("Choose a folder before rechecking disk.");
+      if (!hasScanned) {
+        await scan();
+        return;
+      }
+      const roots =
+        folderRoots.left && folderRoots.right
+          ? await native("normalize_folder_roots", folderRoots)
+          : folderRoots;
+      const jobId = crypto.randomUUID();
+      startJob(jobId);
+      const refreshed = await native("scan_folders", {
+        left: roots.left,
+        right: roots.right,
+        options: folderOptions(),
+        rules: folderRules,
+        jobId,
+      });
+      setFolderRoots(roots);
+      setNativeFolderRoots(roots);
+      const changed = JSON.stringify(refreshed) !== JSON.stringify(folders);
+      setFolderStale(changed);
+      if (changed) {
+        discardPreview(tab.id);
+        setPreview(null);
+        setLocalPreview(null);
+        setSelectedFiles([]);
+      }
+      setNotice(
+        changed
+          ? "Folder contents changed on disk. Existing results are retained; scan folders to refresh."
+          : "No folder changes found on disk.",
+      );
+      return;
+    }
+
+    const changed: Side[] = [];
+    for (const side of ["left", "right", "base"] as const) {
+      const document = editors[side].document;
+      if (document && (await native("document_changed", { id: document.id })))
+        changed.push(side);
+    }
+    if (
+      !editors.left.document &&
+      !editors.right.document &&
+      !editors.base.document
+    ) {
+      setStaleSides([]);
+      setDiskChanges([]);
+      setDiskComparison(null);
+      setNotice("There are no open source files to recheck.");
+      return;
+    }
+    if (!changed.length) {
+      setStaleSides([]);
+      setDiskChanges([]);
+      setDiskComparison(null);
+      setNotice("No source file changes found on disk.");
+      return;
+    }
+    setStaleSides(changed);
+    setDiskChanges(changed);
+    setDiskComparison(null);
+    setNotice("Source files changed on disk. Drafts are retained.");
+  }
+  async function compareWithDisk(side: Side) {
+    const source = editors[side];
+    const document = source.document;
+    if (!document) throw new Error(`The ${side} pane has no open source file.`);
+    const disk = await native("open_document", {
+      path: document.path,
+      encoding: document.encoding,
+    });
+    try {
+      const profile = settings.formats.find((format) =>
+        document.path.toLowerCase().endsWith(format.suffix.toLowerCase()),
+      );
+      const options = {
+        ignoreCase: profile?.ignoreCase ?? settings.ignoreCase,
+        ignoreWhitespace:
+          profile?.ignoreWhitespace ?? settings.ignoreWhitespace,
+        ignoreLineEndings:
+          profile?.ignoreLineEndings ?? settings.ignoreLineEndings,
+        patterns: profile?.patterns ?? settings.unimportantPatterns,
+      };
+      const jobId = crypto.randomUUID();
+      startJob(jobId);
+      const spans = await native("compare_text", {
+        left: source.text,
+        right: disk.text,
+        documents: { left: document.id, right: disk.id },
+        jobId,
+        showMinor: minorText,
+        options,
+      });
+      setDiskComparison({
+        side,
+        draft: source.text,
+        disk: disk.text,
+        spans,
+      });
+    } finally {
+      await native("close_document", { id: disk.id });
+    }
+  }
+  async function reloadFromDisk(side: Side) {
+    const source = editors[side];
+    if (!source.path) throw new Error(`The ${side} pane has no source path.`);
+    const loaded = await load(side, source.path);
+    if (!loaded) return;
+    const inputs = { ...latest.current.editors, [side]: loaded };
+    if (mode === "text" && inputs.left.document && inputs.right.document)
+      await compareInputs(inputs, undefined, minorText, true);
+    if (
+      mode === "merge" &&
+      inputs.base.document &&
+      inputs.left.document &&
+      inputs.right.document
+    )
+      await mergeInputs(inputs);
+    setDiskChanges((prior) => prior.filter((value) => value !== side));
+    setDiskComparison(null);
+  }
+  function reviewDiskChange(side: Side) {
+    setDiskChanges((prior) => [...new Set([...prior, side])]);
+    setDiskComparison(null);
+  }
   const runPendingFolderRefresh = useEffectEvent(() => {
     if (!pendingFolderRefresh || mode !== "folder" || globalBusy || !hasScanned)
       return;
@@ -1118,6 +1262,10 @@ export function ComparisonWorkspace({
     action: string,
     destination: "left" | "right" = "right",
   ) {
+    if (folderStale)
+      throw new Error(
+        "Folder results are stale. Scan folders before previewing actions.",
+      );
     const roots = await normalizeFolderRoots();
     if (!(await claimPreview(tab.id))) return;
     setPreview(null);
@@ -1434,6 +1582,7 @@ export function ComparisonWorkspace({
           name === "sessions" ||
           name === "save-session" ||
           name === "save-session-as" ||
+          name === "recheck-disk" ||
           name === "profiles" ||
           name === "find" ||
           name === "replace" ||
@@ -1712,9 +1861,18 @@ export function ComparisonWorkspace({
                   : "LF"}{" "}
               {e.text !== e.original ? "/ unsaved" : ""}
               {staleSides.includes(side)
-                ? " / disk changed; reopen to refresh"
+                ? " / disk changed; draft retained"
                 : ""}
             </p>
+            {staleSides.includes(side) && (
+              <button
+                aria-label={`Review ${side} disk change`}
+                disabled={busy}
+                onClick={() => reviewDiskChange(side)}
+              >
+                Review disk change
+              </button>
+            )}
             <div className="editor-content">
               <span className="sr-only">
                 {side === "left"
@@ -2394,6 +2552,117 @@ export function ComparisonWorkspace({
             }
           }}
         />
+      )}
+      {(diskChanges.length > 0 || diskComparison) && (
+        <WorkspaceDialog
+          title="Source files changed on disk"
+          onClose={() => {
+            setDiskChanges([]);
+            setDiskComparison(null);
+          }}
+        >
+          <div className="session-form">
+            {diskComparison ? (
+              <>
+                <p>
+                  Comparing the current {diskComparison.side} draft with the
+                  current disk snapshot. Neither version was changed.
+                </p>
+                <div className="disk-diff-regions">
+                  {diskComparison.spans
+                    .filter((span) => span.kind !== "equal")
+                    .map((span, index) => {
+                      const draft = textLines(diskComparison.draft)
+                        .slice(span.leftStart, span.leftEnd)
+                        .map((line) => line.content)
+                        .join("\n");
+                      const disk = textLines(diskComparison.disk)
+                        .slice(span.rightStart, span.rightEnd)
+                        .map((line) => line.content)
+                        .join("\n");
+                      return (
+                        <section
+                          className="disk-diff-region"
+                          key={`${span.leftStart}:${span.rightStart}:${index}`}
+                        >
+                          <h3>Changed region {index + 1}</h3>
+                          <div>
+                            <section>
+                              <h4>Draft</h4>
+                              <pre>{draft || "(no lines)"}</pre>
+                            </section>
+                            <section>
+                              <h4>On disk</h4>
+                              <pre>{disk || "(no lines)"}</pre>
+                            </section>
+                          </div>
+                        </section>
+                      );
+                    })}
+                  {!diskComparison.spans.some(
+                    (span) => span.kind !== "equal",
+                  ) && (
+                    <p>
+                      No visible differences under the active comparison rules.
+                      The source snapshot still changed, so saving remains
+                      protected.
+                    </p>
+                  )}
+                </div>
+                <div className="dialog-actions">
+                  <button onClick={() => setDiskComparison(null)}>
+                    Back to changed files
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>
+                  Editor drafts are retained. Choose how to handle each changed
+                  source:
+                </p>
+                {diskChanges.map((side) => (
+                  <section className="disk-change-row" key={side}>
+                    <div>
+                      <strong>{side}</strong>
+                      <span className="metadata">
+                        {editors[side].path}
+                        {editors[side].text !== editors[side].original
+                          ? " — unsaved draft"
+                          : ""}
+                      </span>
+                    </div>
+                    <button
+                      disabled={busy}
+                      onClick={() => void attempt(() => reloadFromDisk(side))}
+                    >
+                      Reload {side} from Disk
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => void attempt(() => compareWithDisk(side))}
+                    >
+                      Compare {side} with Disk
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        setDiskChanges((prior) =>
+                          prior.filter((value) => value !== side),
+                        );
+                        setNotice(
+                          `${side} draft kept. Saving over the changed source is blocked; use Save As or Reload.`,
+                        );
+                      }}
+                    >
+                      Keep {side} Draft
+                    </button>
+                  </section>
+                ))}
+              </>
+            )}
+          </div>
+        </WorkspaceDialog>
       )}
       {folderDialog && (
         <WorkspaceDialog

@@ -119,6 +119,34 @@ impl Document {
     self.decoded.has_bom()
   }
 
+  pub fn has_changed(&self) -> Result<bool, FileError> {
+    let current = match checked_path(&self.path, false) {
+      Ok(path) => path,
+      Err(_error)
+        if matches!(
+            fs::symlink_metadata(&self.path),
+            Err(ref missing) if missing.kind() == std::io::ErrorKind::NotFound
+        ) =>
+      {
+        return Ok(true);
+      }
+      Err(error) => return Err(error),
+    };
+    if current != self.path {
+      return Ok(true);
+    }
+    let metadata = match fs::metadata(&current) {
+      Ok(metadata) => metadata,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+      Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() || metadata.modified()? != self.modified {
+      return Ok(true);
+    }
+    let bytes = read_bounded(&current, 1024 * 1024)?;
+    Ok(fs::metadata(&current)?.modified()? != self.modified || bytes != self.original)
+  }
+
   pub fn restore_endings(&self, edited: &str) -> Result<String, FileError> {
     let old: Vec<_> = compare_text::lines(self.text()).collect();
     let new: Vec<_> = compare_text::lines(edited).collect();
@@ -260,6 +288,21 @@ mod tests {
       document.restore_endings("new\nadded\n").unwrap(),
       "new\r\nadded\r\n"
     );
+  }
+
+  #[test]
+  fn recheck_detects_exact_content_change_and_missing_files() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("input.txt");
+    fs::write(&path, b"original").unwrap();
+    let document = Document::open(&path, None).unwrap();
+    assert!(!document.has_changed().unwrap());
+
+    fs::write(&path, b"modified").unwrap();
+    assert!(document.has_changed().unwrap());
+
+    fs::remove_file(&path).unwrap();
+    assert!(document.has_changed().unwrap());
   }
   #[test]
   fn encoding_is_preserved_and_conversion_is_explicit() {

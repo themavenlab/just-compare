@@ -747,6 +747,11 @@ export function App() {
               run: () => command("next"),
               disabled: !active || blocked || !summaries[active]?.differences,
             },
+            {
+              label: "Recheck disk",
+              run: () => command("recheck-disk"),
+              disabled: !active || blocked,
+            },
           ]}
         />
         <CommandMenu

@@ -266,6 +266,75 @@ try {
   await idle();
   await regions(1);
 
+  await editor("Right").fill(original.replace(/\r\n/g, "\n"));
+  await regions(1);
+  await writeFile(left, "external\r\n");
+  await page.getByRole("button", { name: "Actions", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Recheck disk", exact: true })
+    .click();
+  const diskChanges = workspace.getByRole("dialog", {
+    name: "Source files changed on disk",
+    exact: true,
+  });
+  await diskChanges.waitFor();
+  await diskChanges
+    .getByRole("button", { name: "Compare left with Disk", exact: true })
+    .click();
+  await diskChanges.getByText("On disk", { exact: true }).waitFor();
+  await diskChanges.getByText("external", { exact: true }).waitFor();
+  await diskChanges
+    .getByRole("button", { name: "Back to changed files", exact: true })
+    .click();
+  await diskChanges
+    .getByRole("button", { name: "Keep left Draft", exact: true })
+    .click();
+  assert.match(await editor("Left").innerText(), /recoverable edit/);
+  await workspace
+    .getByRole("button", { name: "Save left", exact: true })
+    .click();
+  await workspace
+    .getByRole("alert")
+    .filter({ hasText: "File changed externally" })
+    .waitFor();
+  assert.equal(await readFile(left, "utf8"), "external\r\n");
+  await workspace
+    .getByRole("button", { name: "Review left disk change", exact: true })
+    .click();
+  await diskChanges
+    .getByRole("button", { name: "Reload left from Disk", exact: true })
+    .click();
+  const discardDraft = page.getByRole("dialog", {
+    name: "Confirm action",
+    exact: true,
+  });
+  await discardDraft.waitFor();
+  await discardDraft
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  assert.match(await editor("Left").innerText(), /recoverable edit/);
+  await diskChanges
+    .getByRole("button", { name: "Reload left from Disk", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Confirm action", exact: true })
+    .getByRole("button", { name: "Confirm", exact: true })
+    .click();
+  await idle();
+  assert.match(await editor("Left").innerText(), /external/);
+  await writeFile(left, original);
+  await page.getByRole("button", { name: "Actions", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Recheck disk", exact: true })
+    .click();
+  await diskChanges.waitFor();
+  await diskChanges
+    .getByRole("button", { name: "Reload left from Disk", exact: true })
+    .click();
+  await idle();
+  await regions(0);
+  assert.match(await editor("Left").innerText(), /three/);
+
   const document = await call("open_document", { path: left, encoding: null });
   try {
     const restored = await call("compare_text", {
@@ -354,7 +423,7 @@ try {
   assert.equal(await readFile(right, "utf8"), original);
   assert.deepEqual(errors, []);
   console.log(
-    "Native editing/search regression passed: left/right search, replace preview and Undo/Redo, line navigation/errors, live typing and refresh, superseded responses, insertion alignment, original EOL significance and unchanged source files.",
+    "Native editing regression passed: search/replace/Undo/Redo, line navigation, live comparison, explicit disk recheck, Compare with Disk, Keep Draft, confirmed Reload, and unchanged source files.",
   );
 } finally {
   if (session) await session.close();

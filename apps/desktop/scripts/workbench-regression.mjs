@@ -331,7 +331,7 @@ try {
       .locator(".metadata")
       .allTextContents()
       .then((values) => values.join(" ")),
-    /disk changed; reopen to refresh/,
+    /disk changed; draft retained/,
   );
   await compare();
   assert.match(
@@ -339,7 +339,7 @@ try {
       .locator(".metadata")
       .allTextContents()
       .then((values) => values.join(" ")),
-    /disk changed; reopen to refresh/,
+    /disk changed; draft retained/,
   );
   await workspace
     .getByRole("button", { name: "Open right", exact: true })
@@ -353,7 +353,7 @@ try {
       })
       .locator(".metadata")
       .innerText(),
-    /disk changed; reopen to refresh/,
+    /disk changed; draft retained/,
   );
   assert.equal(
     (await text("Right").locator(".cm-line").allTextContents()).join("\n"),

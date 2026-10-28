@@ -81,6 +81,7 @@ fn main() {
       commands::open_document,
       commands::open_git_output,
       commands::close_document,
+      commands::document_changed,
       commands::save_document,
       commands::merge_text,
       commands::scan_folders,
@@ -130,38 +131,6 @@ fn main() {
 
 #[cfg(windows)]
 fn select_without_window(identifier: &str) -> Result<bool, String> {
-  let args: Vec<String> = std::env::args().skip(1).collect();
-  if args.len() != 2 || args[0] != "shell-select" {
-    return Ok(false);
-  }
-  #[cfg(debug_assertions)]
-  let test_config = std::env::var_os("COMPARE_TEST_CONFIG");
-  #[cfg(not(debug_assertions))]
-  let test_config: Option<std::ffi::OsString> = None;
-  // Must match the directory resolved by commands::settings_path.
-  let config = match test_config {
-    Some(directory) => {
-      let path = compare_fs::checked_path(std::path::Path::new(&directory), false)
-        .map_err(|e| e.to_string())?;
-      if !path.is_dir() {
-        return Err("Test config must be an existing directory.".into());
-      }
-      path
-    }
-    None => dirs::config_dir()
-      .ok_or("Missing configuration directory.")?
-      .join(identifier),
-  };
-  let ancestor = config
-    .ancestors()
-    .find(|path| path.exists())
-    .ok_or("Missing configuration ancestor.")?;
-  compare_fs::checked_path(ancestor, false).map_err(|e| e.to_string())?;
-  std::fs::create_dir_all(&config).map_err(|e| e.to_string())?;
-  compare_fs::shell::request(&config, &args).map_err(|e| e.to_string())?;
-  let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-  compare_fs::shell::refresh_registration(&executable, &config).map_err(|e| e.to_string())?;
-  Ok(true)
   let args: Vec<String> = std::env::args().skip(1).collect();
   if args.len() != 2 || args[0] != "shell-select" {
     return Ok(false);
