@@ -149,6 +149,7 @@ Unix-specific symlink and backslash tests are configured but not run on Windows.
 `test:acceptance` performs five sequential warm native IPC comparisons, a content scan, and cooperative cancellation, reporting actual machine metadata and timings. A representative debug run on the reference machine:
 
 - **Text:** 968,890 UTF-8 bytes / 20,000 lines per side, one changed line: 138-154 ms native round-trip across five runs.
+- **Live-comparison candidate:** 250,000 UTF-8 bytes / 5,000 lines: 50.6-54.8 ms native round-trip across five runs.
 - **Folders:** 1,000 files per side, 4 KiB each, content-hashed: approximately 1.23 s.
 - **Scan cancellation:** Approximately 22 ms; automated budget below 2.5 s.
 - **Editable alignment:** Matching rows differ by 0 CSS pixels; budget at most 2 px.

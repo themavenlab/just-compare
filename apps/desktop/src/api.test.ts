@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { alignmentGaps, copyRange, textLines } from "./api";
+import {
+  alignmentGaps,
+  copyRange,
+  fitsLiveComparisonBounds,
+  textLines,
+} from "./api";
 
 it("preserves original terminators and does not create phantom lines", () => {
   expect(textLines("a\r\nb\rc\n").map((l) => l.full)).toEqual([
@@ -40,4 +45,10 @@ it("copies original ranges including insertion, deletion and EOL", () => {
   expect(copyRange("a\r\nB\r\n", "a\r\nb\r\n", 1, 2, 1, 2)).toBe("a\r\nB\r\n");
   expect(copyRange("a\nb\n", "a\n", 1, 2, 1, 1)).toBe("a\nb\n");
   expect(copyRange("", "a\n", 0, 0, 0, 1)).toBe("");
+});
+it("bounds automatic comparisons by UTF-8 bytes and logical lines", () => {
+  expect(fitsLiveComparisonBounds("a".repeat(256 * 1024))).toBe(true);
+  expect(fitsLiveComparisonBounds("a".repeat(256 * 1024 + 1))).toBe(false);
+  expect(fitsLiveComparisonBounds("a\n".repeat(5000))).toBe(true);
+  expect(fitsLiveComparisonBounds("a\n".repeat(5001))).toBe(false);
 });

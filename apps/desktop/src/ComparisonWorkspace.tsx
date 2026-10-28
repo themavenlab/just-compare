@@ -14,9 +14,9 @@ import {
   alignmentGaps,
   copyRange,
   defaultFolderRules,
+  fitsLiveComparisonBounds,
   native,
   textLines,
-  type Block,
   type DocumentView,
   type FolderEntry,
   type FolderRules,
@@ -330,6 +330,9 @@ export function ComparisonWorkspace({
   const initialized = useRef(false);
   const revision = useRef(0);
   const activeJob = useRef<string | null>(null);
+  const liveComparisonJob = useRef<string | null>(null);
+  const liveCancellation = useRef<Promise<void> | null>(null);
+  const hasCompared = useRef(false);
   const [cancellableJob, setCancellableJob] = useState<string | null>(null);
   function startJob(id: string) {
     activeJob.current = id;
@@ -361,6 +364,24 @@ export function ComparisonWorkspace({
     },
     [setLog, updateError],
   );
+  async function cancelLiveComparison() {
+    const jobId = liveComparisonJob.current;
+    if (!jobId) {
+      if (liveCancellation.current) await liveCancellation.current;
+      return;
+    }
+    liveComparisonJob.current = null;
+    const cancellation = native("cancel_job", { jobId }).catch((failure) => {
+      if (errorMessage(failure) !== "Job is not active.") throw failure;
+    });
+    liveCancellation.current = cancellation;
+    try {
+      await cancellation;
+    } finally {
+      if (liveCancellation.current === cancellation)
+        liveCancellation.current = null;
+    }
+  }
   function folderCommand(name: string) {
     folderController.current?.(name);
   }
@@ -595,9 +616,15 @@ export function ComparisonWorkspace({
     setNotice("");
   }
   function change(side: Side, text: string) {
-    const refresh = mode === "text" && (spans !== null || pendingEdit !== null);
+    const refresh =
+      mode === "text" &&
+      (hasCompared.current || spans !== null || pendingEdit !== null);
     invalidate(!refresh);
     if (refresh) setPendingEdit(revision.current);
+    if (liveComparisonJob.current)
+      void cancelLiveComparison().catch((failure: unknown) =>
+        setError(errorMessage(failure)),
+      );
     setEditors((previous) => ({
       ...previous,
       [side]: {
@@ -812,6 +839,9 @@ export function ComparisonWorkspace({
   ) {
     const request = ++revision.current;
     const jobId = crypto.randomUUID();
+    await cancelLiveComparison();
+    if (request !== revision.current) return;
+    if (background) liveComparisonJob.current = jobId;
     if (!background) {
       setPendingEdit(null);
       startJob(jobId);
@@ -841,11 +871,17 @@ export function ComparisonWorkspace({
           profile?.ignoreLineEndings ?? settings.ignoreLineEndings,
         patterns: profile?.patterns ?? settings.unimportantPatterns,
       },
-    }).catch((failure: unknown) => {
-      if (request === revision.current) setSpans(null);
-      throw failure;
-    });
+    })
+      .catch((failure: unknown) => {
+        if (request === revision.current) setSpans(null);
+        throw failure;
+      })
+      .finally(() => {
+        if (liveComparisonJob.current === jobId)
+          liveComparisonJob.current = null;
+      });
     if (request === revision.current) {
+      hasCompared.current = true;
       setSpans(result);
       if (afterCopy) {
         const remaining = result.filter((span) => span.kind !== "equal");
@@ -911,6 +947,18 @@ export function ComparisonWorkspace({
     editInFlight.current = true;
     const request = revision.current + 1;
     try {
+      if (
+        !fitsLiveComparisonBounds(editors.left.text) ||
+        !fitsLiveComparisonBounds(editors.right.text)
+      ) {
+        setSpans(null);
+        setRefinement(null);
+        setDetailRow(null);
+        setNotice(
+          "Automatic comparison skipped: each pane is limited to 256 KiB and 5,000 lines. Use Compare to update results.",
+        );
+        return;
+      }
       await compareInputs(editors, undefined, minorText, true, true);
     } catch (failure) {
       if (request === revision.current) setError(errorMessage(failure));

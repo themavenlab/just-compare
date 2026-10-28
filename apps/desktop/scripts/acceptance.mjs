@@ -4,7 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { cpus, release, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { launchNative, selectWorkspace } from "./native-harness.mjs";
+
+async function replaceEditorText(page, editor, text) {
+  await editor.click();
+  await editor.press("Control+A");
+  await page.keyboard.insertText(text);
+}
 
 const root = await mkdtemp(join(tmpdir(), "compare-acceptance-"));
 const config = join(root, "config");
@@ -38,6 +45,37 @@ try {
     assert.equal(spans.filter((span) => span.kind !== "equal").length, 1);
     timings.push(performance.now() - start);
   }
+  const liveCandidate = Array.from(
+    { length: 5000 },
+    (_, i) => `${String(i).padStart(4, "0")} ${"a".repeat(44)}\n`,
+  ).join("");
+  const liveCandidateRight = liveCandidate.replace(
+    `0100 ${"a".repeat(44)}`,
+    `0100 ${"b".repeat(44)}`,
+  );
+  const liveCandidateTimings = [];
+  assert.equal(Buffer.byteLength(liveCandidate), 250_000);
+  for (let i = 0; i < 5; i++) {
+    const start = performance.now();
+    const spans = await call("compare_text", {
+      left: liveCandidate,
+      right: liveCandidateRight,
+      options,
+      jobId: `live-bench-${i}`,
+    });
+    assert.equal(spans.filter((span) => span.kind !== "equal").length, 1);
+    liveCandidateTimings.push(performance.now() - start);
+  }
+  const compareCancellationId = "compare-cancel-bench";
+  const cancelledComparison = call("compare_text", {
+    left: liveCandidate,
+    right: liveCandidateRight,
+    options,
+    jobId: compareCancellationId,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await call("cancel_job", { jobId: compareCancellationId });
+  await assert.rejects(cancelledComparison, /cancelled/);
   const a = join(root, "a"),
     b = join(root, "b");
   await mkdir(a);
@@ -95,17 +133,45 @@ try {
     return Math.abs(line("Left text") - line("Right text"));
   });
   assert.ok(alignment <= 2, `Editable rows differ by ${alignment}px`);
+  const leftEditor = page.getByRole("textbox", {
+    name: "Left text",
+    exact: true,
+  });
+  const rightEditor = page.getByRole("textbox", {
+    name: "Right text",
+    exact: true,
+  });
+  await replaceEditorText(page, leftEditor, "a\nb\nc\nd\n");
+  await replaceEditorText(page, rightEditor, "x\na\nb\ny\nc\nd\n");
+  await page
+    .getByRole("heading", { name: "2 changed regions", exact: true })
+    .waitFor();
   await page
     .getByRole("button", { name: "Go to difference 1", exact: true })
     .focus();
   await page.keyboard.press("Alt+ArrowDown");
   assert.equal(
     await page
-      .getByRole("button", { name: "Go to difference 1", exact: true })
+      .getByRole("button", { name: "Go to difference 2", exact: true })
       .getAttribute("aria-pressed"),
     "true",
   );
-  assert.equal(await page.getByRole("alert").count(), 0);
+  const overLimit = Array.from(
+    { length: 33 },
+    (_, i) => `${String(i).padStart(2, "0")} ${"x".repeat(8000)}`,
+  ).join("\n");
+  assert.ok(Buffer.byteLength(overLimit) > 256 * 1024);
+  await replaceEditorText(page, leftEditor, overLimit);
+  await page
+    .getByText("Automatic comparison skipped:", { exact: false })
+    .waitFor();
+  assert.equal(await page.locator(".cm-editor .diff-line").count(), 0);
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await page
+    .getByRole("heading", { name: "1 changed regions", exact: true })
+    .waitFor();
+  const alerts = await page.getByRole("alert").allTextContents();
+  assert.deepEqual(alerts, [], `Unexpected error alerts: ${alerts.join("; ")}`);
   const memory = JSON.parse(
     execFileSync(
       "powershell",
@@ -126,6 +192,9 @@ try {
         textBytes: Buffer.byteLength(left),
         textLines: 20000,
         compareMs: timings,
+        liveCompareCandidateBytes: Buffer.byteLength(liveCandidate),
+        liveCompareCandidateLines: 5000,
+        liveCompareCandidateMs: liveCandidateTimings,
         folderFilesPerSide: 1000,
         folderBytesPerFile: 4096,
         scanMs,

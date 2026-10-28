@@ -399,6 +399,10 @@ export interface TextLine {
   start: number;
   end: number;
 }
+const liveComparisonMaxBytes = 256 * 1024;
+const liveComparisonMaxLines = 5000;
+const utf8Encoder = new TextEncoder();
+
 export function textLines(text: string): TextLine[] {
   const lines: TextLine[] = [];
   const expression = /([^\r\n]*)(\r\n|\r|\n|$)/g;
@@ -413,6 +417,14 @@ export function textLines(text: string): TextLine[] {
   }
   return lines;
 }
+
+export function fitsLiveComparisonBounds(text: string): boolean {
+  return (
+    utf8Encoder.encode(text).length <= liveComparisonMaxBytes &&
+    textLines(text).length <= liveComparisonMaxLines
+  );
+}
+
 export function copyRange(
   source: string,
   target: string,
