@@ -1,4 +1,4 @@
-import type { FolderRules, Settings } from "./api";
+import type { DraftRecovery, FolderRules, Settings } from "./api";
 
 export type Workflow = "text" | "folder" | "merge";
 export type SavedSession = Settings["sessions"][number];
@@ -12,6 +12,8 @@ export interface WorkspaceTab {
   parent: string | null;
   folderRules?: FolderRules;
   sessionName?: string;
+  recoveryId?: string;
+  recovery?: DraftRecovery;
 }
 export interface WorkspaceSummary {
   title: string;
@@ -34,6 +36,7 @@ export interface WorkspaceController {
   clearPreview: () => void;
   diskChanged: (paths: string[], refreshFolders?: boolean) => void;
   command: (name: string) => void;
+  recoverySnapshot: () => DraftRecovery | null;
 }
 export function fileName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? "";

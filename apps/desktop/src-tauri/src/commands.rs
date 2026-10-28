@@ -1070,6 +1070,78 @@ pub async fn write_settings(settings: Settings, app: tauri::AppHandle) -> Result
   worker(move || compare_fs::save_settings(&path, &settings).map_err(|e| e.to_string())).await
 }
 
+#[tauri::command]
+pub async fn load_recoveries(
+  app: tauri::AppHandle,
+) -> Result<Vec<compare_fs::DraftRecovery>, String> {
+  let path = recovery_path(&app)?;
+  let settings = settings_path(&app)?;
+  worker(move || {
+    if !compare_fs::load_settings(&settings)
+      .map_err(|e| e.to_string())?
+      .recover_drafts
+    {
+      return Err("Draft recovery is disabled.".into());
+    }
+    compare_fs::load_recoveries(&path).map_err(|e| e.to_string())
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn save_recoveries(
+  recoveries: Vec<compare_fs::DraftRecovery>,
+  app: tauri::AppHandle,
+) -> Result<Vec<compare_fs::DraftRecovery>, String> {
+  let path = recovery_path(&app)?;
+  let settings = settings_path(&app)?;
+  worker(move || {
+    if !compare_fs::load_settings(&settings)
+      .map_err(|e| e.to_string())?
+      .recover_drafts
+    {
+      return Err("Draft recovery is disabled.".into());
+    }
+    compare_fs::save_recoveries(&path, &recoveries).map_err(|e| e.to_string())
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn discard_recovery(
+  id: String,
+  app: tauri::AppHandle,
+) -> Result<Vec<compare_fs::DraftRecovery>, String> {
+  let path = recovery_path(&app)?;
+  let settings = settings_path(&app)?;
+  worker(move || {
+    if !compare_fs::load_settings(&settings)
+      .map_err(|e| e.to_string())?
+      .recover_drafts
+    {
+      return Err("Draft recovery is disabled.".into());
+    }
+    compare_fs::discard_recovery(&path, &id).map_err(|e| e.to_string())
+  })
+  .await
+}
+
+#[tauri::command]
+pub async fn set_draft_recovery(enabled: bool, app: tauri::AppHandle) -> Result<Settings, String> {
+  let settings = settings_path(&app)?;
+  let recovery = recovery_path(&app)?;
+  worker(move || {
+    let mut current = compare_fs::load_settings(&settings).map_err(|e| e.to_string())?;
+    if !enabled {
+      compare_fs::clear_recoveries(&recovery).map_err(|e| e.to_string())?;
+    }
+    current.recover_drafts = enabled;
+    compare_fs::save_settings(&settings, &current).map_err(|e| e.to_string())?;
+    Ok(current)
+  })
+  .await
+}
+
 fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
   #[cfg(debug_assertions)]
   if let Some(directory) = std::env::var_os("COMPARE_TEST_CONFIG") {
@@ -1086,6 +1158,13 @@ fn settings_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
       .map_err(|e| e.to_string())?
       .join("settings.json"),
   )
+}
+
+fn recovery_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+  settings_path(app)?
+    .parent()
+    .map(|directory| directory.join("draft-recovery.json"))
+    .ok_or_else(|| "Missing configuration directory.".into())
 }
 
 #[tauri::command]

@@ -70,11 +70,18 @@ Within a stage, follow the package dependencies below, not merely table order. T
 | 2A-05 | Complete Undo/Redo | Typing and region copies have predictable history through pane controls, menus and shortcuts; refresh diffs automatically. Draft history never silently reverses filesystem writes. Depends on 2A-04 lifecycle contract. |
 | 2A-06 | Find, Replace and Go to Line | Search either/both panes; next/previous, case, whole-word and bounded regex options; show replace scope/preview before bulk replacement, support Undo, and navigate valid source lines. Invalid patterns/line numbers report errors. Depends on 2A-05 for replacement. |
 | 2A-07 | Named-session identity and updates | Named tabs, Save versus Save As, rename and organization; explicit duplicate/overwrite handling; persist failures without losing input. Keep definitions separate from drafts, recovery and recent history. |
-| 2A-08 | Draft crash recovery | Explicitly opt into local recovery with documented retention, storage/privacy and discard behavior; simulate interrupted writes/restart. Offer recovery without overwriting sources or automatically reopening private drafts. Requires an approved persistence/safety design. |
+| 2A-08 | Draft crash recovery | Explicitly opt into local recovery with documented retention, storage/privacy and discard behavior; simulate interrupted writes/restart. Offer recovery without overwriting sources or automatically reopening private drafts; follow the conservative safety contract below. |
 | 2A-09 | External-change handling | Detect source changes; offer Reload, Keep Draft or Compare with Disk; mark folder results stale. Preserve drafts and reject stale saves. Define watching versus explicit recheck before implementation; never silently overwrite. |
 | 2A-10 | Keyboard, accessibility and visual consistency | All essential actions keyboard-accessible; visible focus, semantic labels, consistent shortcuts, tooltips and disabled reasons. Validate dialogs, trees, menus and panes in light/dark, high contrast and scaling; no essential mouse-only action. |
 | 2A-11 | Text/merge navigation improvements | Extend existing intraline ranges into editable panes; whitespace/EOL visibility, manual alignment anchors and moved-block detection. Add unresolved-conflict navigation, accept left/right/both and resolution Undo/Redo without bypassing merge validation. Split into individual issues; alignment/move algorithms require their own correctness fixtures. |
 | 2A-12 | Optional live comparison | Debounced comparison for bounded inputs; cancel obsolete work and reject stale results while retaining responsive typing. Explicit Compare remains available. Depends on 2A-04; benchmark before selecting debounce/size thresholds. |
+
+#### 2A-08: Draft Crash Recovery
+
+- Recovery is disabled by default. Enabling it requires confirmation that draft text, merge output, and conflict choices are stored locally, unencrypted, in the app configuration directory; no draft is uploaded or reopened automatically.
+- Persist dirty Text Compare and non-Git 3-Way Merge tabs as atomic, versioned, size-bounded snapshots. Retain each snapshot for at most seven days; support restoring one as an unsaved tab or explicitly discarding it. Disabling recovery requires confirmation and deletes all stored snapshots.
+- Restored panes have no native document handles. Saving them uses Save As and never overwrites the source paths that are retained only as labels.
+- Validate schema, interrupted or corrupt state, expiry, bounds, opt-in migration, restart and restore, source preservation, explicit discard, and disabling. Report storage errors; do not silently erase drafts or fall back to source contents.
 
 #### 2A-01: Recent Folders Where Users Choose Paths
 

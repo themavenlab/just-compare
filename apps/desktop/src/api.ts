@@ -33,6 +33,7 @@ export interface Settings {
   version: number;
   theme: "light" | "dark";
   recent: string[];
+  recoverDrafts: boolean;
   recentFolders?: string[];
   recentComparisons?: RecentComparison[];
   lineDetail?: { collapsed: boolean; height: number };
@@ -62,6 +63,19 @@ export interface Settings {
     patterns: string[];
   }[];
 }
+export interface DraftRecovery {
+  id: string;
+  updatedAt: number;
+  mode: "text" | "merge";
+  leftPath: string;
+  rightPath: string;
+  basePath: string;
+  leftText: string;
+  rightText: string;
+  baseText: string;
+  output: string;
+  choices: Record<number, string>;
+}
 export interface RecentComparison {
   mode: "text" | "folder" | "merge";
   left: string;
@@ -72,6 +86,7 @@ export const defaults: Settings = {
   version: 1,
   theme: "light",
   recent: [],
+  recoverDrafts: false,
   sessions: [],
   ignoreCase: false,
   ignoreWhitespace: false,
@@ -370,6 +385,16 @@ interface Commands {
   };
   read_settings: { args: undefined; result: Settings };
   write_settings: { args: { settings: Settings }; result: void };
+  load_recoveries: { args: undefined; result: DraftRecovery[] };
+  save_recoveries: {
+    args: { recoveries: DraftRecovery[] };
+    result: DraftRecovery[];
+  };
+  discard_recovery: {
+    args: { id: string };
+    result: DraftRecovery[];
+  };
+  set_draft_recovery: { args: { enabled: boolean }; result: Settings };
   launch_arguments: { args: undefined; result: string[] };
   open_git_output: { args: undefined; result: DocumentView | null };
   finish_git_merge: {

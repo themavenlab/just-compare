@@ -17,6 +17,7 @@
     "test:compact": "node scripts/compact-workbench.mjs",
     "test:interactions": "node scripts/interaction-regression.mjs",
     "test:sessions": "node scripts/session-regression.mjs",
+    "test:recovery": "node scripts/recovery-regression.mjs",
     "test:alignment-merge": "node scripts/alignment-merge-regression.mjs",
     "package:windows": "node scripts/package-windows.mjs",
     "tauri": "tauri"

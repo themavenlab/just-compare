@@ -18,6 +18,7 @@ import {
   native,
   textLines,
   type DocumentView,
+  type DraftRecovery,
   type FolderEntry,
   type FolderRules,
   type LocalActionRequest,
@@ -55,6 +56,7 @@ type Side = "left" | "right" | "base";
 interface Editor {
   text: string;
   original: string;
+  recovered: boolean;
   document: DocumentView | null;
   path: string;
   history: string[];
@@ -63,11 +65,19 @@ interface Editor {
 const editor = (text = ""): Editor => ({
   text,
   original: text,
+  recovered: false,
   document: null,
   path: "",
   history: [],
   future: [],
 });
+function recoveredEditor(text: string | undefined, path: string): Editor {
+  return {
+    ...editor(text ?? ""),
+    recovered: text !== undefined,
+    path,
+  };
+}
 type Editors = Record<Side, Editor>;
 const noDifferences: DiffSpan[] = [];
 type Refinement = {
@@ -100,7 +110,14 @@ interface WorkspaceProps {
     paths?: Partial<
       Pick<
         WorkspaceTab,
-        "left" | "right" | "base" | "parent" | "folderRules" | "sessionName"
+        | "left"
+        | "right"
+        | "base"
+        | "parent"
+        | "folderRules"
+        | "sessionName"
+        | "recoveryId"
+        | "recovery"
       >
     >,
   ) => void;
@@ -136,15 +153,18 @@ export function ComparisonWorkspace({
   onHome,
 }: WorkspaceProps) {
   const [editors, setEditors] = useState<Editors>({
-    left: {
-      ...editor(),
-      path: tab.left,
-    },
-    right: {
-      ...editor(),
-      path: tab.right,
-    },
-    base: { ...editor(), path: tab.base },
+    left: recoveredEditor(
+      tab.recovery?.leftText,
+      tab.recovery?.leftPath ?? tab.left,
+    ),
+    right: recoveredEditor(
+      tab.recovery?.rightText,
+      tab.recovery?.rightPath ?? tab.right,
+    ),
+    base: recoveredEditor(
+      tab.recovery?.baseText,
+      tab.recovery?.basePath ?? tab.base,
+    ),
   });
   const mode = tab.mode;
   const [rules, setRules] = useState(sharedSettings);
@@ -312,8 +332,11 @@ export function ComparisonWorkspace({
   >([]);
   const [activeConflict, setActiveConflict] = useState<number | null>(null);
   const conflictElements = useRef<Record<number, HTMLElement | null>>({});
-  const [output, setOutput] = useState("");
+  const [output, setOutput] = useState(tab.recovery?.output ?? "");
   const [outputSaved, setOutputSaved] = useState("");
+  const [outputRecovered, setOutputRecovered] = useState(
+    !!tab.recovery && tab.mode === "merge",
+  );
   const [outputDocument, setOutputDocument] = useState<DocumentView | null>(
     null,
   );
@@ -580,13 +603,33 @@ export function ComparisonWorkspace({
     editors,
     output,
     outputSaved,
+    outputRecovered,
+    choices,
     gitOutput,
     mode,
     busy,
   });
   useEffect(() => {
-    latest.current = { editors, output, outputSaved, gitOutput, mode, busy };
-  }, [editors, output, outputSaved, gitOutput, mode, busy]);
+    latest.current = {
+      editors,
+      output,
+      outputSaved,
+      outputRecovered,
+      choices,
+      gitOutput,
+      mode,
+      busy,
+    };
+  }, [
+    editors,
+    output,
+    outputSaved,
+    outputRecovered,
+    choices,
+    gitOutput,
+    mode,
+    busy,
+  ]);
 
   function invalidate(clearComparison = true) {
     revision.current += 1;
@@ -667,7 +710,7 @@ export function ComparisonWorkspace({
   async function discard(side: Side) {
     const e = latest.current.editors[side];
     return (
-      e.text === e.original ||
+      (!e.recovered && e.text === e.original) ||
       (await confirmAction(`Discard unsaved ${side} edits?`))
     );
   }
@@ -703,6 +746,7 @@ export function ComparisonWorkspace({
     const loaded: Editor = {
       text: document.text,
       original: document.text,
+      recovered: false,
       document,
       path: document.path,
       history: [],
@@ -817,6 +861,7 @@ export function ComparisonWorkspace({
         ...editors[side],
         text: document.text,
         original: document.text,
+        recovered: false,
         document,
         path: document.path,
       },
@@ -1420,9 +1465,10 @@ export function ComparisonWorkspace({
       );
     await scan();
   }
-  async function mergeInputs(inputs = editors) {
+  async function mergeInputs(inputs = editors, restoring = false) {
     if (
       output !== outputSaved &&
+      !restoring &&
       !(await confirmAction("Replace unsaved merge output with a new merge?"))
     )
       return;
@@ -1558,6 +1604,7 @@ export function ComparisonWorkspace({
     setOutputDocument(document);
     setOutput(document.text);
     setOutputSaved(document.text);
+    setOutputRecovered(false);
     setStaleOutput(false);
     setNotice("Merge output saved.");
     diskChanged([document.path]);
@@ -1581,6 +1628,15 @@ export function ComparisonWorkspace({
           await scan({ left: tab.left, right: tab.right });
       } else {
         const inputs = { ...editors };
+        if (tab.recovery) {
+          if (mode === "text") await compareInputs(inputs);
+          if (mode === "merge") {
+            await mergeInputs(inputs, true);
+            setChoices(tab.recovery.choices);
+            setOutput(tab.recovery.output);
+          }
+          return;
+        }
         if (tab.base)
           inputs.base = (await load("base", tab.base)) ?? inputs.base;
         if (tab.left)
@@ -1625,7 +1681,8 @@ export function ComparisonWorkspace({
           ? "3-Way Merge"
           : "Text Compare";
   const dirty =
-    Object.values(editors).some((e) => e.text !== e.original) ||
+    Object.values(editors).some((e) => e.recovered || e.text !== e.original) ||
+    outputRecovered ||
     output !== outputSaved;
   const undoLeft = !!editors.left.history.length;
   const undoRight = !!editors.right.history.length;
@@ -1668,8 +1725,10 @@ export function ComparisonWorkspace({
     register(tab.id, {
       dirty: () =>
         Object.values(latest.current.editors).some(
-          (e) => e.text !== e.original,
-        ) || latest.current.output !== latest.current.outputSaved,
+          (e) => e.recovered || e.text !== e.original,
+        ) ||
+        latest.current.outputRecovered ||
+        latest.current.output !== latest.current.outputSaved,
       dispose: async () => {
         invalidate();
         for (const side of ["left", "right", "base"] as const) {
@@ -1686,6 +1745,37 @@ export function ComparisonWorkspace({
           await native("close_document", { id: outputDocument.id });
           setOutputDocument(null);
         }
+      },
+      recoverySnapshot: (): DraftRecovery | null => {
+        const current = latest.current;
+        if (
+          (mode !== "text" && mode !== "merge") ||
+          current.gitOutput ||
+          !(
+            Object.values(current.editors).some(
+              (e) => e.recovered || e.text !== e.original,
+            ) ||
+            current.outputRecovered ||
+            current.output !== current.outputSaved
+          )
+        )
+          return null;
+        return {
+          id: tab.recoveryId ?? tab.id,
+          updatedAt: 0,
+          mode,
+          leftPath:
+            current.editors.left.document?.path ?? current.editors.left.path,
+          rightPath:
+            current.editors.right.document?.path ?? current.editors.right.path,
+          basePath:
+            current.editors.base.document?.path ?? current.editors.base.path,
+          leftText: current.editors.left.text,
+          rightText: current.editors.right.text,
+          baseText: mode === "merge" ? current.editors.base.text : "",
+          output: mode === "merge" ? current.output : "",
+          choices: mode === "merge" ? current.choices : {},
+        };
       },
       drop: async (paths) => {
         await attempt(async () => {
@@ -1827,10 +1917,14 @@ export function ComparisonWorkspace({
             {mode !== "folder" &&
               `: ${fileName(e.document?.path || e.path) || "Untitled"}`}
           </h3>
-          <span className={e.text !== e.original ? "badge unsaved" : "badge"}>
+          <span
+            className={
+              e.recovered || e.text !== e.original ? "badge unsaved" : "badge"
+            }
+          >
             {mode === "folder"
               ? "Folder"
-              : e.text !== e.original
+              : e.recovered || e.text !== e.original
                 ? "Unsaved"
                 : e.document
                   ? "Saved"

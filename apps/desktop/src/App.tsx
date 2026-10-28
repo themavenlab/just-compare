@@ -1,9 +1,13 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { defaults, native, type Settings } from "./api";
-import { CommandMenu } from "./CommandMenu";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { defaults, native, type DraftRecovery, type Settings } from "./api";
 import { errorMessage } from "./comparison";
 import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
@@ -24,10 +28,45 @@ const workflows = [
   ["folder", "Folder Compare"],
   ["merge", "3-Way Merge"],
 ] as const;
+const recoveryRetentionSeconds = 7 * 24 * 60 * 60;
+
+function recoveryFingerprint(records: DraftRecovery[]) {
+  return JSON.stringify(
+    records
+      .map(
+        ({
+          id,
+          mode,
+          leftPath,
+          rightPath,
+          basePath,
+          leftText,
+          rightText,
+          baseText,
+          output,
+          choices,
+        }) => ({
+          id,
+          mode,
+          leftPath,
+          rightPath,
+          basePath,
+          leftText,
+          rightText,
+          baseText,
+          output,
+          choices,
+        }),
+      )
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  );
+}
 
 export function App() {
   const [settings, setSettings] = useState<Settings>(defaults);
   const [settingsAvailable, setSettingsAvailable] = useState(!isTauri());
+  const [recoveries, setRecoveries] = useState<DraftRecovery[]>([]);
+  const [recoveryReady, setRecoveryReady] = useState(!isTauri());
   const [ready, setReady] = useState(!isTauri());
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const [active, setActive] = useState<string | null>(tabs[0]?.id ?? null);
@@ -58,13 +97,30 @@ export function App() {
     });
   }, []);
   const controllers = useRef(new Map<string, WorkspaceController>());
+  const recoveriesRef = useRef(recoveries);
+  const recoveryFingerprintRef = useRef("");
+  const recoveryWriteAt = useRef(0);
+  const recoveryBusy = useRef(false);
   const operation = useRef<string | null>(null);
   const previewOwner = useRef<string | null>(null);
   const tabStrip = useRef<HTMLDivElement>(null);
-  const latest = useRef({ active, tabs });
+  const latest = useRef({
+    active,
+    tabs,
+    recoverDrafts: settings.recoverDrafts,
+    recoveryReady,
+  });
+  useLayoutEffect(() => {
+    latest.current = {
+      active,
+      tabs,
+      recoverDrafts: settings.recoverDrafts,
+      recoveryReady,
+    };
+  }, [active, tabs, settings.recoverDrafts, recoveryReady]);
   useEffect(() => {
-    latest.current = { active, tabs };
-  }, [active, tabs]);
+    recoveriesRef.current = recoveries;
+  }, [recoveries]);
   const acquire = useCallback((id: string) => {
     if (operation.current) return false;
     operation.current = id;
@@ -79,8 +135,19 @@ export function App() {
   }, []);
   const register = useCallback(
     (id: string, controller: WorkspaceController | null) => {
-      if (controller) controllers.current.set(id, controller);
-      else controllers.current.delete(id);
+      if (controller) {
+        controllers.current.set(id, controller);
+        const recovery = controller.recoverySnapshot();
+        if (recovery) {
+          const pending = recoveriesRef.current.filter(
+            (record) => record.id !== recovery.id,
+          );
+          if (pending.length !== recoveriesRef.current.length) {
+            recoveriesRef.current = pending;
+            setRecoveries(pending);
+          }
+        }
+      } else controllers.current.delete(id);
     },
     [],
   );
@@ -89,6 +156,79 @@ export function App() {
       sameSummary(prior[id], summary) ? prior : { ...prior, [id]: summary },
     );
   }, []);
+  const persistRecoveryRecords = useCallback(
+    async (records: DraftRecovery[], liveIds: Set<string>) => {
+      const fingerprint = recoveryFingerprint(records);
+      if (
+        fingerprint === recoveryFingerprintRef.current &&
+        (liveIds.size === 0 || Date.now() - recoveryWriteAt.current < 60_000)
+      )
+        return;
+      if (recoveryBusy.current)
+        throw new Error(
+          "Draft recovery is already being updated; retry shortly.",
+        );
+      recoveryBusy.current = true;
+      try {
+        const saved = await native("save_recoveries", { recoveries: records });
+        recoveryFingerprintRef.current = recoveryFingerprint(saved);
+        recoveryWriteAt.current = Date.now();
+        const pending = saved.filter((record) => !liveIds.has(record.id));
+        recoveriesRef.current = pending;
+        setRecoveries(pending);
+      } finally {
+        recoveryBusy.current = false;
+      }
+    },
+    [],
+  );
+  const collectRecoveryRecords = useCallback((excludeTabId?: string) => {
+    const now = Date.now() / 1000;
+    const records = new Map(
+      recoveriesRef.current
+        .filter((record) => now - record.updatedAt < recoveryRetentionSeconds)
+        .map((record) => [record.id, record]),
+    );
+    const liveIds = new Set<string>();
+    for (const [tabId, controller] of controllers.current) {
+      if (tabId === excludeTabId) continue;
+      const record = controller.recoverySnapshot();
+      if (record) {
+        records.set(record.id, record);
+        liveIds.add(record.id);
+      }
+    }
+    return {
+      records: [...records.values()].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      ),
+      liveIds,
+    };
+  }, []);
+  useEffect(() => {
+    if (
+      !settings.recoverDrafts ||
+      !settingsAvailable ||
+      !ready ||
+      !recoveryReady
+    )
+      return;
+    const timer = window.setInterval(() => {
+      if (recoveryBusy.current || operation.current) return;
+      const inventory = collectRecoveryRecords();
+      void persistRecoveryRecords(inventory.records, inventory.liveIds).catch(
+        (failure) => setError(errorMessage(failure)),
+      );
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [
+    settings.recoverDrafts,
+    settingsAvailable,
+    ready,
+    recoveryReady,
+    collectRecoveryRecords,
+    persistRecoveryRecords,
+  ]);
   const discardPreview = useCallback((id: string) => {
     if (previewOwner.current === id) previewOwner.current = null;
   }, []);
@@ -133,7 +273,14 @@ export function App() {
       paths: Partial<
         Pick<
           WorkspaceTab,
-          "left" | "right" | "base" | "parent" | "folderRules" | "sessionName"
+          | "left"
+          | "right"
+          | "base"
+          | "parent"
+          | "folderRules"
+          | "sessionName"
+          | "recoveryId"
+          | "recovery"
         >
       > = {},
     ) => {
@@ -214,6 +361,103 @@ export function App() {
     },
     [openTab],
   );
+  async function setDraftRecovery(enabled: boolean) {
+    if (!acquire("draft-recovery")) {
+      setError("Wait for the active operation to finish.");
+      return;
+    }
+    let ownsRecoveryLock = false;
+    try {
+      const prompt = enabled
+        ? "Enable local crash recovery? Unsaved text and non-Git merge drafts will be written to this app's configuration directory for up to seven days. They are not encrypted or uploaded; anyone with access to your OS account can read them."
+        : "Disable crash recovery and delete the locally stored recovery drafts?";
+      if (!(await confirmAction(prompt))) return;
+      if (recoveryBusy.current)
+        throw new Error(
+          "Draft recovery is already being updated; retry shortly.",
+        );
+      recoveryBusy.current = true;
+      ownsRecoveryLock = true;
+      if (enabled) setRecoveryReady(false);
+      const updated = await native("set_draft_recovery", { enabled });
+      setSettings((prior) => ({
+        ...prior,
+        recoverDrafts: updated.recoverDrafts,
+      }));
+      if (enabled) {
+        const stored = await native("load_recoveries");
+        recoveriesRef.current = stored;
+        setRecoveries(stored);
+        recoveryFingerprintRef.current = recoveryFingerprint(stored);
+        setRecoveryReady(true);
+      } else {
+        recoveriesRef.current = [];
+        setRecoveries([]);
+        recoveryFingerprintRef.current = recoveryFingerprint([]);
+        setRecoveryReady(true);
+      }
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      if (ownsRecoveryLock) recoveryBusy.current = false;
+      release("draft-recovery");
+    }
+  }
+  async function retryLoadRecoveries() {
+    if (recoveryBusy.current) return;
+    recoveryBusy.current = true;
+    try {
+      const stored = await native("load_recoveries");
+      recoveriesRef.current = stored;
+      setRecoveries(stored);
+      recoveryFingerprintRef.current = recoveryFingerprint(stored);
+      setRecoveryReady(true);
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      recoveryBusy.current = false;
+    }
+  }
+  async function discardRecovery(id: string) {
+    if (!acquire("discard-recovery")) {
+      setError("Wait for the active operation to finish.");
+      return;
+    }
+    let ownsRecoveryLock = false;
+    try {
+      if (!(await confirmAction("Discard this recovered draft?"))) return;
+      if (recoveryBusy.current)
+        throw new Error(
+          "Draft recovery is already being updated; retry shortly.",
+        );
+      recoveryBusy.current = true;
+      ownsRecoveryLock = true;
+      const stored = await native("discard_recovery", { id });
+      recoveryFingerprintRef.current = recoveryFingerprint(stored);
+      const liveIds = new Set(
+        [...controllers.current.values()]
+          .map((controller) => controller.recoverySnapshot()?.id)
+          .filter((value): value is string => value !== undefined),
+      );
+      const pending = stored.filter((record) => !liveIds.has(record.id));
+      recoveriesRef.current = pending;
+      setRecoveries(pending);
+    } catch (failure) {
+      setError(errorMessage(failure));
+    } finally {
+      if (ownsRecoveryLock) recoveryBusy.current = false;
+      release("discard-recovery");
+    }
+  }
+  function restoreRecovery(record: DraftRecovery) {
+    openTab(record.mode, {
+      left: record.leftPath,
+      right: record.rightPath,
+      base: record.basePath,
+      recoveryId: record.id,
+      recovery: record,
+    });
+  }
   async function changeExplorerIntegration(enabled: boolean | null) {
     if (!acquire("explorer-integration")) {
       setError("Wait for the active operation to finish.");
@@ -286,6 +530,10 @@ export function App() {
         !(await confirmAction("Discard unsaved edits in all tabs and close?"))
       )
         return;
+      if (latest.current.recoverDrafts && latest.current.recoveryReady) {
+        const inventory = collectRecoveryRecords();
+        await persistRecoveryRecords(inventory.records, inventory.liveIds);
+      }
       await getCurrentWindow().destroy();
     } finally {
       release(id);
@@ -318,6 +566,10 @@ export function App() {
         ))
       )
         return;
+      if (settings.recoverDrafts && recoveryReady) {
+        const inventory = collectRecoveryRecords(id);
+        await persistRecoveryRecords(inventory.records, inventory.liveIds);
+      }
       await controller?.dispose();
       discardPreview(id);
       controllers.current.delete(id);
@@ -344,6 +596,16 @@ export function App() {
           if (!disposed) {
             setSettings(initial);
             setSettingsAvailable(true);
+            if (initial.recoverDrafts) {
+              const stored = await native("load_recoveries");
+              if (disposed) return;
+              recoveriesRef.current = stored;
+              setRecoveries(stored);
+              recoveryFingerprintRef.current = recoveryFingerprint(stored);
+            } else {
+              recoveryFingerprintRef.current = recoveryFingerprint([]);
+            }
+            setRecoveryReady(true);
           }
         } catch (failure) {
           if (!disposed) setError(errorMessage(failure));
@@ -987,6 +1249,14 @@ export function App() {
             settings={settings}
             ready={ready && settingsAvailable}
             busy={blocked}
+            recoveries={recoveries.filter(
+              (record) => !tabs.some((tab) => tab.recoveryId === record.id),
+            )}
+            recoveryReady={recoveryReady}
+            onSetRecovery={(enabled) => void setDraftRecovery(enabled)}
+            onRetryRecoveries={() => void retryLoadRecoveries()}
+            onRestoreRecovery={restoreRecovery}
+            onDiscardRecovery={(id) => void discardRecovery(id)}
             update={setSettings}
             openTab={openTab}
             openSession={openSession}

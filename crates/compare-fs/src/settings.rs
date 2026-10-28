@@ -39,6 +39,8 @@ pub struct Settings {
   pub folder_rules: Option<crate::FolderRules>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub content_comparison: Option<ContentComparison>,
+  #[serde(default)]
+  pub recover_drafts: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +141,7 @@ impl Default for Settings {
       formats: Vec::new(),
       folder_rules: None,
       content_comparison: None,
+      recover_drafts: false,
     }
   }
 }
@@ -398,10 +401,12 @@ mod tests {
     let path = root.path().join("settings.json");
     let mut value = serde_json::to_value(Settings::default()).unwrap();
     value.as_object_mut().unwrap().remove("formats");
+    value.as_object_mut().unwrap().remove("recoverDrafts");
     value["sessions"] = serde_json::json!([{"name":"earlier","left":"","right":"","mode":"text"}]);
     std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     let loaded = load_settings(&path).unwrap();
     assert!(loaded.formats.is_empty());
+    assert!(!loaded.recover_drafts);
     assert!(loaded.sessions[0].base.is_empty());
   }
 }

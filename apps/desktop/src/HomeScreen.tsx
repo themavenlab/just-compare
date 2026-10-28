@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Settings } from "./api";
+import type { DraftRecovery, Settings } from "./api";
 import type { SavedSession, Workflow } from "./workbench";
 
 const launchers = [
@@ -58,6 +58,12 @@ export function HomeScreen({
   savePreferences,
   saveSessions,
   saveHistory,
+  recoveries,
+  recoveryReady,
+  onSetRecovery,
+  onRetryRecoveries,
+  onRestoreRecovery,
+  onDiscardRecovery,
 }: {
   settings: Settings;
   ready: boolean;
@@ -73,6 +79,12 @@ export function HomeScreen({
   saveHistory: (
     comparisons: NonNullable<Settings["recentComparisons"]>,
   ) => void;
+  recoveries: DraftRecovery[];
+  recoveryReady: boolean;
+  onSetRecovery: (enabled: boolean) => void;
+  onRetryRecoveries: () => void;
+  onRestoreRecovery: (record: DraftRecovery) => void;
+  onDiscardRecovery: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
@@ -272,6 +284,72 @@ export function HomeScreen({
         >
           Clear comparison history
         </button>
+        <h3>Draft recovery</h3>
+        <div className="home-preferences">
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.recoverDrafts}
+              disabled={busy || !ready}
+              onChange={(event) => onSetRecovery(event.target.checked)}
+            />
+            Keep unsaved drafts for up to 7 days
+          </label>
+          <p className="metadata">
+            Opt-in recovery is stored locally, unencrypted, in this app's
+            configuration folder. It is not uploaded. Anyone with access to your
+            OS account can read it. Restores open unsaved drafts and never write
+            to source files. Records expire after 7 days; limits are 20
+            workspaces and 64 MiB total.
+          </p>
+        </div>
+        {settings.recoverDrafts && !recoveryReady && (
+          <div>
+            <p className="metadata" role="status">
+              Recovery records have not been loaded.
+            </p>
+            <button disabled={busy} onClick={onRetryRecoveries}>
+              Retry loading recoveries
+            </button>
+          </div>
+        )}
+        {settings.recoverDrafts && recoveryReady && (
+          <>
+            <h3>Recoverable drafts</h3>
+            {!recoveries.length && (
+              <p className="metadata">No recoverable drafts.</p>
+            )}
+            {recoveries.map((record) => (
+              <div className="recovery-item" key={record.id}>
+                <p
+                  title={`${record.leftPath} / ${record.rightPath}${record.basePath ? ` / ${record.basePath}` : ""}`}
+                >
+                  {record.mode === "merge" ? "Merge" : "Text"} draft ·{" "}
+                  {record.leftPath.split(/[\\/]/).at(-1) || "Untitled"} /{" "}
+                  {record.rightPath.split(/[\\/]/).at(-1) || "Untitled"}
+                </p>
+                <p className="metadata">
+                  Last saved{" "}
+                  {new Date(record.updatedAt * 1000).toLocaleString()}
+                </p>
+                <div>
+                  <button
+                    disabled={busy}
+                    onClick={() => onRestoreRecovery(record)}
+                  >
+                    Restore draft
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => onDiscardRecovery(record.id)}
+                  >
+                    Discard
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
         <div className="home-preferences">
           <label>
             <input
@@ -309,8 +387,8 @@ export function HomeScreen({
             Toggle theme
           </button>
           <p className="metadata">
-            Session changes persist when you save preferences. File contents and
-            unsaved drafts are not stored.
+            Most preferences persist when saved; drafts are stored only when
+            crash recovery is enabled above.
           </p>
         </div>
       </aside>

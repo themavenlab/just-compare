@@ -1257,6 +1257,19 @@ body,
 .session-item > button:last-child {
   flex-shrink: 0;
 }
+.recovery-item {
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.recovery-item p {
+  margin: 3px 0;
+}
+.recovery-item > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 .home-preferences {
   border-top: 1px solid var(--border);
   padding-top: 8px;
