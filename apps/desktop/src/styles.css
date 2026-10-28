@@ -414,6 +414,41 @@ textarea.rules {
 .cm-editor .diff-selected {
   box-shadow: inset 3px 0 var(--selected);
 }
+.cm-editor .cm-intraline-change {
+  outline: 1px solid var(--selected);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.cm-editor .cm-visible-space {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--muted);
+}
+.cm-editor .cm-visible-tab {
+  border-bottom: 1px dashed var(--muted);
+  background: linear-gradient(
+    90deg,
+    transparent calc(100% - 1px),
+    var(--border) calc(100% - 1px)
+  );
+}
+.cm-visible-eol {
+  color: var(--muted);
+  font-size: 0.75em;
+  user-select: none;
+}
+.diff-move-marker {
+  display: inline-block;
+  color: var(--text);
+  font-size: 0.75em;
+  font-weight: 700;
+  margin-inline-end: 0.4em;
+}
+.cm-editor .diff-moved-from {
+  border-inline-start: 2px dashed var(--selected);
+}
+.cm-editor .diff-moved-to {
+  border-inline-start: 2px double var(--selected);
+}
 .alignment-gap {
   background: repeating-linear-gradient(
     135deg,
@@ -624,6 +659,10 @@ th {
   background: var(--surface);
   padding: 16px;
   margin: 12px 0;
+}
+.conflict-active {
+  outline: 2px solid var(--selected);
+  outline-offset: 2px;
 }
 .conflict pre {
   overflow: auto;
@@ -2198,6 +2237,23 @@ body,
   .cm-editor .diff-selected {
     outline: 1px solid Highlight;
     box-shadow: none;
+  }
+  .cm-editor .cm-intraline-change,
+  .cm-editor .cm-visible-space,
+  .cm-editor .cm-visible-tab,
+  .cm-editor .diff-moved-from,
+  .cm-editor .diff-moved-to {
+    outline-color: Highlight;
+    border-color: Highlight;
+    text-decoration-color: CanvasText;
+  }
+  .cm-visible-eol,
+  .diff-move-marker {
+    color: CanvasText;
+    background: Canvas;
+  }
+  .conflict-active {
+    outline-color: Highlight;
   }
   .difference-rail button {
     border: 1px solid Highlight;

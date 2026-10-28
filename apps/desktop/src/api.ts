@@ -199,6 +199,7 @@ interface CompareOptions {
   ignoreWhitespace: boolean;
   ignoreLineEndings: boolean;
   patterns: string[];
+  alignmentAnchors?: { left: number; right: number }[];
 }
 interface FolderOptions {
   criterion: string;

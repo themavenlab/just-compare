@@ -56,6 +56,42 @@ class FoldedLines extends WidgetType {
   }
 }
 
+class MoveMarker extends WidgetType {
+  constructor(
+    private readonly direction: "from" | "to",
+    private readonly id: number,
+  ) {
+    super();
+  }
+  eq(other: MoveMarker) {
+    return this.direction === other.direction && this.id === other.id;
+  }
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = `diff-move-marker diff-move-${this.direction}`;
+    marker.textContent = this.direction === "from" ? "\u2197" : "\u2199";
+    marker.title = `Moved block ${this.id}: ${this.direction}`;
+    marker.setAttribute("aria-label", marker.title);
+    return marker;
+  }
+}
+
+class EndOfLineMarker extends WidgetType {
+  constructor(private readonly label: string) {
+    super();
+  }
+  eq(other: EndOfLineMarker) {
+    return this.label === other.label;
+  }
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = "cm-visible-eol";
+    marker.textContent = `\u21b5${this.label}`;
+    marker.setAttribute("aria-label", `Line ending ${this.label}`);
+    return marker;
+  }
+}
+
 class CopyArrow extends GutterMarker {
   constructor(
     private readonly destination: "left" | "right",
@@ -111,6 +147,9 @@ export function EditorSurface({
   selectedDifference,
   onCopyDifference,
   displayMode = "all",
+  showWhitespace = false,
+  intralineSpans = [],
+  intralineBaseByte = 0,
   onSelectLine,
   selection,
 }: {
@@ -130,6 +169,9 @@ export function EditorSurface({
   selectedDifference?: DiffSpan | undefined;
   onCopyDifference?: ((span: DiffSpan) => void) | undefined;
   displayMode?: "all" | "differences" | "same" | "context";
+  showWhitespace?: boolean;
+  intralineSpans?: DiffSpan[];
+  intralineBaseByte?: number;
   onSelectLine?: ((line: number) => void) | undefined;
   selection?: { from: number; to: number; token: number } | undefined;
 }) {
@@ -361,10 +403,92 @@ export function EditorSurface({
           side: line < instance.state.doc.lines ? -1 : 1,
         }).range(position);
       });
+    const bytePositions = new Map<number, number>([[0, 0]]);
+    if (intralineSpans.length) {
+      let byteOffset = 0;
+      let editorOffset = 0;
+      for (let index = 0; index < text.length;) {
+        const codePoint = text.codePointAt(index);
+        if (codePoint === undefined) break;
+        const character = String.fromCodePoint(codePoint);
+        const byteWidth =
+          codePoint <= 0x7f
+            ? 1
+            : codePoint <= 0x7ff
+              ? 2
+              : codePoint <= 0xffff
+                ? 3
+                : 4;
+        byteOffset += byteWidth;
+        editorOffset += character.length;
+        bytePositions.set(byteOffset, editorOffset);
+        index += character.length;
+        if (character === "\r" && text[index] === "\n") {
+          byteOffset += 1;
+          bytePositions.set(byteOffset, editorOffset);
+          index += 1;
+        }
+      }
+    }
+    for (const span of intralineSpans) {
+      if (span.kind === "equal") continue;
+      const startByte =
+        intralineBaseByte +
+        (side === "left" ? span.leftStart : span.rightStart);
+      const endByte =
+        intralineBaseByte + (side === "left" ? span.leftEnd : span.rightEnd);
+      const from = bytePositions.get(startByte);
+      const to = bytePositions.get(endByte);
+      if (
+        from !== undefined &&
+        to !== undefined &&
+        to > from &&
+        to <= instance.state.doc.length
+      )
+        decorations.push(
+          Decoration.mark({ class: "cm-intraline-change" }).range(from, to),
+        );
+    }
+    if (showWhitespace) {
+      let whitespaceMarks = 0;
+      for (let number = 1; number <= instance.state.doc.lines; number++) {
+        const line = instance.state.doc.line(number);
+        const content = line.text;
+        const run = /[ \t]+/g;
+        for (const match of content.matchAll(run)) {
+          const from = line.from + (match.index ?? 0);
+          const to = from + match[0].length;
+          decorations.push(
+            Decoration.mark({
+              class: match[0].includes("\t")
+                ? "cm-visible-tab"
+                : "cm-visible-space",
+            }).range(from, to),
+          );
+          whitespaceMarks += 1;
+          if (whitespaceMarks >= 20_000) break;
+        }
+        if (whitespaceMarks >= 20_000) break;
+      }
+      const endings = [...text.matchAll(/\r\n|\r|\n/g)];
+      endings.forEach((match, index) => {
+        if (index >= instance.state.doc.lines) return;
+        const label =
+          match[0] === "\r\n" ? "CRLF" : match[0] === "\r" ? "CR" : "LF";
+        const position = instance.state.doc.line(index + 1).to;
+        decorations.push(
+          Decoration.widget({
+            widget: new EndOfLineMarker(label),
+            side: 1,
+          }).range(position),
+        );
+      });
+    }
     for (const span of differences) {
       if (span.kind === "equal") continue;
       const start = side === "left" ? span.leftStart : span.rightStart;
       const end = side === "left" ? span.leftEnd : span.rightEnd;
+      const moved = span.moved;
       for (
         let line = start;
         line < end && line < instance.state.doc.lines;
@@ -375,10 +499,17 @@ export function EditorSurface({
         decorations.push(
           Decoration.line({
             attributes: {
-              class: `diff-line diff-${span.kind}${span.minor ? " diff-minor" : ""}${span === selectedDifference ? " diff-selected" : ""}`,
+              class: `diff-line diff-${span.kind}${span.minor ? " diff-minor" : ""}${span === selectedDifference ? " diff-selected" : ""}${moved ? ` diff-moved-${moved.direction}` : ""}`,
             },
           }).range(instance.state.doc.line(line + 1).from),
         );
+        if (moved)
+          decorations.push(
+            Decoration.widget({
+              widget: new MoveMarker(moved.direction, moved.id),
+              side: -1,
+            }).range(instance.state.doc.line(line + 1).from),
+          );
       }
     }
     for (const range of hidden) {
@@ -459,6 +590,9 @@ export function EditorSurface({
     disabled,
     copyEnabled,
     displayMode,
+    showWhitespace,
+    intralineSpans,
+    intralineBaseByte,
     selectedLine,
     navigation,
   ]);

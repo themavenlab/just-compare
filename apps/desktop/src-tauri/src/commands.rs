@@ -1,7 +1,7 @@
 use compare_fs::{Document, FolderOptions, Plan, Settings, SyncMode};
 use compare_text::{
-  compare_with_rules, find_matches, intraline, CompareOptions, DiffKind, SearchOptions,
-  UnimportantRule, WorkControl,
+  compare_classified_with_anchors, compare_with_anchors, find_matches, intraline, AlignmentAnchor,
+  CompareOptions, DiffKind, MoveDirection, MovedBlock, SearchOptions, UnimportantRule, WorkControl,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,6 +46,8 @@ pub struct Options {
   ignore_whitespace: bool,
   ignore_line_endings: bool,
   patterns: Vec<String>,
+  #[serde(default)]
+  alignment_anchors: Vec<Anchor>,
 }
 
 #[derive(Serialize)]
@@ -58,6 +60,38 @@ pub struct Span {
   right_end: usize,
   #[serde(skip_serializing_if = "Option::is_none")]
   minor: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  moved: Option<MoveInfo>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveInfo {
+  id: usize,
+  direction: &'static str,
+  counterpart_start: usize,
+  line_count: usize,
+}
+
+impl From<MovedBlock> for MoveInfo {
+  fn from(value: MovedBlock) -> Self {
+    Self {
+      id: value.id,
+      direction: match value.direction {
+        MoveDirection::From => "from",
+        MoveDirection::To => "to",
+      },
+      counterpart_start: value.counterpart_start,
+      line_count: value.line_count,
+    }
+  }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Anchor {
+  left: usize,
+  right: usize,
 }
 fn kind(kind: DiffKind) -> &'static str {
   match kind {
@@ -135,6 +169,14 @@ pub async fn compare_text(
 ) -> Result<Vec<Span>, String> {
   let resources = state.inner().clone();
   let flag = begin(&resources, &job_id)?;
+  let anchors = options
+    .alignment_anchors
+    .into_iter()
+    .map(|anchor| AlignmentAnchor {
+      left: anchor.left,
+      right: anchor.right,
+    })
+    .collect::<Vec<_>>();
   let snapshots = resources.clone();
   let result = worker(move || {
     let restore = |text: String, id: Option<String>| -> Result<String, String> {
@@ -170,11 +212,12 @@ pub async fn compare_text(
       ignore_line_endings: options.ignore_line_endings,
     };
     if show_minor == Some(true) {
-      return compare_text::compare_classified(
+      return compare_classified_with_anchors(
         &left,
         &right,
         compare_options,
         &rules,
+        &anchors,
         WorkControl::new(&flag, Duration::from_secs(2)),
       )
       .map(|spans| {
@@ -187,12 +230,13 @@ pub async fn compare_text(
             right_start: item.span.right.start,
             right_end: item.span.right.end,
             minor: Some(item.minor),
+            moved: item.span.moved.map(MoveInfo::from),
           })
           .collect()
       })
       .map_err(|e| e.to_string());
     }
-    compare_with_rules(
+    compare_with_anchors(
       &left,
       &right,
       CompareOptions {
@@ -201,6 +245,7 @@ pub async fn compare_text(
         ignore_line_endings: options.ignore_line_endings,
       },
       &rules,
+      &anchors,
       WorkControl::new(&flag, Duration::from_secs(2)),
     )
     .map(|spans| {
@@ -213,6 +258,7 @@ pub async fn compare_text(
           right_start: s.right.start,
           right_end: s.right.end,
           minor: None,
+          moved: s.moved.map(MoveInfo::from),
         })
         .collect()
     })
@@ -286,6 +332,7 @@ pub async fn refine_text(left: String, right: String) -> Result<Vec<Span>, Strin
           right_start: s.right.start,
           right_end: s.right.end,
           minor: None,
+          moved: None,
         })
         .collect()
     })

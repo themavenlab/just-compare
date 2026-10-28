@@ -1,6 +1,7 @@
 use crate::lines;
 use regex::{Regex, RegexBuilder};
 use similar::{capture_diff_slices_deadline, Algorithm, DiffTag};
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,12 +25,33 @@ pub enum DiffKind {
   Replace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlignmentAnchor {
+  pub left: usize,
+  pub right: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveDirection {
+  From,
+  To,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MovedBlock {
+  pub id: usize,
+  pub direction: MoveDirection,
+  pub counterpart_start: usize,
+  pub line_count: usize,
+}
+
 /// Zero-based, half-open logical line ranges in the original inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffSpan {
   pub kind: DiffKind,
   pub left: Range<usize>,
   pub right: Range<usize>,
+  pub moved: Option<MovedBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +59,7 @@ pub enum CompareError {
   InputTooLarge,
   TooManyLines,
   IntralineTooLarge,
+  InvalidAnchor,
   InvalidRule(String),
   Cancelled,
   TimedOut,
@@ -50,6 +73,10 @@ impl fmt::Display for CompareError {
       Self::IntralineTooLarge => write!(
         f,
         "Intraline inputs must not exceed 64 KiB or 8192 Unicode scalars."
+      ),
+      Self::InvalidAnchor => write!(
+        f,
+        "Alignment anchors must be in range and strictly increasing on both sides."
       ),
       Self::InvalidRule(reason) => write!(f, "Invalid unimportant-difference rule: {reason}"),
       Self::Cancelled => write!(f, "Comparison was cancelled."),
@@ -130,6 +157,17 @@ pub fn compare_with_rules(
   rules: &[UnimportantRule],
   control: WorkControl<'_>,
 ) -> Result<Vec<DiffSpan>, CompareError> {
+  compare_with_anchors(left, right, options, rules, &[], control)
+}
+
+pub fn compare_with_anchors(
+  left: &str,
+  right: &str,
+  options: CompareOptions,
+  rules: &[UnimportantRule],
+  anchors: &[AlignmentAnchor],
+  control: WorkControl<'_>,
+) -> Result<Vec<DiffSpan>, CompareError> {
   control.check()?;
   if rules.len() > 16 {
     return Err(CompareError::InvalidRule(
@@ -167,32 +205,178 @@ pub fn compare_with_rules(
   };
   let left_keys = keys(left)?;
   let right_keys = keys(right)?;
-  let operations = capture_diff_slices_deadline(
-    Algorithm::Histogram,
-    &left_keys,
-    &right_keys,
-    Some(control.deadline),
-  );
-  // The library can return a coarser diff on expiry; do not report it as success.
+  let mut spans = Vec::new();
+  let mut left_cursor = 0;
+  let mut right_cursor = 0;
+  for anchor in anchors {
+    control.check()?;
+    if anchor.left < left_cursor
+      || anchor.right < right_cursor
+      || anchor.left >= left_keys.len()
+      || anchor.right >= right_keys.len()
+    {
+      return Err(CompareError::InvalidAnchor);
+    }
+    append_diff(
+      &left_keys[left_cursor..anchor.left],
+      &right_keys[right_cursor..anchor.right],
+      left_cursor,
+      right_cursor,
+      &mut spans,
+      control,
+    )?;
+    spans.push(DiffSpan {
+      kind: if left_keys[anchor.left] == right_keys[anchor.right] {
+        DiffKind::Equal
+      } else {
+        DiffKind::Replace
+      },
+      left: anchor.left..anchor.left + 1,
+      right: anchor.right..anchor.right + 1,
+      moved: None,
+    });
+    left_cursor = anchor.left + 1;
+    right_cursor = anchor.right + 1;
+  }
+  append_diff(
+    &left_keys[left_cursor..],
+    &right_keys[right_cursor..],
+    left_cursor,
+    right_cursor,
+    &mut spans,
+    control,
+  )?;
+  mark_moved_blocks(left, right, &mut spans);
+  Ok(spans)
+}
+
+fn append_diff(
+  left: &[(String, &'static str)],
+  right: &[(String, &'static str)],
+  left_offset: usize,
+  right_offset: usize,
+  spans: &mut Vec<DiffSpan>,
+  control: WorkControl<'_>,
+) -> Result<(), CompareError> {
+  let operations =
+    capture_diff_slices_deadline(Algorithm::Histogram, left, right, Some(control.deadline));
   control.check()?;
-  Ok(
-    operations
-      .into_iter()
-      .map(|op| {
-        let (tag, left, right) = op.as_tag_tuple();
-        DiffSpan {
-          kind: match tag {
-            DiffTag::Equal => DiffKind::Equal,
-            DiffTag::Delete => DiffKind::Delete,
-            DiffTag::Insert => DiffKind::Insert,
-            DiffTag::Replace => DiffKind::Replace,
-          },
-          left,
-          right,
-        }
-      })
-      .collect(),
-  )
+  spans.extend(operations.into_iter().map(|operation| {
+    let (tag, left, right) = operation.as_tag_tuple();
+    DiffSpan {
+      kind: match tag {
+        DiffTag::Equal => DiffKind::Equal,
+        DiffTag::Delete => DiffKind::Delete,
+        DiffTag::Insert => DiffKind::Insert,
+        DiffTag::Replace => DiffKind::Replace,
+      },
+      left: left.start + left_offset..left.end + left_offset,
+      right: right.start + right_offset..right.end + right_offset,
+      moved: None,
+    }
+  }));
+  Ok(())
+}
+
+fn mark_moved_blocks(left: &str, right: &str, spans: &mut [DiffSpan]) {
+  let left_lines: Vec<_> = lines(left).collect();
+  let right_lines: Vec<_> = lines(right).collect();
+  let pair_counts = |source: &[crate::Line<'_>]| {
+    let mut counts = HashMap::new();
+    for pair in source.windows(2) {
+      let mut key = String::new();
+      for line in pair {
+        key.push_str(line.content);
+        key.push_str(line.ending.as_str());
+      }
+      *counts.entry(key).or_insert(0usize) += 1;
+    }
+    counts
+  };
+  let left_pair_counts = pair_counts(&left_lines);
+  let right_pair_counts = pair_counts(&right_lines);
+  let mut candidates: HashMap<String, Vec<(usize, MoveDirection, usize, usize)>> = HashMap::new();
+  for (index, span) in spans.iter().enumerate() {
+    let (source, range, direction, counterpart) = match span.kind {
+      DiffKind::Delete if span.right.is_empty() => (
+        &left_lines,
+        &span.left,
+        MoveDirection::From,
+        span.right.start,
+      ),
+      DiffKind::Insert if span.left.is_empty() => (
+        &right_lines,
+        &span.right,
+        MoveDirection::To,
+        span.left.start,
+      ),
+      _ => continue,
+    };
+    if range.end - range.start < 2 {
+      continue;
+    }
+    let mut key = String::new();
+    for line in &source[range.clone()] {
+      key.push_str(line.content);
+      key.push_str(line.ending.as_str());
+    }
+    candidates.entry(key).or_default().push((
+      index,
+      direction,
+      counterpart,
+      range.end - range.start,
+    ));
+  }
+  let mut id = 0;
+  for matches in candidates.values() {
+    if matches.len() != 2
+      || matches
+        .iter()
+        .filter(|(_, direction, _, _)| *direction == MoveDirection::From)
+        .count()
+        != 1
+    {
+      continue;
+    }
+    let Some(from) = matches
+      .iter()
+      .find(|(_, direction, _, _)| *direction == MoveDirection::From)
+    else {
+      continue;
+    };
+    let Some(to) = matches
+      .iter()
+      .find(|(_, direction, _, _)| *direction == MoveDirection::To)
+    else {
+      continue;
+    };
+    let from_start = spans[from.0].left.start;
+    let to_start = spans[to.0].right.start;
+    let mut pair_key = String::new();
+    for line in &left_lines[from_start..from_start + 2] {
+      pair_key.push_str(line.content);
+      pair_key.push_str(line.ending.as_str());
+    }
+    if left_pair_counts.get(&pair_key) != Some(&1)
+      || right_pair_counts.get(&pair_key) != Some(&1)
+      || to_start + 2 > right_lines.len()
+    {
+      continue;
+    }
+    id += 1;
+    spans[from.0].moved = Some(MovedBlock {
+      id,
+      direction: MoveDirection::From,
+      counterpart_start: to.2,
+      line_count: from.3,
+    });
+    spans[to.0].moved = Some(MovedBlock {
+      id,
+      direction: MoveDirection::To,
+      counterpart_start: from.2,
+      line_count: to.3,
+    });
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,7 +392,25 @@ pub fn compare_classified(
   rules: &[UnimportantRule],
   control: WorkControl<'_>,
 ) -> Result<Vec<ClassifiedSpan>, CompareError> {
-  let spans = compare_with_rules(left, right, CompareOptions::default(), &[], control)?;
+  compare_classified_with_anchors(left, right, options, rules, &[], control)
+}
+
+pub fn compare_classified_with_anchors(
+  left: &str,
+  right: &str,
+  options: CompareOptions,
+  rules: &[UnimportantRule],
+  anchors: &[AlignmentAnchor],
+  control: WorkControl<'_>,
+) -> Result<Vec<ClassifiedSpan>, CompareError> {
+  let spans = compare_with_anchors(
+    left,
+    right,
+    CompareOptions::default(),
+    &[],
+    anchors,
+    control,
+  )?;
   let offsets = |text: &str| {
     let mut offsets: Vec<_> = lines(text).map(|line| line.byte_offset).collect();
     offsets.push(text.len());
@@ -411,9 +613,83 @@ mod tests {
       DiffSpan {
         kind: DiffKind::Insert,
         left: 1..1,
-        right: 1..2
+        right: 1..2,
+        moved: None,
       }
     );
+  }
+
+  #[test]
+  fn anchors_force_line_pairs_and_reject_crossing_pairs() {
+    let cancelled = AtomicBool::new(false);
+    let spans = compare_with_anchors(
+      "head\nanchor\nleft\n",
+      "head\nrenamed\nright\n",
+      CompareOptions::default(),
+      &[],
+      &[AlignmentAnchor { left: 1, right: 1 }],
+      WorkControl::new(&cancelled, Duration::from_secs(2)),
+    )
+    .unwrap();
+    assert!(spans.iter().any(|span| {
+      span.left == (1..2) && span.right == (1..2) && span.kind == DiffKind::Replace
+    }));
+    assert_eq!(
+      compare_with_anchors(
+        "a\nb\n",
+        "b\na\n",
+        CompareOptions::default(),
+        &[],
+        &[
+          AlignmentAnchor { left: 0, right: 1 },
+          AlignmentAnchor { left: 1, right: 0 },
+        ],
+        WorkControl::new(&cancelled, Duration::from_secs(2)),
+      ),
+      Err(CompareError::InvalidAnchor)
+    );
+  }
+
+  #[test]
+  fn unique_exact_moved_blocks_are_paired_but_ambiguous_runs_are_not() {
+    let moved = compare(
+      "top\nA\nB\nmiddle\nend\n",
+      "top\nmiddle\nend\nA\nB\n",
+      CompareOptions::default(),
+    )
+    .unwrap();
+    let from = moved
+      .iter()
+      .find(|span| {
+        span
+          .moved
+          .is_some_and(|mark| mark.direction == MoveDirection::From)
+      })
+      .unwrap()
+      .moved
+      .unwrap();
+    let to = moved
+      .iter()
+      .find(|span| {
+        span
+          .moved
+          .is_some_and(|mark| mark.direction == MoveDirection::To)
+      })
+      .unwrap()
+      .moved
+      .unwrap();
+    assert_eq!(from.id, to.id);
+    assert_eq!(from.counterpart_start, 1);
+    assert_eq!(to.counterpart_start, 5);
+    assert_eq!(from.line_count, 2);
+
+    let ambiguous = compare(
+      "A\nB\nx\nA\nB\n",
+      "x\nA\nB\nA\nB\n",
+      CompareOptions::default(),
+    )
+    .unwrap();
+    assert!(ambiguous.iter().all(|span| span.moved.is_none()));
   }
 
   #[test]

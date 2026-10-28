@@ -70,6 +70,11 @@ const editor = (text = ""): Editor => ({
 });
 type Editors = Record<Side, Editor>;
 const noDifferences: DiffSpan[] = [];
+type Refinement = {
+  spans: DiffSpan[];
+  leftBaseByte: number;
+  rightBaseByte: number;
+};
 interface DiskComparison {
   side: Side;
   draft: string;
@@ -184,7 +189,16 @@ export function ComparisonWorkspace({
   const [editRefresh, setEditRefresh] = useState(0);
   const editInFlight = useRef(false);
   const [current, setCurrent] = useState(0);
-  const [refinement, setRefinement] = useState<DiffSpan[] | null>(null);
+  const [refinement, setRefinement] = useState<Refinement | null>(null);
+  const [alignmentAnchors, setAlignmentAnchors] = useState<
+    { left: number; right: number }[]
+  >([]);
+  const alignmentAnchorsRef = useRef(alignmentAnchors);
+  const [cursorLines, setCursorLines] = useState<{
+    left: number | null;
+    right: number | null;
+  }>({ left: null, right: null });
+  const [showWhitespace, setShowWhitespace] = useState(false);
   const [detailRow, setDetailRow] = useState<number | null>(null);
   const [folders, setFolders] = useState<FolderEntry[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
@@ -290,6 +304,14 @@ export function ComparisonWorkspace({
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [blocks, setBlocks] = useState<Block[] | null>(null);
   const [choices, setChoices] = useState<Record<number, string>>({});
+  const [resolutionHistory, setResolutionHistory] = useState<
+    Record<number, string>[]
+  >([]);
+  const [resolutionFuture, setResolutionFuture] = useState<
+    Record<number, string>[]
+  >([]);
+  const [activeConflict, setActiveConflict] = useState<number | null>(null);
+  const conflictElements = useRef<Record<number, HTMLElement | null>>({});
   const [output, setOutput] = useState("");
   const [outputSaved, setOutputSaved] = useState("");
   const [outputDocument, setOutputDocument] = useState<DocumentView | null>(
@@ -324,6 +346,10 @@ export function ComparisonWorkspace({
     },
     [setLog, updateNotice],
   );
+  function updateAlignmentAnchors(value: { left: number; right: number }[]) {
+    alignmentAnchorsRef.current = value;
+    setAlignmentAnchors(value);
+  }
   const setError = useCallback(
     (message: string) => {
       updateError(message);
@@ -549,6 +575,11 @@ export function ComparisonWorkspace({
     setRefinement(null);
     setBlocks(null);
     setChoices({});
+    setResolutionHistory([]);
+    setResolutionFuture([]);
+    setActiveConflict(null);
+    updateAlignmentAnchors([]);
+    setCursorLines({ left: null, right: null });
     setError("");
     setNotice("");
   }
@@ -777,6 +808,7 @@ export function ComparisonWorkspace({
     includeMinor = minorText,
     preserveViewport = afterCopy !== undefined,
     background = false,
+    anchors = alignmentAnchorsRef.current,
   ) {
     const request = ++revision.current;
     const jobId = crypto.randomUUID();
@@ -801,6 +833,7 @@ export function ComparisonWorkspace({
       jobId,
       showMinor: includeMinor,
       options: {
+        alignmentAnchors: anchors,
         ignoreCase: profile?.ignoreCase ?? settings.ignoreCase,
         ignoreWhitespace:
           profile?.ignoreWhitespace ?? settings.ignoreWhitespace,
@@ -842,6 +875,35 @@ export function ComparisonWorkspace({
           base: "",
         });
     }
+  }
+  async function anchorCurrentLines() {
+    const left = cursorLines.left;
+    const right = cursorLines.right;
+    if (left === null || right === null)
+      throw new Error("Place the caret on one line in each text pane first.");
+    if (
+      left >= textLines(editors.left.text).length ||
+      right >= textLines(editors.right.text).length
+    )
+      throw new Error("Alignment anchors must point to existing source lines.");
+    const anchors = [...alignmentAnchorsRef.current, { left, right }].sort(
+      (a, b) => a.left - b.left,
+    );
+    if (
+      anchors.some(
+        (anchor, index) =>
+          index > 0 &&
+          (anchors[index - 1]!.left >= anchor.left ||
+            anchors[index - 1]!.right >= anchor.right),
+      )
+    )
+      throw new Error("Alignment anchors must be in increasing line order.");
+    updateAlignmentAnchors(anchors);
+    await compareInputs(editors, undefined, minorText, true, false, anchors);
+  }
+  async function clearAlignmentAnchors() {
+    updateAlignmentAnchors([]);
+    await compareInputs(editors, undefined, minorText, true, false, []);
   }
   const refreshEditedComparison = useEffectEvent(async () => {
     if (editInFlight.current || pendingEdit === null) return;
@@ -1324,6 +1386,9 @@ export function ComparisonWorkspace({
     });
     setBlocks(result);
     setChoices({});
+    setResolutionHistory([]);
+    setResolutionFuture([]);
+    setActiveConflict(null);
     setOutput(
       result
         .filter(
@@ -1342,10 +1407,11 @@ export function ComparisonWorkspace({
       });
   }
   async function resolve(index: number, text: string) {
-    const generated =
-      blocks
-        ?.map((b, i) => (b.kind === "resolved" ? b.text : (choices[i] ?? "")))
-        .join("") ?? "";
+    if (!blocks) return;
+    const generated = blocks
+      .map((b, i) => (b.kind === "resolved" ? b.text : (choices[i] ?? "")))
+      .join("");
+    if (choices[index] === text) return;
     if (
       output !== generated &&
       !(await confirmAction(
@@ -1354,11 +1420,74 @@ export function ComparisonWorkspace({
     )
       return;
     const updated = { ...choices, [index]: text };
+    setResolutionHistory((prior) => [...prior.slice(-49), choices]);
+    setResolutionFuture([]);
     setChoices(updated);
     setOutput(
       blocks
-        ?.map((b, i) => (b.kind === "resolved" ? b.text : (updated[i] ?? "")))
-        .join("") ?? "",
+        .map((b, i) => (b.kind === "resolved" ? b.text : (updated[i] ?? "")))
+        .join(""),
+    );
+  }
+  async function restoreResolution(direction: "undo" | "redo") {
+    if (!blocks) return;
+    const source = direction === "undo" ? resolutionHistory : resolutionFuture;
+    const previous = source.at(-1);
+    if (!previous) return;
+    const generated = blocks
+      .map((block, index) =>
+        block.kind === "resolved" ? block.text : (choices[index] ?? ""),
+      )
+      .join("");
+    if (
+      output !== generated &&
+      !(await confirmAction(
+        "Replace manual output edits with this conflict resolution?",
+      ))
+    )
+      return;
+    if (direction === "undo") {
+      setResolutionHistory((prior) => prior.slice(0, -1));
+      setResolutionFuture((prior) => [...prior.slice(-49), choices]);
+    } else {
+      setResolutionFuture((prior) => prior.slice(0, -1));
+      setResolutionHistory((prior) => [...prior.slice(-49), choices]);
+    }
+    setChoices(previous);
+    setOutput(
+      blocks
+        .map((block, index) =>
+          block.kind === "resolved" ? block.text : (previous[index] ?? ""),
+        )
+        .join(""),
+    );
+  }
+  function navigateConflict(direction: "previous" | "next") {
+    const unresolvedIndexes =
+      blocks?.flatMap((block, index) =>
+        block.kind === "conflict" && choices[index] === undefined
+          ? [index]
+          : [],
+      ) ?? [];
+    if (!unresolvedIndexes.length) return;
+    const currentIndex = unresolvedIndexes.indexOf(activeConflict ?? -1);
+    const nextIndex =
+      currentIndex < 0
+        ? direction === "next"
+          ? 0
+          : unresolvedIndexes.length - 1
+        : (currentIndex +
+            (direction === "next" ? 1 : -1) +
+            unresolvedIndexes.length) %
+          unresolvedIndexes.length;
+    const nextConflict = unresolvedIndexes[nextIndex];
+    if (nextConflict === undefined) return;
+    setActiveConflict(nextConflict);
+    requestAnimationFrame(() =>
+      conflictElements.current[nextConflict]?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      }),
     );
   }
   const unresolved =
@@ -1900,6 +2029,7 @@ export function ComparisonWorkspace({
                 onSelectLine={
                   mode === "text" && side !== "base" && pendingEdit === null
                     ? (line) => {
+                        setCursorLines((prior) => ({ ...prior, [side]: line }));
                         const index = aligned.findIndex(
                           (row) => row[side] === line,
                         );
@@ -1914,6 +2044,17 @@ export function ComparisonWorkspace({
                   if (!busy) void attempt(() => redoSide(side));
                 }}
                 displayMode={mode === "text" ? textFilter : "all"}
+                showWhitespace={mode === "text" && showWhitespace}
+                intralineSpans={
+                  mode === "text" && side !== "base"
+                    ? (refinement?.spans ?? noDifferences)
+                    : noDifferences
+                }
+                intralineBaseByte={
+                  side === "left"
+                    ? (refinement?.leftBaseByte ?? 0)
+                    : (refinement?.rightBaseByte ?? 0)
+                }
                 differences={
                   mode === "text" && side !== "base"
                     ? (spans ?? noDifferences)
@@ -3560,6 +3701,33 @@ export function ComparisonWorkspace({
               }}
             />
             <ToolButton
+              label="Whitespace / EOL"
+              symbol="·"
+              description="Mark spaces and tabs and show each source line ending without changing text."
+              aria-pressed={showWhitespace}
+              onClick={() => setShowWhitespace((value) => !value)}
+            />
+            <ToolButton
+              label="Anchor lines"
+              symbol="↧"
+              description={
+                cursorLines.left === null || cursorLines.right === null
+                  ? "Place the caret on a line in each pane to pair them as an ephemeral alignment anchor."
+                  : `Pair left line ${cursorLines.left + 1} with right line ${cursorLines.right + 1}; anchors clear when text changes.`
+              }
+              disabled={
+                busy || cursorLines.left === null || cursorLines.right === null
+              }
+              onClick={() => void attempt(anchorCurrentLines)}
+            />
+            <ToolButton
+              label={`Clear anchors${alignmentAnchors.length ? ` (${alignmentAnchors.length})` : ""}`}
+              symbol="×"
+              description="Remove manual line-pair anchors and compare automatically aligned text."
+              disabled={busy || !alignmentAnchors.length}
+              onClick={() => void attempt(clearAlignmentAnchors)}
+            />
+            <ToolButton
               label="Rules"
               symbol="⚙"
               description="Edit comparison rules; changes invalidate existing results."
@@ -3679,27 +3847,40 @@ export function ComparisonWorkspace({
                   Copy to left
                 </button>
                 <button
-                  aria-label="Refine selected region"
-                  title="Inspect intraline differences within the selected region without editing either draft."
+                  aria-label="Highlight intraline differences"
+                  title="Highlight intraline differences in both editable panes and the read-only detail view."
                   disabled={busy}
                   onClick={() =>
-                    void attempt(async () =>
-                      setRefinement(
-                        await native("refine_text", {
-                          left: leftLines
-                            .slice(selected.leftStart, selected.leftEnd)
-                            .map((l) => l.full)
-                            .join(""),
-                          right: rightLines
-                            .slice(selected.rightStart, selected.rightEnd)
-                            .map((l) => l.full)
-                            .join(""),
-                        }),
-                      ),
-                    )
+                    void attempt(async () => {
+                      const left = leftLines
+                        .slice(selected.leftStart, selected.leftEnd)
+                        .map((line) => line.full)
+                        .join("");
+                      const right = rightLines
+                        .slice(selected.rightStart, selected.rightEnd)
+                        .map((line) => line.full)
+                        .join("");
+                      setRefinement({
+                        spans: await native("refine_text", { left, right }),
+                        leftBaseByte: new TextEncoder().encode(
+                          editors.left.text.slice(
+                            0,
+                            leftLines[selected.leftStart]?.start ??
+                              editors.left.text.length,
+                          ),
+                        ).length,
+                        rightBaseByte: new TextEncoder().encode(
+                          editors.right.text.slice(
+                            0,
+                            rightLines[selected.rightStart]?.start ??
+                              editors.right.text.length,
+                          ),
+                        ).length,
+                      });
+                    })
                   }
                 >
-                  Intraline detail
+                  Highlight intraline
                 </button>
               </>
             )}
@@ -3836,13 +4017,13 @@ export function ComparisonWorkspace({
                     .slice(selected.rightStart, selected.rightEnd)
                     .map((l) => l.full)
                     .join("")}
-                  spans={refinement}
+                  spans={refinement.spans}
                 />
               )}
               {refinement && (
                 <p>
                   Intraline changed byte ranges:{" "}
-                  {refinement
+                  {refinement.spans
                     .filter((s) => s.kind !== "equal")
                     .map(
                       (s) =>
@@ -4210,6 +4391,34 @@ export function ComparisonWorkspace({
             <span className="metadata">
               Saving stays disabled until every conflict is resolved.
             </span>
+            <button
+              aria-label="Previous unresolved conflict"
+              disabled={busy || unresolved === 0}
+              onClick={() => navigateConflict("previous")}
+            >
+              Previous conflict
+            </button>
+            <button
+              aria-label="Next unresolved conflict"
+              disabled={busy || unresolved === 0}
+              onClick={() => navigateConflict("next")}
+            >
+              Next conflict
+            </button>
+            <button
+              aria-label="Undo conflict resolution"
+              disabled={busy || !resolutionHistory.length}
+              onClick={() => void attempt(() => restoreResolution("undo"))}
+            >
+              Undo resolution
+            </button>
+            <button
+              aria-label="Redo conflict resolution"
+              disabled={busy || !resolutionFuture.length}
+              onClick={() => void attempt(() => restoreResolution("redo"))}
+            >
+              Redo resolution
+            </button>
           </div>
           {inputs}
           {(blocks || output || outputDocument) && (
@@ -4222,50 +4431,71 @@ export function ComparisonWorkspace({
                   output is retained below.
                 </p>
               )}
-              {blocks?.map(
-                (block, index) =>
-                  block.kind === "conflict" && (
-                    <article className="conflict" key={index}>
-                      <h3>
-                        Conflict {index + 1}
-                        {choices[index] !== undefined ? " (resolved)" : ""}
-                      </h3>
-                      <pre>BASE: {block.base}</pre>
-                      <pre>LEFT: {block.left}</pre>
-                      <pre>RIGHT: {block.right}</pre>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void attempt(() => resolve(index, block.left))
-                        }
-                      >
-                        Use left {index + 1}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void attempt(() => resolve(index, block.right))
-                        }
-                      >
-                        Use right {index + 1}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void attempt(() => resolve(index, block.base))
-                        }
-                      >
-                        Use base {index + 1}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() => void attempt(() => resolve(index, ""))}
-                      >
-                        Delete conflict {index + 1}
-                      </button>
-                    </article>
-                  ),
-              )}
+              {blocks?.map((block, index) => {
+                if (block.kind !== "conflict") return null;
+                const number = blocks
+                  .slice(0, index + 1)
+                  .filter((item) => item.kind === "conflict").length;
+                return (
+                  <article
+                    className={`conflict${activeConflict === index ? " conflict-active" : ""}`}
+                    key={index}
+                    ref={(element) => {
+                      conflictElements.current[index] = element;
+                    }}
+                    aria-current={activeConflict === index ? "true" : undefined}
+                  >
+                    <h3>
+                      Conflict {number}
+                      {choices[index] !== undefined ? " (resolved)" : ""}
+                    </h3>
+                    <pre>BASE: {block.base}</pre>
+                    <pre>LEFT: {block.left}</pre>
+                    <pre>RIGHT: {block.right}</pre>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void attempt(() => resolve(index, block.left))
+                      }
+                    >
+                      Use left {number}
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void attempt(() => resolve(index, block.right))
+                      }
+                    >
+                      Use right {number}
+                    </button>
+                    <button
+                      disabled={busy}
+                      title="Append left conflict content, then right conflict content; repeated lines are retained."
+                      onClick={() =>
+                        void attempt(() =>
+                          resolve(index, block.left + block.right),
+                        )
+                      }
+                    >
+                      Use both {number}
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void attempt(() => resolve(index, block.base))
+                      }
+                    >
+                      Use base {number}
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => void attempt(() => resolve(index, ""))}
+                    >
+                      Delete conflict {number}
+                    </button>
+                  </article>
+                );
+              })}
               <label>
                 Merge output
                 <CodeEditor

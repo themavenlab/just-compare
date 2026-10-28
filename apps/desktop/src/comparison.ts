@@ -14,12 +14,19 @@ export interface DiffSpan {
   rightStart: number;
   rightEnd: number;
   minor?: boolean;
+  moved?: {
+    id: number;
+    direction: "from" | "to";
+    counterpartStart: number;
+    lineCount: number;
+  };
 }
 
 export async function compareText(
   left: string,
   right: string,
   options: CompareOptions,
+  alignmentAnchors: { left: number; right: number }[] = [],
 ): Promise<DiffSpan[]> {
   if (!isTauri()) {
     throw new Error(
@@ -29,7 +36,11 @@ export async function compareText(
   return invoke<DiffSpan[]>("compare_text", {
     left,
     right,
-    options: { ...options, patterns: options.patterns ?? [] },
+    options: {
+      ...options,
+      alignmentAnchors,
+      patterns: options.patterns ?? [],
+    },
     jobId: crypto.randomUUID(),
   });
 }
