@@ -11,6 +11,7 @@ export interface WorkspaceTab {
   gitOutput: string;
   parent: string | null;
   folderRules?: FolderRules;
+  sessionName?: string;
 }
 export interface WorkspaceSummary {
   title: string;

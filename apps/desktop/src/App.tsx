@@ -131,7 +131,10 @@ export function App() {
     (
       mode: Workflow,
       paths: Partial<
-        Pick<WorkspaceTab, "left" | "right" | "base" | "parent" | "folderRules">
+        Pick<
+          WorkspaceTab,
+          "left" | "right" | "base" | "parent" | "folderRules" | "sessionName"
+        >
       > = {},
     ) => {
       const tab: WorkspaceTab = {
@@ -161,6 +164,7 @@ export function App() {
           left: session.left,
           right: session.right,
           base: session.base ?? "",
+          sessionName: session.name,
           ...(session.folderRules ? { folderRules: session.folderRules } : {}),
         });
       } catch (failure) {
@@ -168,6 +172,31 @@ export function App() {
       }
     },
     [openTab],
+  );
+  const setTabSessionName = useCallback((id: string, name: string | null) => {
+    setTabs((prior) =>
+      prior.map((tab) => {
+        if (tab.id !== id) return tab;
+        const updated = { ...tab };
+        if (name) updated.sessionName = name;
+        else delete updated.sessionName;
+        return updated;
+      }),
+    );
+  }, []);
+  const renameSessionTabs = useCallback(
+    (previous: string, next: string | null) => {
+      setTabs((prior) =>
+        prior.map((tab) => {
+          if (tab.sessionName !== previous) return tab;
+          const updated = { ...tab };
+          if (next) updated.sessionName = next;
+          else delete updated.sessionName;
+          return updated;
+        }),
+      );
+    },
+    [],
   );
   const handleShell = useCallback(
     async (args: string[]) => {
@@ -226,6 +255,12 @@ export function App() {
       )
         return false;
       await native("write_settings", { settings: { ...settings, sessions } });
+      const retained = new Set(
+        sessions.map((session) => session.name.toLowerCase()),
+      );
+      for (const session of settings.sessions)
+        if (!retained.has(session.name.toLowerCase()))
+          renameSessionTabs(session.name, null);
       setSettings((prior) => ({ ...prior, sessions }));
       return true;
     } catch (failure) {
@@ -663,8 +698,13 @@ export function App() {
               disabled: blocked,
             },
             {
-              label: "Save Session...",
+              label: "Save Session",
               run: () => command("save-session"),
+              disabled: !active || blocked || !settingsAvailable,
+            },
+            {
+              label: "Save Session As...",
+              run: () => command("save-session-as"),
               disabled: !active || blocked || !settingsAvailable,
             },
             {
@@ -1003,6 +1043,8 @@ export function App() {
               discardPreview={discardPreview}
               diskChanged={diskChanged}
               confirmAction={confirmAction}
+              setTabSessionName={setTabSessionName}
+              renameSessionTabs={renameSessionTabs}
             />
           </section>
         ))}

@@ -87,10 +87,15 @@ interface WorkspaceProps {
   openTab: (
     mode: WorkspaceTab["mode"],
     paths?: Partial<
-      Pick<WorkspaceTab, "left" | "right" | "base" | "parent" | "folderRules">
+      Pick<
+        WorkspaceTab,
+        "left" | "right" | "base" | "parent" | "folderRules" | "sessionName"
+      >
     >,
   ) => void;
   openSession: (session: SavedSession) => void;
+  setTabSessionName: (id: string, name: string | null) => void;
+  renameSessionTabs: (previous: string, next: string | null) => void;
   diskChanged: (paths: string[], refreshFolders?: boolean) => void;
   confirmAction: (message: string) => Promise<boolean>;
   confirmGitExit: (id: string) => Promise<boolean>;
@@ -112,6 +117,8 @@ export function ComparisonWorkspace({
   report,
   openTab,
   openSession,
+  setTabSessionName,
+  renameSessionTabs,
   diskChanged,
   confirmAction,
   confirmGitExit,
@@ -236,11 +243,15 @@ export function ComparisonWorkspace({
     tab.folderRules ?? sharedSettings.folderRules ?? defaultFolderRules,
   );
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [sessionDialog, setSessionDialog] = useState<"save" | "manage" | null>(
-    null,
-  );
+  const [sessionDialog, setSessionDialog] = useState<
+    "save" | "saveAs" | "manage" | null
+  >(null);
   const [sessionName, setSessionName] = useState("");
   const [sessionError, setSessionError] = useState("");
+  const [sessionRename, setSessionRename] = useState<{
+    original: string;
+    value: string;
+  } | null>(null);
   const [searchMode, setSearchMode] = useState<
     "find" | "replace" | "goto" | null
   >(null);
@@ -322,10 +333,21 @@ export function ComparisonWorkspace({
       setSearchMode(name);
       return;
     }
-    if (name === "sessions" || name === "save-session") {
+    if (
+      name === "sessions" ||
+      name === "save-session" ||
+      name === "save-session-as"
+    ) {
       setSessionError("");
-      setSessionName("");
-      setSessionDialog(name === "save-session" ? "save" : "manage");
+      setSessionRename(null);
+      setSessionName(name === "save-session" ? (tab.sessionName ?? "") : "");
+      setSessionDialog(
+        name === "sessions"
+          ? "manage"
+          : name === "save-session-as"
+            ? "saveAs"
+            : "save",
+      );
       return;
     }
     if (name === "profiles") {
@@ -378,24 +400,76 @@ export function ComparisonWorkspace({
     });
     setSettings((prior) => ({ ...prior, sessions }));
   }
-  async function saveSession() {
-    const name = sessionName.trim();
+  async function renameSavedSession(original: string, value: string) {
+    const name = value.trim();
     if (!name) {
       setSessionError("Enter a session name.");
       return;
     }
     if (
       settings.sessions.some(
-        (session) => session.name.toLowerCase() === name.toLowerCase(),
+        (session) =>
+          session.name !== original &&
+          session.name.toLowerCase() === name.toLowerCase(),
       )
     ) {
+      setSessionError("A session with this name already exists.");
+      return;
+    }
+    await persistSessions(
+      settings.sessions.map((session) =>
+        session.name === original ? { ...session, name } : session,
+      ),
+    );
+    renameSessionTabs(original, name);
+    setSessionRename(null);
+    setSessionError("");
+    setNotice(`Session "${original}" renamed to "${name}".`);
+  }
+  async function moveSession(index: number, delta: -1 | 1) {
+    const target = index + delta;
+    if (target < 0 || target >= settings.sessions.length) return;
+    const sessions = [...settings.sessions];
+    const [session] = sessions.splice(index, 1);
+    if (!session) return;
+    sessions.splice(target, 0, session);
+    await persistSessions(sessions);
+  }
+  async function saveSession() {
+    const updatesCurrent = sessionDialog === "save" && !!tab.sessionName;
+    const name = (
+      updatesCurrent ? (tab.sessionName ?? "") : sessionName
+    ).trim();
+    if (!name) {
+      setSessionError("Enter a session name.");
+      return;
+    }
+    const currentIndex = settings.sessions.findIndex(
+      (session) => session.name === tab.sessionName,
+    );
+    if (updatesCurrent && currentIndex < 0) {
       setSessionError(
-        "A session with this name already exists. Choose another name.",
+        "This saved session was removed. Use Save Session As to create a new definition.",
       );
       return;
     }
+    const duplicateIndex = settings.sessions.findIndex(
+      (session) => session.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (
+      !updatesCurrent &&
+      duplicateIndex >= 0 &&
+      !(await confirmAction(
+        `Replace the saved session "${settings.sessions[duplicateIndex]?.name}" with the current paths and rules? Draft contents are never saved.`,
+      ))
+    )
+      return;
+    const savedName =
+      duplicateIndex >= 0
+        ? (settings.sessions[duplicateIndex]?.name ?? name)
+        : name;
     const session: SavedSession = {
-      name,
+      name: savedName,
       left: mode === "folder" ? folderRoots.left : editors.left.path,
       right: mode === "folder" ? folderRoots.right : editors.right.path,
       mode,
@@ -403,13 +477,19 @@ export function ComparisonWorkspace({
       ...(mode === "folder" ? { folderRules } : {}),
     };
     try {
-      await persistSessions([...settings.sessions, session]);
+      const index = updatesCurrent ? currentIndex : duplicateIndex;
+      const nextSessions =
+        index >= 0
+          ? settings.sessions.map((saved, i) => (i === index ? session : saved))
+          : [...settings.sessions, session];
+      await persistSessions(nextSessions);
     } catch (failure) {
       setSessionError(errorMessage(failure));
       throw failure;
     }
+    setTabSessionName(tab.id, savedName);
     setSessionDialog(null);
-    setNotice(`Session "${name}" saved.`);
+    setNotice(`Session "${savedName}" saved.`);
   }
   function swapInputs() {
     if (busy) return;
@@ -1210,8 +1290,9 @@ export function ComparisonWorkspace({
       ? folderRoots.right
       : editors.right.document?.path || editors.right.path,
   );
-  const title =
-    titleLeft || titleRight
+  const title = tab.sessionName
+    ? tab.sessionName
+    : titleLeft || titleRight
       ? `${titleLeft || "Untitled"} / ${titleRight || "Untitled"}`
       : mode === "folder"
         ? "Folder Compare"
@@ -1352,6 +1433,7 @@ export function ComparisonWorkspace({
         if (
           name === "sessions" ||
           name === "save-session" ||
+          name === "save-session-as" ||
           name === "profiles" ||
           name === "find" ||
           name === "replace" ||
@@ -2789,9 +2871,11 @@ export function ComparisonWorkspace({
           {error}
         </p>
       )}
-      {sessionDialog === "save" && (
+      {(sessionDialog === "save" || sessionDialog === "saveAs") && (
         <WorkspaceDialog
-          title="Save Session"
+          title={
+            sessionDialog === "saveAs" ? "Save Session As" : "Save Session"
+          }
           onClose={() => {
             if (!busy) setSessionDialog(null);
           }}
@@ -2810,6 +2894,7 @@ export function ComparisonWorkspace({
                 value={sessionName}
                 disabled={busy}
                 maxLength={200}
+                readOnly={sessionDialog === "save" && !!tab.sessionName}
                 onChange={(event) => {
                   setSessionName(event.target.value);
                   setSessionError("");
@@ -2866,7 +2951,9 @@ export function ComparisonWorkspace({
                 className="primary"
                 disabled={busy || !settingsReady}
               >
-                Save
+                {sessionDialog === "save" && tab.sessionName
+                  ? "Update"
+                  : "Save"}
               </button>
             </footer>
           </form>
@@ -2882,10 +2969,15 @@ export function ComparisonWorkspace({
           <div className="session-form">
             <button
               disabled={busy || !settingsReady}
-              onClick={() => controllersCommand("save-session")}
+              onClick={() => controllersCommand("save-session-as")}
             >
-              Save current session...
+              Save current session as...
             </button>
+            {sessionError && (
+              <p className="error" role="alert">
+                {sessionError}
+              </p>
+            )}
             {!settings.sessions.length && (
               <p className="empty-state">
                 No saved sessions. Save a comparison to open it again later.
@@ -2893,7 +2985,7 @@ export function ComparisonWorkspace({
             )}
             <div className="session-list">
               {settings.sessions.map((session, index) => (
-                <div key={index} className="saved-session-row">
+                <div key={session.name} className="saved-session-row">
                   <button
                     disabled={busy}
                     onClick={() => {
@@ -2904,6 +2996,74 @@ export function ComparisonWorkspace({
                     {session.name}
                   </button>
                   <span className="metadata">{session.mode}</span>
+                  {sessionRename?.original === session.name ? (
+                    <>
+                      <input
+                        aria-label={`Rename session ${session.name}`}
+                        value={sessionRename.value}
+                        maxLength={200}
+                        disabled={busy}
+                        onChange={(event) => {
+                          setSessionRename({
+                            original: session.name,
+                            value: event.target.value,
+                          });
+                          setSessionError("");
+                        }}
+                      />
+                      <button
+                        disabled={busy || !settingsReady}
+                        onClick={() =>
+                          void attempt(() =>
+                            renameSavedSession(
+                              session.name,
+                              sessionRename.value,
+                            ),
+                          )
+                        }
+                      >
+                        Save name
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => setSessionRename(null)}
+                      >
+                        Cancel rename
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      disabled={busy || !settingsReady}
+                      aria-label={`Rename saved session ${session.name}`}
+                      onClick={() => {
+                        setSessionRename({
+                          original: session.name,
+                          value: session.name,
+                        });
+                        setSessionError("");
+                      }}
+                    >
+                      Rename
+                    </button>
+                  )}
+                  <button
+                    disabled={busy || !settingsReady || index === 0}
+                    aria-label={`Move session ${session.name} up`}
+                    onClick={() => void attempt(() => moveSession(index, -1))}
+                  >
+                    Up
+                  </button>
+                  <button
+                    disabled={
+                      busy ||
+                      !settingsReady ||
+                      index === settings.sessions.length - 1
+                    }
+                    aria-label={`Move session ${session.name} down`}
+                    onClick={() => void attempt(() => moveSession(index, 1))}
+                  >
+                    Down
+                  </button>
                   <button
                     disabled={busy || !settingsReady}
                     aria-label={`Remove session ${session.name}`}
@@ -2918,6 +3078,7 @@ export function ComparisonWorkspace({
                         await persistSessions(
                           settings.sessions.filter((_, i) => i !== index),
                         );
+                        renameSessionTabs(session.name, null);
                         setNotice(`Session "${session.name}" removed.`);
                       })
                     }

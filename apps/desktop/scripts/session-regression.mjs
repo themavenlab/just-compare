@@ -9,11 +9,16 @@ const config = join(root, "config");
 let session;
 try {
   const left = join(root, "left"),
-    right = join(root, "right");
+    right = join(root, "right"),
+    leftUpdated = join(root, "left-updated"),
+    rightUpdated = join(root, "right-updated");
   await mkdir(config);
-  for (const directory of [left, right]) await mkdir(directory);
+  for (const directory of [left, right, leftUpdated, rightUpdated])
+    await mkdir(directory);
   await writeFile(join(left, "file.txt"), "left\n");
   await writeFile(join(right, "file.txt"), "right\n");
+  await writeFile(join(leftUpdated, "file.txt"), "updated left\n");
+  await writeFile(join(rightUpdated, "file.txt"), "updated right\n");
   session = await launchNative(config);
   let page = session.page;
   const workspace = () => page.locator('.workspace-slot[aria-hidden="false"]');
@@ -57,7 +62,7 @@ try {
   ]);
   assert.equal(await page.locator('[data-panel="sessions"]').count(), 0);
   await menu.press("Escape");
-  await topCommand("Save Session...");
+  await topCommand("Save Session");
   await dialog("Save Session")
     .getByRole("button", { name: "Save", exact: true })
     .click();
@@ -72,7 +77,7 @@ try {
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
   assert.equal((await session.call("read_settings")).sessions.length, 0);
-  await topCommand("Save Session...");
+  await topCommand("Save Session");
   await dialog("Save Session")
     .getByLabel("Session name", { exact: true })
     .fill("  Folder fixture  ");
@@ -98,25 +103,150 @@ try {
   assert.ok(saved[0].left.endsWith("\\left"));
   assert.ok(saved[0].right.endsWith("\\right"));
   assert.equal(saved[0].folderRules.content, "binary");
+  assert.equal(
+    await page.getByRole("tab", { name: /Folder fixture/ }).count(),
+    1,
+    "Saving a session should identify its tab",
+  );
+  await topCommand("Save Session");
+  const updateDialog = dialog("Save Session");
+  assert.equal(
+    await updateDialog.getByLabel("Session name", { exact: true }).inputValue(),
+    "Folder fixture",
+  );
+  assert.equal(
+    await updateDialog.getByLabel("Session name", { exact: true }).isEditable(),
+    false,
+    "Save should keep the current session name fixed",
+  );
+  await updateDialog
+    .getByRole("button", { name: "Update", exact: true })
+    .click();
+  await updateDialog.waitFor({ state: "hidden" });
+  for (const [side, path] of [
+    ["left", leftUpdated],
+    ["right", rightUpdated],
+  ])
+    await workspace()
+      .getByRole("combobox", { name: `${side} path`, exact: true })
+      .fill(path);
+  await workspace()
+    .getByRole("button", { name: "Scan folders", exact: true })
+    .click();
+  await workspace().locator('.folder-row[data-relative="file.txt"]').waitFor();
+  await idle();
+  await topCommand("Save Session");
+  await dialog("Save Session")
+    .getByRole("button", { name: "Update", exact: true })
+    .click();
+  await dialog("Save Session").waitFor({ state: "hidden" });
+  const updated = (await session.call("read_settings")).sessions;
+  assert.ok(updated[0].left.endsWith("\\left-updated"));
+  assert.ok(updated[0].right.endsWith("\\right-updated"));
+  await topCommand("Save Session As...");
+  await dialog("Save Session As")
+    .getByLabel("Session name", { exact: true })
+    .fill("Copied fixture");
+  await dialog("Save Session As")
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
+  await dialog("Save Session As").waitFor({ state: "hidden" });
+  assert.equal(
+    await page.getByRole("tab", { name: /Copied fixture/ }).count(),
+    1,
+    "Save As should give the tab the new saved-session identity",
+  );
+  await topCommand("Saved Sessions...");
+  const sessionsDialog = dialog("Saved Sessions");
+  await sessionsDialog
+    .getByRole("button", {
+      name: "Move session Copied fixture up",
+      exact: true,
+    })
+    .click();
+  await idle();
+  assert.equal(
+    (await session.call("read_settings")).sessions[0].name,
+    "Copied fixture",
+    "Session ordering should persist immediately",
+  );
+  await sessionsDialog
+    .getByRole("button", {
+      name: "Rename saved session Copied fixture",
+      exact: true,
+    })
+    .click();
+  await sessionsDialog
+    .getByLabel("Rename session Copied fixture", { exact: true })
+    .fill("Renamed fixture");
+  await sessionsDialog
+    .getByRole("button", { name: "Save name", exact: true })
+    .click();
+  await idle();
+  assert.equal(
+    (await session.call("read_settings")).sessions[0].name,
+    "Renamed fixture",
+  );
+  assert.equal(
+    await page.getByRole("tab", { name: /Renamed fixture/ }).count(),
+    1,
+    "Renaming a session should update open tab identity",
+  );
+  await sessionsDialog.press("Escape");
+  await topCommand("Save Session As...");
+  await dialog("Save Session As")
+    .getByLabel("Session name", { exact: true })
+    .fill("folder FIXTURE");
+  await dialog("Save Session As")
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
+  const overwriteDialog = page.getByRole("dialog", {
+    name: "Confirm action",
+    exact: true,
+  });
+  await overwriteDialog.waitFor();
+  await overwriteDialog
+    .getByRole("button", { name: "Confirm", exact: true })
+    .click();
+  await dialog("Save Session As").waitFor({ state: "hidden" });
+  const overwritten = (await session.call("read_settings")).sessions;
+  assert.equal(overwritten.length, 2);
+  assert.ok(overwritten.some((item) => item.name === "Folder fixture"));
+  assert.ok(
+    overwritten
+      .find((item) => item.name === "Folder fixture")
+      .left.endsWith("\\left-updated"),
+  );
   await workspace()
     .getByRole("button", { name: "Sessions", exact: true })
     .click();
   await page.screenshot({ path: join(screenshots, "sessions-menu.png") });
   await menu.press("Escape");
-  await topCommand("Save Session...");
-  await dialog("Save Session")
+  await topCommand("Save Session As...");
+  await dialog("Save Session As")
     .getByLabel("Session name", { exact: true })
     .fill("folder FIXTURE");
-  await dialog("Save Session")
+  await dialog("Save Session As")
     .getByRole("button", { name: "Save", exact: true })
     .click();
-  await dialog("Save Session")
-    .getByRole("alert")
-    .filter({ hasText: "already exists" })
-    .waitFor();
-  await dialog("Save Session").press("Escape");
-  await topCommand("Save Session...");
-  await dialog("Save Session")
+  const duplicateConfirm = page.getByRole("dialog", {
+    name: "Confirm action",
+    exact: true,
+  });
+  await duplicateConfirm.waitFor();
+  await duplicateConfirm
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  assert.equal(
+    await dialog("Save Session As")
+      .getByLabel("Session name", { exact: true })
+      .inputValue(),
+    "folder FIXTURE",
+    "Canceling duplicate replacement should retain the input",
+  );
+  await dialog("Save Session As").press("Escape");
+  await topCommand("Save Session As...");
+  await dialog("Save Session As")
     .getByLabel("Session name", { exact: true })
     .fill("Failure fixture");
   const settingsFile = join(config, "settings.json");
@@ -124,13 +254,13 @@ try {
   await rename(settingsFile, backup);
   await mkdir(settingsFile);
   try {
-    await dialog("Save Session")
+    await dialog("Save Session As")
       .getByRole("button", { name: "Save", exact: true })
       .click();
-    await dialog("Save Session").getByRole("alert").waitFor();
+    await dialog("Save Session As").getByRole("alert").waitFor();
     await idle();
     assert.equal(
-      await dialog("Save Session")
+      await dialog("Save Session As")
         .getByLabel("Session name", { exact: true })
         .inputValue(),
       "Failure fixture",
@@ -139,7 +269,7 @@ try {
     await rm(settingsFile, { recursive: true });
     await rename(backup, settingsFile);
   }
-  await dialog("Save Session")
+  await dialog("Save Session As")
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
   await workspace()
@@ -220,6 +350,23 @@ try {
     .getByRole("button", { name: "Confirm", exact: true })
     .click();
   await idle();
+  assert.equal((await session.call("read_settings")).sessions.length, 1);
+  assert.equal(
+    await page.getByRole("tab", { name: /Folder fixture/ }).count(),
+    0,
+    "Removing a session should clear its open tab identity",
+  );
+  await dialog("Saved Sessions")
+    .getByRole("button", {
+      name: "Remove session Renamed fixture",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Confirm action", exact: true })
+    .getByRole("button", { name: "Confirm", exact: true })
+    .click();
+  await idle();
   assert.equal((await session.call("read_settings")).sessions.length, 0);
   await dialog("Saved Sessions").press("Escape");
   await workspace().getByRole("button", { name: "Home", exact: true }).click();
@@ -250,7 +397,7 @@ try {
   await idle();
   assert.equal((await session.call("read_settings")).sessions.length, 0);
   console.log(
-    "PASS: compact session switch/new menu; in-app Save validation/cancel/duplicates; immediate persistence and restart; real write failure retains input; draft-preserving switches; separate profiles; confirmed removal; no browser prompt.",
+    "PASS: named tab identity; Save and Save As; explicit duplicate overwrite/cancel; rename and ordering; persistence failure retains input; restart; draft-preserving switches; confirmed removal clears tab identity.",
   );
 } finally {
   if (session) await session.close();
