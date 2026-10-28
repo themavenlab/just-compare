@@ -128,6 +128,10 @@ button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 button[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -735,6 +739,10 @@ body,
   display: block;
   width: 100%;
   text-align: left;
+  border-color: transparent;
+}
+.menu-popup button[aria-disabled="true"]:hover {
+  background: var(--surface);
   border-color: transparent;
 }
 .workbench-shell .menu-popup button {
@@ -2125,4 +2133,76 @@ body,
 }
 .path-label {
   min-width: 0;
+}
+@media (forced-colors: active) {
+  :root,
+  [data-theme="dark"] {
+    --canvas: Canvas;
+    --surface: Canvas;
+    --surface-alt: Canvas;
+    --text: CanvasText;
+    --muted: GrayText;
+    --border: ButtonText;
+    --accent: Highlight;
+    --accent-soft: Canvas;
+    --changed: Canvas;
+    --added: Canvas;
+    --removed: Canvas;
+    --danger: CanvasText;
+    --selected: Highlight;
+    --file-different: CanvasText;
+    --file-left-only: CanvasText;
+    --file-right-only: CanvasText;
+    --file-error: CanvasText;
+  }
+  button:disabled,
+  button[aria-disabled="true"] {
+    color: GrayText;
+    border-color: GrayText;
+    opacity: 1;
+  }
+  button[aria-pressed="true"] {
+    outline: 1px solid Highlight;
+  }
+  .focused-row,
+  .selected-folder-row {
+    background: Canvas !important;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  .folder-side.different .file-name,
+  .folder-file.different .file-name {
+    text-decoration: underline;
+  }
+  .folder-side.leftOnly .file-name,
+  .folder-file.leftOnly .file-name {
+    border-inline-start: 2px solid Highlight;
+  }
+  .folder-side.rightOnly .file-name,
+  .folder-file.rightOnly .file-name {
+    border-inline-end: 2px solid Highlight;
+  }
+  .folder-side.error .file-name,
+  .folder-file.error .file-name {
+    text-decoration: underline wavy;
+  }
+  .cm-editor .diff-replace {
+    text-decoration: underline dotted;
+  }
+  .cm-editor .diff-insert {
+    text-decoration: underline solid;
+  }
+  .cm-editor .diff-delete {
+    text-decoration: line-through;
+  }
+  .cm-editor .diff-selected {
+    outline: 1px solid Highlight;
+    box-shadow: none;
+  }
+  .difference-rail button {
+    border: 1px solid Highlight;
+  }
+  .difference-rail button[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+  }
 }

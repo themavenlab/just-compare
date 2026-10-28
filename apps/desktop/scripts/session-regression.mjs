@@ -62,7 +62,18 @@ try {
   ]);
   assert.equal(await page.locator('[data-panel="sessions"]').count(), 0);
   await menu.press("Escape");
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.setViewportSize({ width: 640, height: 480 });
   await topCommand("Save Session");
+  const scaledDialog = await dialog("Save Session").boundingBox();
+  assert.ok(
+    scaledDialog &&
+      scaledDialog.x >= 0 &&
+      scaledDialog.y >= 0 &&
+      scaledDialog.x + scaledDialog.width <= 640 &&
+      scaledDialog.y + scaledDialog.height <= 480,
+    "Dialogs remain within a narrow high-contrast viewport.",
+  );
   await dialog("Save Session")
     .getByRole("button", { name: "Save", exact: true })
     .click();
@@ -76,6 +87,8 @@ try {
   await dialog("Save Session")
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
+  await page.emulateMedia({ forcedColors: "none" });
+  await page.setViewportSize({ width: 1280, height: 800 });
   assert.equal((await session.call("read_settings")).sessions.length, 0);
   await topCommand("Save Session");
   await dialog("Save Session")

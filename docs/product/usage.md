@@ -6,7 +6,7 @@ This guide covers everyday usage of Just Compare, including text comparison, fol
 
 ## 1. Workbench Navigation & Tabs
 
-Use the tab bar or File menu to open independent Text Compare, Folder Compare, or 3-Way Merge tabs. Each tab independently retains its drafts, comparison rules, selections, diff results, Undo history, and scroll viewports. A star indicator marks unsaved changes; closing a dirty tab or the window requests confirmation before discarding edits. Use `Ctrl+Tab` / `Cmd+Tab` to switch between tabs and `Ctrl+W` / `Cmd+W` to close the active tab. Drag the central splitter to adjust pane widths. Secondary commands and panels (rules, aligned view, legend, preferences) are available through the View and Edit menus without permanently cluttering editor space.
+Use the tab bar or File menu to open independent Text Compare, Folder Compare, or 3-Way Merge tabs. Each tab independently retains its drafts, comparison rules, selections, diff results, Undo history, and scroll viewports. A star indicator marks unsaved changes; closing a dirty tab or the window requests confirmation before discarding edits. Use `Ctrl+Tab` / `Cmd+Tab` to switch between tabs and `Ctrl+W` / `Cmd+W` to close the active tab. In menus, Enter opens a menu, arrow keys or Home/End move among commands, Escape closes and restores focus, and Tab exits to the next or previous control. Drag the central splitter to adjust pane widths. Secondary commands and panels (rules, aligned view, legend, preferences) are available through the View and Edit menus without permanently cluttering editor space.
 
 ---
 

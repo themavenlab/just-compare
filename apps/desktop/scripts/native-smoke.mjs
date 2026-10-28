@@ -30,6 +30,46 @@ try {
   session = await launchNative(config);
   const { page, call } = session;
   assert.equal(await page.getByRole("tab").count(), 0);
+  const fileMenu = page.getByRole("button", { name: "File", exact: true });
+  await fileMenu.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: "New Text Compare" }).waitFor();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  const openLeft = page.getByRole("menuitem", {
+    name: "Open left...",
+    exact: true,
+  });
+  assert.equal(await openLeft.getAttribute("aria-disabled"), "true");
+  const disabledDescription = await openLeft.getAttribute("aria-describedby");
+  assert.ok(disabledDescription);
+  assert.match(
+    await page.locator(`[id="${disabledDescription}"]`).innerText(),
+    /unavailable/,
+  );
+  await openLeft.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.getByRole("tab").count(), 0);
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await fileMenu.evaluate((element) => element === document.activeElement),
+    true,
+  );
+  await fileMenu.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: "New Text Compare" }).waitFor();
+  await page.keyboard.press("Tab");
+  await page.getByRole("menu", { name: "File", exact: true }).waitFor({
+    state: "detached",
+  });
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Edit", exact: true })
+      .evaluate((element) => element === document.activeElement),
+    true,
+    "Tab exits a menu to the next application command.",
+  );
   await selectWorkspace(page, "text");
   const textWorkflow = page.getByRole("tab").first();
   assert.equal(await textWorkflow.getAttribute("aria-selected"), "true");
@@ -95,6 +135,20 @@ try {
       true,
     );
   }
+  await page.setViewportSize({ width: 640, height: 480 });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+    "A narrow viewport remains horizontally usable at increased display scaling.",
+  );
+  assert.equal(
+    await page
+      .locator('.workspace-slot[aria-hidden="false"] .code-editor')
+      .count(),
+    2,
+  );
   await page.setViewportSize({ width: 1100, height: 800 });
   await page
     .locator('.workspace-slot[aria-hidden="false"]')
@@ -799,6 +853,49 @@ try {
       `Filename contrast must reach 4.5:1 in ${theme}: ${contrast}`,
     );
   }
+  await page.emulateMedia({ forcedColors: "active" });
+  assert.equal(
+    await page.evaluate(() => matchMedia("(forced-colors: active)").matches),
+    true,
+  );
+  const highContrastIndicators = await folderList.evaluate((list) =>
+    Object.fromEntries(
+      ["different", "leftOnly", "rightOnly", "error"].map((status) => {
+        const name = list.querySelector(`.folder-side.${status} .file-name`);
+        const style = name ? getComputedStyle(name) : null;
+        return [
+          status,
+          style && {
+            decoration: style.textDecorationLine,
+            decorationStyle: style.textDecorationStyle,
+            borderStart: style.borderInlineStartWidth,
+            borderEnd: style.borderInlineEndWidth,
+          },
+        ];
+      }),
+    ),
+  );
+  assert.equal(
+    highContrastIndicators.different.decoration,
+    "underline",
+    "Different files retain a non-color indicator in high contrast.",
+  );
+  assert.equal(
+    highContrastIndicators.leftOnly.borderStart,
+    "2px",
+    "Left-only files retain a non-color indicator in high contrast.",
+  );
+  assert.equal(
+    highContrastIndicators.rightOnly.borderEnd,
+    "2px",
+    "Right-only files retain a non-color indicator in high contrast.",
+  );
+  assert.equal(
+    highContrastIndicators.error.decorationStyle,
+    "wavy",
+    "Folder errors retain a non-color indicator in high contrast.",
+  );
+  await page.emulateMedia({ forcedColors: "none" });
   await page.getByRole("button", { name: "Diffs", exact: true }).click();
   await page
     .getByRole("menuitem", { name: "Show Left Orphans", exact: true })
