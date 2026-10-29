@@ -20,8 +20,6 @@ try {
   const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
   const editor = (side) =>
     workspace.getByRole("textbox", { name: `${side} text`, exact: true });
-  const content = async (side) =>
-    (await editor(side).locator(".cm-line").allTextContents()).join("\n");
   async function waitForContent(side, expected) {
     await page.waitForFunction(
       ({ side, expected }) => {
@@ -46,8 +44,8 @@ try {
       .getByRole("heading", { name: "2 changed regions" })
       .waitFor();
   }
-  const left = "same\nleft first\nmiddle\nleft second\n";
-  const right = "same\nxxxx first\nmiddle\nright second\n";
+  const left = "same\nleft first\nleft continuation\nmiddle\nleft second\n";
+  const right = "same\nxxxx first\nxxxx continuation\nmiddle\nright second\n";
   await editor("Left").fill(left);
   await editor("Right").fill(right);
   await compare();
@@ -55,37 +53,30 @@ try {
   await editor("Left").click();
   await page.keyboard.press("Control+n");
   await workspace.getByText("2 / 2 differences", { exact: true }).waitFor();
+  await page.waitForFunction(() => {
+    const line = window
+      .getSelection()
+      ?.anchorNode?.parentElement?.closest(".cm-line");
+    return (
+      document.activeElement?.getAttribute("aria-label") === "Left text" &&
+      line?.textContent === "left second"
+    );
+  });
   await page.keyboard.press("Control+p");
   await workspace.getByText("1 / 2 differences", { exact: true }).waitFor();
-
-  await editor("Left").click();
-  await editor("Left").locator(".cm-line").nth(1).click();
-  await page.keyboard.press("Home");
-  for (let index = 0; index < 4; index += 1)
-    await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("Control+n");
+  await workspace.getByText("2 / 2 differences", { exact: true }).waitFor();
   await page.keyboard.press("Control+r");
-  await waitForContent("Right", "same\nleft first\nmiddle\nright second\n");
-
-  await editor("Left").click();
-  await page.keyboard.press("Control+a");
-  await page.keyboard.press("Control+r");
-  await waitForContent("Right", left);
-  assert.equal(await content("Right"), left);
-
-  await editor("Right").fill(right);
-  await compare();
-  await editor("Left").locator(".cm-line").nth(1).click();
-  await page.keyboard.press("Control+r");
-  await waitForContent("Right", "same\nleft first\nmiddle\nright second\n");
-  assert.equal(
-    await content("Right"),
-    "same\nleft first\nmiddle\nright second\n",
+  await waitForContent(
+    "Right",
+    "same\nxxxx first\nxxxx continuation\nmiddle\nleft second\n",
   );
 
-  await editor("Right").locator(".cm-line").nth(3).click();
   await page.keyboard.press("Control+l");
-  await waitForContent("Left", "same\nleft first\nmiddle\nright second\n");
-
+  await waitForContent(
+    "Left",
+    "same\nxxxx first\nxxxx continuation\nmiddle\nleft second\n",
+  );
   await editor("Left").click();
   await page.keyboard.press("F6");
   assert.equal(

@@ -152,7 +152,8 @@ export function EditorSurface({
   intralineBaseByte = 0,
   onSelectLine,
   selection,
-  onCopySelection,
+  onCopyDirection,
+  moveCaretOnNavigation = false,
 }: {
   text: string;
   onChange: (text: string) => void;
@@ -175,15 +176,8 @@ export function EditorSurface({
   intralineBaseByte?: number;
   onSelectLine?: ((line: number) => void) | undefined;
   selection?: { from: number; to: number; token: number } | undefined;
-  onCopySelection?:
-    | ((
-        source: "left" | "right",
-        destination: "left" | "right",
-        from: number,
-        to: number,
-        length: number,
-      ) => boolean)
-    | undefined;
+  onCopyDirection?: ((destination: "left" | "right") => boolean) | undefined;
+  moveCaretOnNavigation?: boolean;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -191,13 +185,13 @@ export function EditorSurface({
   const undoCallback = useRef(onUndo);
   const redoCallback = useRef(onRedo);
   const lineCallback = useRef(onSelectLine);
-  const copySelectionCallback = useRef(onCopySelection);
+  const copyDirectionCallback = useRef(onCopyDirection);
   useEffect(() => {
     lineCallback.current = onSelectLine;
   }, [onSelectLine]);
   useEffect(() => {
-    copySelectionCallback.current = onCopySelection;
-  }, [onCopySelection]);
+    copyDirectionCallback.current = onCopyDirection;
+  }, [onCopyDirection]);
   const updating = useRef(false);
   const readonly = useRef(new Compartment());
   const alignment = useRef(new Compartment());
@@ -254,31 +248,11 @@ export function EditorSurface({
               },
               {
                 key: "Mod-r",
-                run: ({ state }) => {
-                  if (!copySelectionCallback.current) return false;
-                  const selection = state.selection.main;
-                  return copySelectionCallback.current(
-                    side,
-                    "right",
-                    selection.from,
-                    selection.to,
-                    state.doc.length,
-                  );
-                },
+                run: () => copyDirectionCallback.current?.("right") ?? false,
               },
               {
                 key: "Mod-l",
-                run: ({ state }) => {
-                  if (!copySelectionCallback.current) return false;
-                  const selection = state.selection.main;
-                  return copySelectionCallback.current(
-                    side,
-                    "left",
-                    selection.from,
-                    selection.to,
-                    state.doc.length,
-                  );
-                },
+                run: () => copyDirectionCallback.current?.("left") ?? false,
               },
             ]),
           ),
@@ -647,6 +621,15 @@ export function EditorSurface({
     ) {
       lastNavigation.current = navigation;
       instance.dispatch({
+        ...(moveCaretOnNavigation
+          ? {
+              selection: {
+                anchor: instance.state.doc.line(
+                  Math.min(selectedLine + 1, instance.state.doc.lines),
+                ).from,
+              },
+            }
+          : {}),
         effects: EditorView.scrollIntoView(
           instance.state.doc.line(
             Math.min(selectedLine + 1, instance.state.doc.lines),
@@ -654,8 +637,9 @@ export function EditorSurface({
           { y: "center" },
         ),
       });
+      if (moveCaretOnNavigation) instance.focus();
     }
-  }, [selectedLine, navigation]);
+  }, [selectedLine, navigation, moveCaretOnNavigation]);
   useEffect(() => {
     if (
       view.current &&
