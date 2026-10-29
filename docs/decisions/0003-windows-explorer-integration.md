@@ -18,7 +18,7 @@ The portable desktop has no installer or app identity. Windows supports static p
 - Adopt Windows-only winreg 0.56.0 (MIT) for safe registry access and tauri-plugin-single-instance 2.5.4 (MIT OR Apache-2.0) for normal-app handoff. Pin both and update both Cargo graphs; no frontend dependency is needed.
 - The Tauri callback queues at most 32 requests and emits a notification; React subscribes before draining, avoiding startup listener races. It appends workspaces, never replaces dirty tabs. Selection IO and comparison remain Rust.
 - Explorer grants foreground rights only to the launched secondary process, so it calls AllowSetForegroundWindow(ASFW_ANY) before handoff; otherwise Windows blocks the running window from raising itself and the new tab stays hidden.
-- Exclude Git diff/merge and CLI waiting launches from singleton routing, preserving process waiting, temporary directory lifetime, cancellation and saved-output exit semantics. The CLI sets COMPARE_WAIT_FOR_CLOSE=1 only in its child environment; direct shell launches do not use that flag.
+- Git diff/merge and CLI waiting launches never forward their own arguments, preserving process waiting, temporary directory lifetime, cancellation and saved-output exit semantics. The CLI sets COMPARE_WAIT_FOR_CLOSE=1 only in its child environment; direct shell launches do not use that flag. When no singleton primary exists, such a window registers as the receiver so later shell launches become tabs instead of separate windows. A named `{identifier}-handoff-gate` mutex, held from registration until `build()` returns, makes the check for the plugin's `{identifier}-sim` mutex and the registration atomic, so a waiting launch can never take the plugin's forward-and-exit path. Gate timeouts or unknown mutex errors keep the waiting launch independent.
 - Debug native tests isolate singleton identity by canonical test-config path and registry writes under a test-only HKCU subtree, not Explorer associations. Release builds do not honor test overrides.
 
 ## Alternatives
@@ -30,7 +30,7 @@ A COM extension plus sparse package could expose modern Windows 11 commands and 
 Selection survives restarts as a local path only; clear it explicitly or remove integration. No drafts, credentials, contents or telemetry are stored. All paths are revalidated and missing/mixed/linked inputs report errors.
 The registered executable must remain at its location: remove before moving it and re-enable afterward. Another executable cannot remove owned keys.
 Partial registration failures report errors; retry enable/remove to repair.
-Secondary shell launch exit means delivery, not comparison completion; failures are visible in the primary app. CLI/Git waiting launches remain independent.
+Secondary shell launch exit means delivery, not comparison completion; failures are visible in the primary app. CLI/Git waiting launches never hand off; a waiting window that is the only window also receives shell launches as tabs and keeps its process (and Git's wait) alive until closed.
 macOS/Linux integration and modern Windows 11 packaging remain future work.
 
 ## Sources and verification

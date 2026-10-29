@@ -15,6 +15,8 @@ fn main() {
   #[cfg(not(all(windows, debug_assertions)))]
   let context = tauri::generate_context!();
   #[cfg(windows)]
+  let handoff_gate;
+  #[cfg(windows)]
   {
     #[cfg(debug_assertions)]
     if let Some(config) = std::env::var_os("COMPARE_TEST_CONFIG") {
@@ -39,7 +41,18 @@ fn main() {
       .nth(1)
       .is_some_and(|arg| arg == "git-diff" || arg == "git-merge");
     let waiting = std::env::var("COMPARE_WAIT_FOR_CLOSE").as_deref() == Ok("1");
-    if !is_git && !waiting {
+    let identifier = context.config().identifier.clone();
+    handoff_gate = HandoffGate::acquire(&identifier);
+    // Git/CLI waiting launches must never forward their arguments and exit, but they
+    // may receive later shell launches when no primary exists. The gate makes that
+    // check-then-register atomic with respect to other launches.
+    let receive_only = is_git || waiting;
+    let register = if receive_only {
+      handoff_gate.is_some() && !primary_running(&identifier)
+    } else {
+      true
+    };
+    if !receive_only {
       // Explorer grants foreground rights to this launch, not to an already-running
       // instance; share them so the primary can raise itself after handoff.
       unsafe {
@@ -47,6 +60,8 @@ fn main() {
           windows_sys::Win32::UI::WindowsAndMessaging::ASFW_ANY,
         );
       }
+    }
+    if register {
       builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         let result = app
           .state::<std::sync::Arc<commands::Resources>>()
@@ -115,6 +130,9 @@ fn main() {
       commands::finish_git_merge,
     ])
     .build(context);
+  // Plugin setup has created the singleton mutex and receiver window by now.
+  #[cfg(windows)]
+  drop(handoff_gate);
   match result {
     Ok(app) => app.run(move |handle, event| {
       if is_merge && matches!(event, tauri::RunEvent::Exit) {
@@ -131,6 +149,65 @@ fn main() {
       std::process::exit(2);
     }
   }
+}
+
+#[cfg(windows)]
+fn wide(value: &str) -> Vec<u16> {
+  value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Named mutex held from singleton registration until the receiver window exists.
+#[cfg(windows)]
+struct HandoffGate(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl HandoffGate {
+  fn acquire(identifier: &str) -> Option<Self> {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let name = wide(&format!("{identifier}-handoff-gate"));
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if handle.is_null() {
+      eprintln!("Cannot create shell handoff gate.");
+      return None;
+    }
+    // An abandoned gate means its previous owner exited during startup; ownership transfers.
+    match unsafe { WaitForSingleObject(handle, 30_000) } {
+      WAIT_OBJECT_0 | WAIT_ABANDONED => Some(Self(handle)),
+      _ => {
+        eprintln!("Timed out waiting for the shell handoff gate.");
+        unsafe { CloseHandle(handle) };
+        None
+      }
+    }
+  }
+}
+
+#[cfg(windows)]
+impl Drop for HandoffGate {
+  fn drop(&mut self) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::ReleaseMutex;
+    unsafe {
+      ReleaseMutex(self.0);
+      CloseHandle(self.0);
+    }
+  }
+}
+
+/// Must match the mutex name used by tauri-plugin-single-instance without its semver feature.
+#[cfg(windows)]
+fn primary_running(identifier: &str) -> bool {
+  use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_FILE_NOT_FOUND};
+  use windows_sys::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+  let name = wide(&format!("{identifier}-sim"));
+  let handle = unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, 0, name.as_ptr()) };
+  if handle.is_null() {
+    // Unknown failures keep the waiting launch independent rather than risk an exit.
+    return unsafe { GetLastError() } != ERROR_FILE_NOT_FOUND;
+  }
+  unsafe { CloseHandle(handle) };
+  true
 }
 
 #[cfg(windows)]

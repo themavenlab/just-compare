@@ -267,6 +267,41 @@ try {
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
   await idle();
+  // A Git/CLI waiting window receives later shell launches when it is the only window.
+  await session.close();
+  session = await launchNative(config, ["git-diff", left, right], {
+    desktop: executable,
+  });
+  page = session.page;
+  await workspace()
+    .getByRole("heading", { name: "1 changed regions", exact: true })
+    .waitFor();
+  await idle();
+  await launch(["shell-open", right]);
+  await page.waitForFunction(
+    () => document.querySelectorAll('[role="tab"]').length === 2,
+  );
+  await idle();
+  // Waiting launches never forward their own arguments: Git must keep its process.
+  const waitingGit = spawn(executable, ["git-diff", left, right], {
+    env: {
+      ...process.env,
+      COMPARE_TEST_CONFIG: config,
+      // The CDP-enabled primary's WebView2 profile cannot be shared with other options.
+      WEBVIEW2_USER_DATA_FOLDER: join(root, "independent-webview"),
+    },
+    stdio: "ignore",
+  });
+  try {
+    const exitedEarly = await Promise.race([
+      once(waitingGit, "exit").then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+    ]);
+    assert.equal(exitedEarly, false, "Git launches must remain independent");
+    assert.equal(await page.getByRole("tab").count(), 2);
+  } finally {
+    if (waitingGit.exitCode === null) waitingGit.kill();
+  }
   await menu("Remove Explorer commands...");
   await page
     .getByRole("dialog", { name: "Confirm action" })
