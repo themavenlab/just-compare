@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { native, textLines } from "./api";
 import { WorkspaceDialog } from "./WorkspaceDialog";
 
@@ -26,6 +26,9 @@ interface ReplacementPreview {
 export function TextSearchPanel({
   texts,
   mode,
+  query,
+  onQueryChange,
+  searchRequest,
   onModeChange,
   onClose,
   onNavigate,
@@ -33,13 +36,15 @@ export function TextSearchPanel({
 }: {
   texts: Record<Side, string>;
   mode: "find" | "replace" | "goto";
+  query: string;
+  onQueryChange: (query: string) => void;
+  searchRequest: { token: number; direction: Direction } | null;
   onModeChange: (mode: "find" | "replace" | "goto") => void;
   onClose: () => void;
   onNavigate: (side: Side, from: number, to: number) => void;
   onReplace: (changes: Partial<Record<Side, string>>) => void;
 }) {
   const [scope, setScope] = useState<Scope>("both");
-  const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
@@ -118,6 +123,17 @@ export function TextSearchPanel({
       return null;
     }
   }
+  const navigateFromShortcut = useEffectEvent((direction: Direction) => {
+    void find(direction);
+  });
+  useEffect(() => {
+    if (!searchRequest) return;
+    const timer = window.setTimeout(
+      () => navigateFromShortcut(searchRequest.direction),
+      0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [searchRequest]);
 
   async function replaceNext() {
     const found = await find(1);
@@ -281,7 +297,7 @@ export function TextSearchPanel({
                 ref={input}
                 aria-label="Find text"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => onQueryChange(event.target.value)}
               />
             </label>
             <label>

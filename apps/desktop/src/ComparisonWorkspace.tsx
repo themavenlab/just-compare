@@ -299,6 +299,12 @@ export function ComparisonWorkspace({
   const [searchMode, setSearchMode] = useState<
     "find" | "replace" | "goto" | null
   >(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchRequest, setSearchRequest] = useState<{
+    token: number;
+    direction: -1 | 1;
+  } | null>(null);
+  const searchRequestToken = useRef(0);
   const [searchSelection, setSearchSelection] = useState<{
     side: "left" | "right";
     from: number;
@@ -1121,6 +1127,155 @@ export function ComparisonWorkspace({
         }),
       ),
     ) ?? [];
+  function copyEditorSelection(
+    source: "left" | "right",
+    destination: "left" | "right",
+    from: number,
+    to: number,
+    documentLength: number,
+  ) {
+    if (busy || mode !== "text") return true;
+    const expectedSource = destination === "right" ? "left" : "right";
+    if (source !== expectedSource) {
+      setNotice(
+        `Focus the ${expectedSource} editor to copy to the ${destination}.`,
+      );
+      return true;
+    }
+    const sourceText = editors[source].text;
+    const targetText = editors[destination].text;
+    const normalizedSource = sourceText.replace(/\r\n|\r/g, "\n");
+    if (from === 0 && to === documentLength) {
+      void attempt(() => replaceCopiedDraft(destination, sourceText));
+      return true;
+    }
+    const sourceLines = textLines(normalizedSource);
+    const firstOffset = Math.min(from, normalizedSource.length);
+    const lastOffset = Math.max(
+      firstOffset,
+      Math.min(to, normalizedSource.length),
+    );
+    const lineAt = (offset: number) => {
+      const precedingNewlines = normalizedSource.slice(0, offset).match(/\n/g);
+      return precedingNewlines?.length ?? 0;
+    };
+    const firstSourceLine = lineAt(firstOffset);
+    const lastSourceLine =
+      lastOffset > firstOffset ? lineAt(lastOffset) : firstSourceLine;
+    const sourceStart = Math.min(
+      firstSourceLine,
+      Math.max(0, sourceLines.length - 1),
+    );
+    const sourceEnd = Math.min(lastSourceLine + 1, sourceLines.length);
+    const targetLines = textLines(targetText);
+    const targetAt = (lineIndex: number) => {
+      if (!spans) return Math.min(lineIndex, targetLines.length);
+      const sourceKey = source === "left" ? "left" : "right";
+      const targetKey = destination === "left" ? "left" : "right";
+      const exact = aligned.find((row) => row[sourceKey] === lineIndex);
+      if (exact?.[targetKey] != null) return exact[targetKey];
+      const following = aligned.find(
+        (row) =>
+          row[sourceKey] != null &&
+          row[sourceKey]! > lineIndex &&
+          row[targetKey] != null,
+      );
+      if (following?.[targetKey] != null) return following[targetKey];
+      return targetLines.length;
+    };
+    if (lastOffset > firstOffset) {
+      const normalizedTarget = targetText.replace(/\r\n|\r/g, "\n");
+      const rawOffsets = (value: string, normalized: string) => {
+        const offsets = [0];
+        let raw = 0;
+        for (let index = 0; index < normalized.length; index += 1) {
+          raw += value[raw] === "\r" && value[raw + 1] === "\n" ? 2 : 1;
+          offsets.push(raw);
+        }
+        return offsets;
+      };
+      const sourceOffsets = rawOffsets(sourceText, normalizedSource);
+      const targetOffsets = rawOffsets(targetText, normalizedTarget);
+      const normalizedTargetLines = textLines(normalizedTarget);
+      const targetFirst = normalizedTargetLines[targetAt(firstSourceLine)];
+      const targetLast = normalizedTargetLines[targetAt(lastSourceLine)];
+      const sourceFirst = sourceLines[firstSourceLine];
+      const sourceLast = sourceLines[lastSourceLine];
+      const firstColumn = Math.max(0, firstOffset - (sourceFirst?.start ?? 0));
+      const lastColumn = Math.max(0, lastOffset - (sourceLast?.start ?? 0));
+      const targetStart =
+        (targetFirst?.start ?? normalizedTarget.length) +
+        Math.min(firstColumn, targetFirst?.content.length ?? 0);
+      const targetEnd = Math.max(
+        targetStart,
+        (targetLast?.start ?? normalizedTarget.length) +
+          Math.min(lastColumn, targetLast?.content.length ?? 0),
+      );
+      const rawStart = targetOffsets[targetStart] ?? targetText.length;
+      const rawEnd = targetOffsets[targetEnd] ?? targetText.length;
+      const copy = sourceText.slice(
+        sourceOffsets[firstOffset] ?? sourceText.length,
+        sourceOffsets[lastOffset] ?? sourceText.length,
+      );
+      const text =
+        targetText.slice(0, rawStart) + copy + targetText.slice(rawEnd);
+      void attempt(() => replaceCopiedDraft(destination, text));
+      return true;
+    }
+    const targetStart = targetAt(sourceStart);
+    const targetEnd =
+      sourceEnd > sourceStart
+        ? Math.max(targetStart, targetAt(sourceEnd - 1) + 1)
+        : targetStart;
+    const text = copyRange(
+      sourceText,
+      targetText,
+      sourceStart,
+      sourceEnd,
+      targetStart,
+      targetEnd,
+    );
+    void attempt(() => replaceCopiedDraft(destination, text));
+    return true;
+  }
+  async function replaceCopiedDraft(
+    destination: "left" | "right",
+    text: string,
+  ) {
+    const inputs = {
+      ...editors,
+      [destination]: {
+        ...editors[destination],
+        text,
+        history: [
+          ...editors[destination].history.slice(-49),
+          editors[destination].text,
+        ],
+        future: [],
+      },
+    };
+    revision.current += 1;
+    setRefinement(null);
+    setBlocks(null);
+    setChoices({});
+    setEditors(inputs);
+    try {
+      await compareInputs(inputs);
+    } catch (failure) {
+      setSpans(null);
+      throw failure;
+    } finally {
+      rootElement.current
+        ?.closest('[aria-hidden="false"]')
+        ?.querySelector<HTMLElement>(
+          `.cm-content[aria-label="${destination === "left" ? "Left text" : "Right text"}"]`,
+        )
+        ?.focus({ preventScroll: true });
+    }
+    setNotice(
+      `Copied to ${destination} draft. Differences refreshed; Save writes the file.`,
+    );
+  }
   const detailIndex = Math.min(
     detailRow ??
       Math.max(
@@ -2179,6 +2334,18 @@ export function ComparisonWorkspace({
                       }
                     : undefined
                 }
+                onCopySelection={
+                  mode === "text" && side !== "base"
+                    ? (source, destination, from, to, length) =>
+                        copyEditorSelection(
+                          source,
+                          destination,
+                          from,
+                          to,
+                          length,
+                        )
+                    : undefined
+                }
                 onUndo={() => {
                   if (!busy) void attempt(() => undoSide(side));
                 }}
@@ -2775,6 +2942,27 @@ export function ComparisonWorkspace({
         )
           return;
         if (busy || !active) return;
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          ["f", "h", "g"].includes(event.key.toLowerCase())
+        ) {
+          event.preventDefault();
+          const key = event.key.toLowerCase();
+          setSearchMode(
+            key === "h" ? "replace" : key === "g" ? "goto" : "find",
+          );
+          return;
+        }
+        if (mode === "text" && event.key === "F3") {
+          event.preventDefault();
+          const direction = event.shiftKey ? -1 : 1;
+          setSearchMode("find");
+          setSearchRequest({
+            token: ++searchRequestToken.current,
+            direction,
+          });
+          return;
+        }
         if (
           (event.ctrlKey || event.metaKey) &&
           event.key === "Enter" &&
@@ -4031,6 +4219,9 @@ export function ComparisonWorkspace({
             <TextSearchPanel
               texts={{ left: editors.left.text, right: editors.right.text }}
               mode={searchMode}
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              searchRequest={searchRequest}
               onModeChange={setSearchMode}
               onClose={() => setSearchMode(null)}
               onNavigate={navigateText}

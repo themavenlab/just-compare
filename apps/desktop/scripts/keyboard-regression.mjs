@@ -1,0 +1,132 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { launchNative } from "./native-harness.mjs";
+
+const root = await mkdtemp(join(tmpdir(), "compare-keyboard-"));
+let session;
+try {
+  const config = join(root, "config");
+  await mkdir(config);
+  session = await launchNative(config);
+  const { page } = session;
+  page.setDefaultTimeout(12000);
+  await page.keyboard.press("Control+t");
+  const chooser = page.getByRole("dialog", { name: "New comparison" });
+  await chooser.waitFor();
+  await chooser.getByRole("button", { name: "New Text Compare" }).click();
+
+  const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
+  const editor = (side) =>
+    workspace.getByRole("textbox", { name: `${side} text`, exact: true });
+  const content = async (side) =>
+    (await editor(side).locator(".cm-line").allTextContents()).join("\n");
+  async function waitForContent(side, expected) {
+    await page.waitForFunction(
+      ({ side, expected }) => {
+        const pane = document.querySelector(
+          `.workspace-slot[aria-hidden="false"] [aria-label="${side} text"]`,
+        );
+        return (
+          pane &&
+          [...pane.querySelectorAll(".cm-line")]
+            .map((line) => line.textContent)
+            .join("\n") === expected
+        );
+      },
+      { side, expected },
+    );
+  }
+  async function compare() {
+    await workspace
+      .getByRole("button", { name: "Compare", exact: true })
+      .click();
+    await workspace
+      .getByRole("heading", { name: "2 changed regions" })
+      .waitFor();
+  }
+  const left = "same\nleft first\nmiddle\nleft second\n";
+  const right = "same\nxxxx first\nmiddle\nright second\n";
+  await editor("Left").fill(left);
+  await editor("Right").fill(right);
+  await compare();
+
+  await editor("Left").click();
+  await page.keyboard.press("Control+n");
+  await workspace.getByText("2 / 2 differences", { exact: true }).waitFor();
+  await page.keyboard.press("Control+p");
+  await workspace.getByText("1 / 2 differences", { exact: true }).waitFor();
+
+  await editor("Left").click();
+  await editor("Left").locator(".cm-line").nth(1).click();
+  await page.keyboard.press("Home");
+  for (let index = 0; index < 4; index += 1)
+    await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("Control+r");
+  await waitForContent("Right", "same\nleft first\nmiddle\nright second\n");
+
+  await editor("Left").click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("Control+r");
+  await waitForContent("Right", left);
+  assert.equal(await content("Right"), left);
+
+  await editor("Right").fill(right);
+  await compare();
+  await editor("Left").locator(".cm-line").nth(1).click();
+  await page.keyboard.press("Control+r");
+  await waitForContent("Right", "same\nleft first\nmiddle\nright second\n");
+  assert.equal(
+    await content("Right"),
+    "same\nleft first\nmiddle\nright second\n",
+  );
+
+  await editor("Right").locator(".cm-line").nth(3).click();
+  await page.keyboard.press("Control+l");
+  await waitForContent("Left", "same\nleft first\nmiddle\nright second\n");
+
+  await editor("Left").click();
+  await page.keyboard.press("F6");
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute("aria-label"),
+    ),
+    "Right text",
+  );
+  await page.keyboard.press("Control+f");
+  const find = workspace.getByRole("textbox", {
+    name: "Find text",
+    exact: true,
+  });
+  await find.fill("same");
+  await page.keyboard.press("F3");
+  await workspace.getByText(/Match 1 of 2/).waitFor();
+  await page.keyboard.press("F3");
+  await workspace.getByText(/Match 2 of 2/).waitFor();
+  await page.keyboard.press("Shift+F3");
+  await workspace.getByText(/Match 1 of 2/).waitFor();
+
+  await workspace
+    .getByRole("button", { name: "Close Find and Replace", exact: true })
+    .click();
+  await editor("Left").click();
+  await page.keyboard.press("F5");
+  await workspace.getByText("No differences", { exact: true }).waitFor();
+
+  await page.getByRole("button", { name: "Help", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Keyboard shortcuts", exact: true })
+    .click();
+  assert.match(
+    await page.locator(".shell-message[role='status']").innerText(),
+    /F3 \/ Shift\+F3.*Ctrl\+N \/ Ctrl\+P.*Ctrl\+T.*F6/,
+  );
+  assert.equal(await page.locator(".shell-message[role='alert']").count(), 0);
+  console.log(
+    "PASS: new-tab chooser, difference navigation, whole-side and line copy, F3 search navigation, F5 compare, F6 pane focus and shortcut help.",
+  );
+} finally {
+  if (session) await session.close();
+  await rm(root, { recursive: true, force: true });
+}

@@ -16,6 +16,7 @@
     "test:workbench": "node scripts/workbench-regression.mjs",
     "test:compact": "node scripts/compact-workbench.mjs",
     "test:interactions": "node scripts/interaction-regression.mjs",
+    "test:keyboard": "node scripts/keyboard-regression.mjs",
     "test:sessions": "node scripts/session-regression.mjs",
     "test:recovery": "node scripts/recovery-regression.mjs",
     "test:alignment-merge": "node scripts/alignment-merge-regression.mjs",

@@ -22,6 +22,7 @@ import {
   type WorkspaceSummary,
   type WorkspaceTab,
 } from "./workbench";
+import { WorkspaceDialog } from "./WorkspaceDialog";
 
 const workflows = [
   ["text", "Text Compare"],
@@ -76,6 +77,7 @@ export function App() {
   );
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [newTabChooser, setNewTabChooser] = useState(false);
   const [confirmation, setConfirmation] = useState<{
     message: string;
     decide: (approved: boolean) => void;
@@ -109,6 +111,8 @@ export function App() {
     tabs,
     recoverDrafts: settings.recoverDrafts,
     recoveryReady,
+    ready,
+    blocked: !!owner,
   });
   useLayoutEffect(() => {
     latest.current = {
@@ -116,8 +120,10 @@ export function App() {
       tabs,
       recoverDrafts: settings.recoverDrafts,
       recoveryReady,
+      ready,
+      blocked: !!owner,
     };
-  }, [active, tabs, settings.recoverDrafts, recoveryReady]);
+  }, [active, tabs, settings.recoverDrafts, recoveryReady, ready, owner]);
   useEffect(() => {
     recoveriesRef.current = recoveries;
   }, [recoveries]);
@@ -800,14 +806,59 @@ export function App() {
   }, [active]);
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.defaultPrevented) return;
+      if (event.defaultPrevented) return;
+      if (event.target instanceof HTMLElement && event.target.closest("dialog"))
+        return;
+      if (event.key === "F5") {
+        event.preventDefault();
+        if (latest.current.active)
+          controllers.current.get(latest.current.active)?.command("run");
+        return;
+      }
+      if (event.key === "F6") {
+        const workspace = document.querySelector<HTMLElement>(
+          '.workspace-slot[aria-hidden="false"]',
+        );
+        if (!workspace) return;
+        const focused = document.activeElement?.closest<HTMLElement>(
+          '.cm-content[aria-label="Left text"], .cm-content[aria-label="Right text"]',
+        );
+        const nextLabel =
+          focused?.getAttribute("aria-label") === "Left text"
+            ? "Right text"
+            : "Left text";
+        const next = workspace.querySelector<HTMLElement>(
+          `.cm-content[aria-label="${nextLabel}"]`,
+        );
+        if (next) {
+          event.preventDefault();
+          next.focus();
+        }
+        return;
+      }
+      if (!(event.ctrlKey || event.metaKey)) return;
       const name = event.key.toLowerCase();
-      if (event.key !== "Tab" && name !== "w" && event.key !== "Enter") return;
+      if (
+        event.key !== "Tab" &&
+        name !== "w" &&
+        name !== "n" &&
+        name !== "p" &&
+        name !== "t" &&
+        event.key !== "Enter"
+      )
+        return;
       event.preventDefault();
       if (approvalPending.current) return;
       const state = latest.current;
       if (name === "w") {
         if (state.active) void closeTab(state.active);
+      } else if (name === "n" || name === "p") {
+        if (state.active)
+          controllers.current
+            .get(state.active)
+            ?.command(name === "n" ? "next" : "previous");
+      } else if (name === "t") {
+        if (state.ready && !state.blocked) setNewTabChooser(true);
       } else if (event.key === "Enter") {
         if (state.active) controllers.current.get(state.active)?.command("run");
       } else if (state.tabs.length) {
@@ -1093,7 +1144,7 @@ export function App() {
               label: "Keyboard shortcuts",
               run: () =>
                 setInfo(
-                  "Shortcuts: Ctrl+Enter run; Ctrl+S save focused editor; Ctrl+Z undo; Ctrl+Y redo; Ctrl+F find; Ctrl+H replace; Ctrl+G go to line; Alt+Up/Down differences; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
+                  "Shortcuts: Ctrl+Enter or F5 run; Ctrl+S save focused editor; Ctrl+Z undo; Ctrl+Y redo; Ctrl+F find; F3 / Shift+F3 next / previous match; Ctrl+H replace; Ctrl+G go to line; Ctrl+N / Ctrl+P next / previous difference (also Alt+Down / Alt+Up); Ctrl+R copy left to right; Ctrl+L copy right to left (Ctrl+A then copy replaces the whole destination); Ctrl+T new comparison; F6 focus the other text pane; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
                 ),
             },
             {
@@ -1329,6 +1380,28 @@ export function App() {
           message={confirmation.message}
           decide={confirmation.decide}
         />
+      )}
+      {newTabChooser && (
+        <WorkspaceDialog
+          title="New comparison"
+          onClose={() => setNewTabChooser(false)}
+        >
+          <div className="dialog-actions">
+            {workflows.map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                disabled={!ready || blocked}
+                onClick={() => {
+                  setNewTabChooser(false);
+                  openTab(mode);
+                }}
+              >
+                New {label}
+              </button>
+            ))}
+          </div>
+        </WorkspaceDialog>
       )}
     </div>
   );
