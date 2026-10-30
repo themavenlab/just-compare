@@ -99,6 +99,7 @@ class CopyArrow extends GutterMarker {
     private readonly deletes: boolean,
     private readonly disabled: boolean,
     private readonly span: DiffSpan,
+    private readonly singleLine: boolean,
     private readonly copy: () => void,
   ) {
     super();
@@ -110,6 +111,7 @@ class CopyArrow extends GutterMarker {
       this.index === other.index &&
       this.deletes === other.deletes &&
       this.disabled === other.disabled &&
+      this.singleLine === other.singleLine &&
       this.span.leftStart === other.span.leftStart &&
       this.span.leftEnd === other.span.leftEnd &&
       this.span.rightStart === other.span.rightStart &&
@@ -120,10 +122,10 @@ class CopyArrow extends GutterMarker {
     const button = document.createElement("button");
     const label = `Copy difference ${this.index + 1} to ${this.destination}`;
     button.type = "button";
-    button.className = "copy-arrow";
+    button.className = `copy-arrow${this.singleLine ? " single-line-copy" : ""}`;
     button.textContent = this.destination === "right" ? "\u2192" : "\u2190";
     button.setAttribute("aria-label", label);
-    button.title = `${label}${this.deletes ? " (remove this region from the destination)" : ""}. Changes the draft only; Save writes the file.`;
+    button.title = `${label}${this.singleLine ? " (single line)" : this.deletes ? " (remove this region from the destination)" : ""}. Changes the draft only; Save writes the file.`;
     button.disabled = this.disabled;
     button.addEventListener("click", this.copy);
     return button;
@@ -146,11 +148,14 @@ export function EditorSurface({
   side = "left",
   selectedDifference,
   onCopyDifference,
+  singleLineCopy,
   displayMode = "all",
   showWhitespace = false,
   intralineSpans = [],
   intralineBaseByte = 0,
   onSelectLine,
+  onLineNumberClick,
+  onEditorContentClick,
   selection,
   onCopyDirection,
   moveCaretOnNavigation = false,
@@ -169,12 +174,15 @@ export function EditorSurface({
   differences?: DiffSpan[];
   side?: "left" | "right";
   selectedDifference?: DiffSpan | undefined;
-  onCopyDifference?: ((span: DiffSpan) => void) | undefined;
+  onCopyDifference?: ((span: DiffSpan, line?: number) => void) | undefined;
+  singleLineCopy?: { side: "left" | "right"; line: number } | undefined;
   displayMode?: "all" | "differences" | "same" | "context";
   showWhitespace?: boolean;
   intralineSpans?: DiffSpan[];
   intralineBaseByte?: number;
   onSelectLine?: ((line: number) => void) | undefined;
+  onLineNumberClick?: ((line: number) => void) | undefined;
+  onEditorContentClick?: (() => void) | undefined;
   selection?: { from: number; to: number; token: number } | undefined;
   onCopyDirection?: ((destination: "left" | "right") => boolean) | undefined;
   moveCaretOnNavigation?: boolean;
@@ -185,10 +193,18 @@ export function EditorSurface({
   const undoCallback = useRef(onUndo);
   const redoCallback = useRef(onRedo);
   const lineCallback = useRef(onSelectLine);
+  const lineNumberCallback = useRef(onLineNumberClick);
+  const contentClickCallback = useRef(onEditorContentClick);
   const copyDirectionCallback = useRef(onCopyDirection);
   useEffect(() => {
     lineCallback.current = onSelectLine;
   }, [onSelectLine]);
+  useEffect(() => {
+    lineNumberCallback.current = onLineNumberClick;
+  }, [onLineNumberClick]);
+  useEffect(() => {
+    contentClickCallback.current = onEditorContentClick;
+  }, [onEditorContentClick]);
   useEffect(() => {
     copyDirectionCallback.current = onCopyDirection;
   }, [onCopyDirection]);
@@ -280,6 +296,33 @@ export function EditorSurface({
         ],
       }),
     });
+    const handleMouseDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest(".cm-lineNumbers")) {
+        const gutterLabel = Number(
+          event.target.closest(".cm-lineNumbers .cm-gutterElement")
+            ?.textContent,
+        );
+        const lineNumber =
+          Number.isInteger(gutterLabel) && gutterLabel > 0
+            ? gutterLabel
+            : instance.state.doc.lineAt(
+                instance.posAtCoords({
+                  x: event.clientX,
+                  y: event.clientY,
+                }) ?? instance.state.selection.main.head,
+              ).number;
+        const line = instance.state.doc.line(
+          Math.min(lineNumber, instance.state.doc.lines),
+        );
+        lineNumberCallback.current?.(line.number - 1);
+        instance.dispatch({ selection: { anchor: line.from } });
+        requestAnimationFrame(() => instance.focus());
+      } else if (event.target.closest(".cm-content")) {
+        contentClickCallback.current?.();
+      }
+    };
+    instance.dom.addEventListener("mousedown", handleMouseDown);
     const scrolled = () => {
       if (!restoringScroll.current)
         scrollCallback.current?.(instance.scrollDOM.scrollTop);
@@ -290,6 +333,7 @@ export function EditorSurface({
       if (scrollFrame.current !== null)
         cancelAnimationFrame(scrollFrame.current);
       view.current = null;
+      instance.dom.removeEventListener("mousedown", handleMouseDown);
       instance.scrollDOM.removeEventListener("scroll", scrolled);
       instance.destroy();
     };
@@ -365,20 +409,35 @@ export function EditorSurface({
     const copyMarkers = differences
       .filter((span) => span.kind !== "equal")
       .filter(() => displayMode !== "same")
-      .map((span, index) => ({
-        start: side === "left" ? span.leftStart : span.rightStart,
-        end: side === "left" ? span.leftEnd : span.rightEnd,
-        marker: new CopyArrow(
-          side === "left" ? "right" : "left",
-          index,
-          side === "left"
-            ? span.leftStart === span.leftEnd
-            : span.rightStart === span.rightEnd,
-          disabled,
-          span,
-          () => copyCallback.current?.(span),
-        ),
-      }));
+      .map((span, index) => {
+        const start = side === "left" ? span.leftStart : span.rightStart;
+        const end = side === "left" ? span.leftEnd : span.rightEnd;
+        const singleLine =
+          singleLineCopy?.side === side &&
+          singleLineCopy.line >= start &&
+          singleLineCopy.line < end;
+        const markerStart = singleLine ? singleLineCopy.line : start;
+        return {
+          start: markerStart,
+          end: singleLine ? markerStart + 1 : end,
+          marker: new CopyArrow(
+            side === "left" ? "right" : "left",
+            index,
+            !singleLine &&
+              (side === "left"
+                ? span.leftStart === span.leftEnd
+                : span.rightStart === span.rightEnd),
+            disabled,
+            span,
+            singleLine,
+            () =>
+              copyCallback.current?.(
+                span,
+                singleLine ? markerStart : undefined,
+              ),
+          ),
+        };
+      });
     const displayedGaps =
       displayMode === "same"
         ? differences
@@ -610,6 +669,7 @@ export function EditorSurface({
     intralineSpans,
     intralineBaseByte,
     selectedLine,
+    singleLineCopy,
     navigation,
   ]);
   useEffect(() => {

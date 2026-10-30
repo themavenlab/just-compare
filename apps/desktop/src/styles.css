@@ -389,6 +389,11 @@ textarea.rules {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
+.cm-copy-gutter button.copy-arrow.single-line-copy {
+  color: var(--file-right-only);
+  background: var(--added);
+  border-color: var(--file-right-only);
+}
 .cm-copy-gutter button.copy-arrow:focus-visible {
   outline-offset: -2px;
 }
@@ -2016,6 +2021,19 @@ body,
   white-space: pre;
   tab-size: 4;
   min-height: 28px;
+}
+.line-inspector .inspector-copy-arrow {
+  display: inline-block;
+  width: 21px;
+  min-height: 0;
+  margin-inline-end: 4px;
+  padding: 0;
+  color: var(--file-right-only);
+  background: var(--added);
+  border-color: var(--file-right-only);
+  font-weight: 700;
+  line-height: 18px;
+  vertical-align: baseline;
 }
 .inspector-source {
   color: var(--muted);

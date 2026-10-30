@@ -6,11 +6,19 @@ export function RefinedRegion({
   right,
   spans,
   labels,
+  onCopyToRight,
+  onCopyToLeft,
+  disableCopyToRight = false,
+  disableCopyToLeft = false,
 }: {
   left: string;
   right: string;
   spans: DiffSpan[];
   labels?: [string, string];
+  onCopyToRight?: () => void;
+  onCopyToLeft?: () => void;
+  disableCopyToRight?: boolean;
+  disableCopyToLeft?: boolean;
 }) {
   const decoder = new TextDecoder();
   const a = new TextEncoder().encode(left),
@@ -25,6 +33,30 @@ export function RefinedRegion({
             </span>
           )}
           <pre>
+            {labels && side === "left" && onCopyToRight && (
+              <button
+                type="button"
+                className="inspector-copy-arrow"
+                aria-label="Copy detail line to right"
+                title="Copy this left detail line to the right draft"
+                disabled={disableCopyToRight}
+                onClick={onCopyToRight}
+              >
+                {"\u2192"}
+              </button>
+            )}
+            {labels && side === "right" && onCopyToLeft && (
+              <button
+                type="button"
+                className="inspector-copy-arrow"
+                aria-label="Copy detail line to left"
+                title="Copy this right detail line to the left draft"
+                disabled={disableCopyToLeft}
+                onClick={onCopyToLeft}
+              >
+                {"\u2190"}
+              </button>
+            )}
             {spans.map((span, index) => {
               const text = decoder.decode(
                 side === "left"

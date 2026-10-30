@@ -209,6 +209,10 @@ export function ComparisonWorkspace({
   const [editRefresh, setEditRefresh] = useState(0);
   const editInFlight = useRef(false);
   const [current, setCurrent] = useState(0);
+  const [singleLineCopy, setSingleLineCopy] = useState<{
+    side: "left" | "right";
+    line: number;
+  } | null>(null);
   const [refinement, setRefinement] = useState<Refinement | null>(null);
   const [alignmentAnchors, setAlignmentAnchors] = useState<
     { left: number; right: number }[]
@@ -1055,11 +1059,28 @@ export function ComparisonWorkspace({
   );
   const selected = changes[current];
   function selectDifference(index: number) {
+    setSingleLineCopy(null);
     if (textFilter === "same") setTextFilter("all");
     setCurrent(index);
     setDetailRow(null);
     setRefinement(null);
     setNavigation((value) => value + 1);
+  }
+  function enterSingleLineCopyMode(side: "left" | "right", line: number) {
+    const index = changes.findIndex((span) => {
+      const start = side === "left" ? span.leftStart : span.rightStart;
+      const end = side === "left" ? span.leftEnd : span.rightEnd;
+      return line >= start && line < end;
+    });
+    if (index < 0) {
+      setSingleLineCopy(null);
+      return;
+    }
+    const row = aligned.findIndex((entry) => entry[side] === line);
+    setSingleLineCopy({ side, line });
+    setActiveEditorSide(side);
+    setCurrent(index);
+    if (row >= 0) setDetailRow(row);
   }
   function copySelectedDifference(destination: "left" | "right") {
     if (busy || mode !== "text") return true;
@@ -1068,19 +1089,57 @@ export function ComparisonWorkspace({
       setNotice("Compare the drafts and select a difference before copying.");
       return true;
     }
-    void attempt(() => copyDifference(source, selected));
+    if (singleLineCopy) {
+      const row = aligned.find(
+        (line) => line[singleLineCopy.side] === singleLineCopy.line,
+      );
+      const sourceLine = row?.[source];
+      if (sourceLine == null) {
+        setNotice(
+          `The ${source} side has no corresponding line to copy at this position.`,
+        );
+        return true;
+      }
+      void attempt(() => copyDifference(source, selected, sourceLine));
+    } else void attempt(() => copyDifference(source, selected));
     return true;
   }
-  async function copyDifference(source: "left" | "right", span: DiffSpan) {
+  async function copyDifference(
+    source: "left" | "right",
+    span: DiffSpan,
+    singleLine?: number,
+  ) {
     const destination = source === "left" ? "right" : "left";
-    const text = copyRange(
-      editors[source].text,
-      editors[destination].text,
-      source === "left" ? span.leftStart : span.rightStart,
-      source === "left" ? span.leftEnd : span.rightEnd,
-      destination === "left" ? span.leftStart : span.rightStart,
-      destination === "left" ? span.leftEnd : span.rightEnd,
-    );
+    let text: string;
+    if (singleLine === undefined) {
+      text = copyRange(
+        editors[source].text,
+        editors[destination].text,
+        source === "left" ? span.leftStart : span.rightStart,
+        source === "left" ? span.leftEnd : span.rightEnd,
+        destination === "left" ? span.leftStart : span.rightStart,
+        destination === "left" ? span.leftEnd : span.rightEnd,
+      );
+    } else {
+      const rowIndex = aligned.findIndex((row) => row[source] === singleLine);
+      const row = aligned[rowIndex];
+      if (!row)
+        throw new Error("The selected detail line is no longer aligned.");
+      const targetLine = row[destination];
+      const insertion =
+        targetLine ??
+        aligned
+          .slice(0, rowIndex)
+          .filter((entry) => entry[destination] !== null).length;
+      text = copyRange(
+        editors[source].text,
+        editors[destination].text,
+        singleLine,
+        singleLine + 1,
+        insertion,
+        targetLine == null ? insertion : targetLine + 1,
+      );
+    }
     const inputs = {
       ...editors,
       [destination]: {
@@ -1114,6 +1173,18 @@ export function ComparisonWorkspace({
     setNotice(
       `Copied to ${destination} draft. Differences refreshed; Save writes the file.`,
     );
+  }
+  function copyInspectorLine(source: "left" | "right") {
+    if (!detailLine || detailLine.kind === "equal") return;
+    const line = detailLine[source];
+    if (line === null) return;
+    const span = changes.find((candidate) => {
+      const start =
+        source === "left" ? candidate.leftStart : candidate.rightStart;
+      const end = source === "left" ? candidate.leftEnd : candidate.rightEnd;
+      return line >= start && line < end;
+    });
+    if (span) void attempt(() => copyDifference(source, span, line));
   }
   const leftLines = textLines(editors.left.text);
   const rightLines = textLines(editors.right.text);
@@ -2199,6 +2270,16 @@ export function ComparisonWorkspace({
                       }
                     : undefined
                 }
+                onLineNumberClick={
+                  mode === "text" && side !== "base"
+                    ? (line) => enterSingleLineCopyMode(side, line)
+                    : undefined
+                }
+                onEditorContentClick={
+                  mode === "text" && side !== "base"
+                    ? () => setSingleLineCopy(null)
+                    : undefined
+                }
                 onCopyDirection={
                   mode === "text" && side !== "base"
                     ? (destination) => copySelectedDifference(destination)
@@ -2231,9 +2312,11 @@ export function ComparisonWorkspace({
                 selectedDifference={mode === "text" ? selected : undefined}
                 onCopyDifference={
                   mode === "text" && side !== "base" && pendingEdit === null
-                    ? (span) => void attempt(() => copyDifference(side, span))
+                    ? (span, line) =>
+                        void attempt(() => copyDifference(side, span, line))
                     : undefined
                 }
+                singleLineCopy={singleLineCopy ?? undefined}
                 gaps={
                   mode === "text" && side !== "base"
                     ? editorGaps[side]
@@ -4109,6 +4192,7 @@ export function ComparisonWorkspace({
               sharedSettings.lineDetail ?? { collapsed: false, height: 140 }
             }
             onLayout={(layout) => void attempt(() => saveDetailLayout(layout))}
+            onCopyLine={copyInspectorLine}
           />
           {spans && (
             <p className={`diff-legend ${showLegend ? "show-legend" : ""}`}>

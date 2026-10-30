@@ -19,6 +19,7 @@ export function LineInspector({
   select,
   layout,
   onLayout,
+  onCopyLine,
 }: {
   row: InspectorLine | undefined;
   left: string;
@@ -28,6 +29,7 @@ export function LineInspector({
   select: (index: number) => void;
   layout: { collapsed: boolean; height: number };
   onLayout: (layout: { collapsed: boolean; height: number }) => void;
+  onCopyLine: (source: "left" | "right") => void;
 }) {
   const [result, setResult] = useState<{
     left: string;
@@ -121,6 +123,10 @@ export function LineInspector({
                   left={left}
                   right={right}
                   spans={current.spans}
+                  onCopyToRight={() => onCopyLine("left")}
+                  onCopyToLeft={() => onCopyLine("right")}
+                  disableCopyToRight={row.kind === "equal" || row.left === null}
+                  disableCopyToLeft={row.kind === "equal" || row.right === null}
                   labels={[
                     row.left === null
                       ? "Left (missing line)"
