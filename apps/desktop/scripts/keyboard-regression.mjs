@@ -87,7 +87,31 @@ try {
     "same\nxxxx first\nxxxx continuation\nmiddle\nleft second\n",
   );
   await workspace.getByText(/Copied to right draft/).waitFor();
-
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute("aria-label"),
+    ),
+    "Left text",
+  );
+  assert.equal(
+    await workspace.locator(".diff-selected").count(),
+    0,
+    "copy should not select a different region",
+  );
+  await page.waitForFunction(() => {
+    const line = window
+      .getSelection()
+      ?.anchorNode?.parentElement?.closest(".cm-line");
+    return line?.textContent === "left second";
+  });
+  await page.keyboard.press("Control+n");
+  await workspace.getByText("1 / 1 differences", { exact: true }).waitFor();
+  await page.waitForFunction(() => {
+    const line = window
+      .getSelection()
+      ?.anchorNode?.parentElement?.closest(".cm-line");
+    return line?.textContent === "left first";
+  });
   await page.keyboard.press("Control+l");
   await waitForContent(
     "Left",
@@ -147,12 +171,16 @@ try {
   await workspace.locator(".copy-arrow.single-line-copy").waitFor({
     state: "hidden",
   });
+  await page.keyboard.press("Control+n");
+  await workspace.getByText("1 / 2 differences", { exact: true }).waitFor();
   await page.keyboard.press("Control+r");
   await waitForContent(
     "Right",
     "same\nleft first\nleft continuation\nmiddle\nright second\n",
   );
   await workspace.getByText(/Copied to right draft/).waitFor();
+  await page.keyboard.press("Control+n");
+  await workspace.getByText("1 / 1 differences", { exact: true }).waitFor();
   await page.keyboard.press("Control+r");
   await waitForContent(
     "Right",

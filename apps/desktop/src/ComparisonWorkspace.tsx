@@ -222,6 +222,8 @@ export function ComparisonWorkspace({
     left: number | null;
     right: number | null;
   }>({ left: null, right: null });
+  const [suppressSelectedDifference, setSuppressSelectedDifference] =
+    useState(false);
   const [activeEditorSide, setActiveEditorSide] = useState<"left" | "right">(
     "left",
   );
@@ -646,6 +648,7 @@ export function ComparisonWorkspace({
 
   function invalidate(clearComparison = true) {
     revision.current += 1;
+    setSuppressSelectedDifference(false);
     setPendingEdit(null);
     if (clearComparison) setSpans(null);
     if (clearComparison) setDetailRow(null);
@@ -894,6 +897,7 @@ export function ComparisonWorkspace({
     preserveViewport = afterCopy !== undefined,
     background = false,
     anchors = alignmentAnchorsRef.current,
+    retainCurrent = false,
   ) {
     const request = ++revision.current;
     const jobId = crypto.randomUUID();
@@ -941,6 +945,7 @@ export function ComparisonWorkspace({
     if (request === revision.current) {
       hasCompared.current = true;
       setSpans(result);
+      if (!preserveViewport) setSuppressSelectedDifference(false);
       if (afterCopy) {
         const remaining = result.filter((span) => span.kind !== "equal");
         const next = remaining.findIndex(
@@ -950,7 +955,7 @@ export function ComparisonWorkspace({
       } else if (!preserveViewport) {
         setCurrent(0);
         setNavigation((value) => value + 1);
-      } else {
+      } else if (!retainCurrent) {
         setCurrent((value) =>
           Math.min(
             value,
@@ -1057,14 +1062,24 @@ export function ComparisonWorkspace({
     }),
     [spans],
   );
-  const selected = changes[current];
+  const selected = suppressSelectedDifference ? undefined : changes[current];
   function selectDifference(index: number) {
+    setSuppressSelectedDifference(false);
     setSingleLineCopy(null);
     if (textFilter === "same") setTextFilter("all");
     setCurrent(index);
     setDetailRow(null);
     setRefinement(null);
     setNavigation((value) => value + 1);
+  }
+  function navigateDifference(direction: -1 | 1) {
+    if (!changes.length) return;
+    const offset = suppressSelectedDifference
+      ? direction === 1
+        ? 0
+        : -1
+      : direction;
+    selectDifference((current + offset + changes.length) % changes.length);
   }
   function enterSingleLineCopyMode(side: "left" | "right", line: number) {
     const index = changes.findIndex((span) => {
@@ -1078,6 +1093,7 @@ export function ComparisonWorkspace({
     }
     const row = aligned.findIndex((entry) => entry[side] === line);
     setSingleLineCopy({ side, line });
+    setSuppressSelectedDifference(false);
     setActiveEditorSide(side);
     setCurrent(index);
     if (row >= 0) setDetailRow(row);
@@ -1110,6 +1126,7 @@ export function ComparisonWorkspace({
     singleLine?: number,
   ) {
     const destination = source === "left" ? "right" : "left";
+    const focusedSide = activeEditorSide;
     let text: string;
     if (singleLine === undefined) {
       text = copyRange(
@@ -1157,8 +1174,17 @@ export function ComparisonWorkspace({
     setBlocks(null);
     setChoices({});
     setEditors(inputs);
+    setSuppressSelectedDifference(true);
     try {
-      await compareInputs(inputs, span);
+      await compareInputs(
+        inputs,
+        undefined,
+        minorText,
+        true,
+        false,
+        undefined,
+        true,
+      );
     } catch (failure) {
       setSpans(null);
       throw failure;
@@ -1166,7 +1192,7 @@ export function ComparisonWorkspace({
       rootElement.current
         ?.closest('[aria-hidden="false"]')
         ?.querySelector<HTMLElement>(
-          `.cm-content[aria-label="${destination === "left" ? "Left text" : "Right text"}"]`,
+          `.cm-content[aria-label="${focusedSide === "left" ? "Left text" : "Right text"}"]`,
         )
         ?.focus({ preventScroll: true });
     }
@@ -1955,11 +1981,7 @@ export function ComparisonWorkspace({
                 : compareInputs(),
           );
         else if (name === "previous" || name === "next") {
-          if (changes.length)
-            selectDifference(
-              (current + (name === "next" ? 1 : -1) + changes.length) %
-                changes.length,
-            );
+          navigateDifference(name === "next" ? 1 : -1);
         } else if (name === "rules" && mode === "folder") {
           setRulesOpen(true);
         } else if (
@@ -2942,10 +2964,7 @@ export function ComparisonWorkspace({
           (event.key === "ArrowDown" || event.key === "ArrowUp")
         ) {
           event.preventDefault();
-          selectDifference(
-            (current + (event.key === "ArrowDown" ? 1 : -1) + changes.length) %
-              changes.length,
-          );
+          navigateDifference(event.key === "ArrowDown" ? 1 : -1);
         }
       }}
     >
@@ -4075,11 +4094,7 @@ export function ComparisonWorkspace({
               aria-label="Previous difference"
               title="Previous difference (Alt+Up)"
               disabled={busy || !changes.length}
-              onClick={() =>
-                selectDifference(
-                  (current - 1 + changes.length) % changes.length,
-                )
-              }
+              onClick={() => navigateDifference(-1)}
             >
               Previous
             </button>
@@ -4087,14 +4102,16 @@ export function ComparisonWorkspace({
               aria-label="Next difference"
               title="Next difference (Alt+Down)"
               disabled={busy || !changes.length}
-              onClick={() => selectDifference((current + 1) % changes.length)}
+              onClick={() => navigateDifference(1)}
             >
               Next
             </button>
             <span className="difference-count">
               {spans
                 ? changes.length
-                  ? `${current + 1} / ${changes.length} differences`
+                  ? suppressSelectedDifference
+                    ? `${changes.length} differences; select Previous or Next`
+                    : `${current + 1} / ${changes.length} differences`
                   : "No differences"
                 : "Not compared"}
             </span>
