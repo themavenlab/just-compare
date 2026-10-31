@@ -1,14 +1,15 @@
 import { useId, type ButtonHTMLAttributes } from "react";
+import { Icon, type IconName } from "./icons";
 
 export function ToolButton({
   label,
-  symbol,
+  icon,
   description,
   children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
-  symbol?: string;
+  icon?: IconName;
   description: string;
 }) {
   const id = useId();
@@ -24,11 +25,7 @@ export function ToolButton({
         aria-describedby={id}
         title={description}
       >
-        {symbol && (
-          <span aria-hidden="true" className="tool-symbol">
-            {symbol}
-          </span>
-        )}
+        {icon && <Icon name={icon} className="tool-symbol" />}
         <span>{children ?? label}</span>
       </button>
       <span id={id} role="tooltip" className="tool-tooltip">

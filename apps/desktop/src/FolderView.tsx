@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FolderEntry } from "./api";
 import { CommandMenu, type MenuCommand } from "./CommandMenu";
 import { canCopy, folderRows, type FolderSort } from "./folderPresentation";
+import { Icon } from "./icons";
 import { VirtualList } from "./VirtualList";
 
 export type FolderSide = "left" | "right";
@@ -443,24 +444,18 @@ export function FolderView({
                           <span className="tree-spacer" />
                         ) : null}
                         {!missing && (
-                          <svg
+                          <Icon
                             className={`entry-icon ${entry?.status === "error" ? "error-icon" : node.branch || entry?.isDirectory ? "folder-icon" : "file-icon"}`}
-                            viewBox="0 0 16 16"
-                            aria-hidden="true"
-                          >
-                            {entry?.status === "error" ? (
-                              <path d="M8 1 15 14H1ZM8 5v4m0 2v1" />
-                            ) : node.branch || entry?.isDirectory ? (
-                              <>
-                                <path d="M1.5 13.5v-11h5l2 2h6v9Z" />
-                                {tree && !collapsed.has(node.path) && (
-                                  <path d="m1.5 13.5 2-7h12l-2 7Z" />
-                                )}
-                              </>
-                            ) : (
-                              <path d="M3 1.5h6l4 4v9H3Zm6 0v4h4M5 8h6m-6 3h6" />
-                            )}
-                          </svg>
+                            name={
+                              entry?.status === "error"
+                                ? "error"
+                                : node.branch || entry?.isDirectory
+                                  ? tree && !collapsed.has(node.path)
+                                    ? "openFolder"
+                                    : "folder"
+                                  : "file"
+                            }
+                          />
                         )}
                         <span className="file-name">
                           {missing

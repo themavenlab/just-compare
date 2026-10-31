@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { DraftRecovery, Settings } from "./api";
+import { Icon } from "./icons";
 import type { SavedSession, Workflow } from "./workbench";
 
 const launchers = [
@@ -24,28 +25,13 @@ const launchers = [
 ] as const;
 
 export function WorkflowIcon({ mode }: { mode: Workflow }) {
-  return (
-    <svg
-      viewBox="0 0 48 48"
-      aria-hidden="true"
-      className="workflow-icon"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      {mode === "folder" ? (
-        <>
-          <path d="M5 14V8h14l5 6h19v27H5z" />
-          <path d="M5 19h38M16 28h16m-5-5 5 5-5 5" />
-        </>
-      ) : (
-        <>
-          <path d="M8 5h23l9 9v29H8zM31 5v10h9M15 22h18M15 28h18M15 34h11" />
-          {mode === "merge" && <path d="m4 19 8 7-8 7m40-14-8 7 8 7" />}
-        </>
-      )}
-    </svg>
-  );
+  const name =
+    mode === "folder"
+      ? "workflowFolder"
+      : mode === "merge"
+        ? "workflowMerge"
+        : "workflowText";
+  return <Icon name={name} className="workflow-icon" />;
 }
 
 export function HomeScreen({

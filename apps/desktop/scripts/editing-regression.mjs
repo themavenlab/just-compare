@@ -164,9 +164,9 @@ try {
   await idle();
   await regions(1);
   assert.equal(await editor("Right").locator(".diff-line").count(), 1);
-  for (const [side, expectedDirection] of [
-    ["Left", "right"],
-    ["Right", "left"],
+  for (const [side, expectedIcon] of [
+    ["Left", "copyRight"],
+    ["Right", "copyLeft"],
   ]) {
     const gutter = await editor(side).evaluate((content) => {
       const cmEditor = content.closest(".cm-editor");
@@ -196,18 +196,18 @@ try {
         lineNumberRight: lineNumberBounds.right,
         contentLeft: contentBounds.left,
         contentRight: contentBounds.right,
-        direction: icon.getAttribute("data-direction"),
+        name: icon.getAttribute("data-icon"),
         iconWidth: iconBounds.width,
         iconHeight: iconBounds.height,
         buttonMargin: buttonStyle.margin,
         buttonPadding: buttonStyle.padding,
         buttonBackground: buttonStyle.backgroundColor,
-        iconPathFill: icon.querySelector("path")?.getAttribute("fill"),
+        iconFill: icon.getAttribute("fill"),
         iconPath: icon.querySelector("path")?.getAttribute("d"),
       };
     });
     assert.ok(gutter, `${side} editor should show a copy arrow`);
-    assert.equal(gutter.direction, expectedDirection);
+    assert.equal(gutter.name, expectedIcon);
     assert.ok(
       gutter.gutterRight <= gutter.lineNumberLeft + 1 &&
         gutter.lineNumberRight <= gutter.contentLeft + 1,
@@ -218,7 +218,7 @@ try {
     assert.equal(gutter.buttonMargin, "0px");
     assert.equal(gutter.buttonPadding, "0px");
     assert.equal(gutter.buttonBackground, "rgba(0, 0, 0, 0)");
-    assert.equal(gutter.iconPathFill, "currentColor");
+    assert.equal(gutter.iconFill, "currentColor");
     assert.ok(gutter.iconPath, `${side} arrow should use a filled SVG icon`);
   }
 

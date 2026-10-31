@@ -10,6 +10,7 @@ import {
 import { basicSetup } from "codemirror";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { type DiffSpan } from "./comparison";
+import { createIconElement, iconSymbols } from "./icons";
 
 class Gap extends WidgetType {
   constructor(
@@ -69,7 +70,8 @@ class MoveMarker extends WidgetType {
   toDOM() {
     const marker = document.createElement("span");
     marker.className = `diff-move-marker diff-move-${this.direction}`;
-    marker.textContent = this.direction === "from" ? "\u2197" : "\u2199";
+    marker.textContent =
+      this.direction === "from" ? iconSymbols.moveFrom : iconSymbols.moveTo;
     marker.title = `Moved block ${this.id}: ${this.direction}`;
     marker.setAttribute("aria-label", marker.title);
     return marker;
@@ -126,22 +128,12 @@ class CopyArrow extends GutterMarker {
     button.setAttribute("aria-label", label);
     button.title = `${label}${this.singleLine ? " (single line)" : this.deletes ? " (remove this region from the destination)" : ""}. Changes the draft only; Save writes the file.`;
     button.disabled = this.disabled;
-    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    icon.setAttribute("class", "copy-arrow-icon");
-    icon.setAttribute("viewBox", "0 0 16 12");
-    icon.setAttribute("aria-hidden", "true");
-    icon.setAttribute("focusable", "false");
-    icon.dataset.direction = this.destination;
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute(
-      "d",
-      this.destination === "right"
-        ? "M1 4.5h8V1l6 5-6 5V7.5H1z"
-        : "M15 4.5H7V1L1 6l6 5V7.5h8z",
+    button.append(
+      createIconElement(
+        this.destination === "right" ? "copyRight" : "copyLeft",
+        "copy-arrow-icon",
+      ),
     );
-    path.setAttribute("fill", "currentColor");
-    icon.append(path);
-    button.append(icon);
     button.addEventListener("click", this.copy);
     return button;
   }

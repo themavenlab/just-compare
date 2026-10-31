@@ -3942,7 +3942,7 @@ export function ComparisonWorkspace({
           >
             <ToolButton
               label="Home"
-              symbol="⌂"
+              icon="home"
               description="Return to Home, keeping this workspace and unsaved drafts."
               onClick={onHome}
             />
@@ -3953,14 +3953,14 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="All"
-              symbol="*"
+              icon="all"
               description="Show every source line."
               aria-pressed={textFilter === "all"}
               onClick={() => setTextFilter("all")}
             />
             <ToolButton
               label="Diffs"
-              symbol="≠"
+              icon="differences"
               description="Fold equal lines while retaining complete editable source documents."
               aria-pressed={textFilter === "differences"}
               disabled={!spans}
@@ -3968,7 +3968,7 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Same"
-              symbol="="
+              icon="same"
               description="Fold changed lines; hidden text remains in the source document."
               aria-pressed={textFilter === "same"}
               disabled={!spans}
@@ -3976,7 +3976,7 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Context"
-              symbol="⋯"
+              icon="context"
               description="Show changes with three surrounding equal lines on either side."
               aria-pressed={textFilter === "context"}
               disabled={!spans}
@@ -3984,7 +3984,7 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Minor"
-              symbol="~"
+              icon="minor"
               description="Show raw differences ignored by the active comparison rules, without changing source text."
               aria-pressed={minorText}
               disabled={busy}
@@ -3997,14 +3997,14 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Whitespace / EOL"
-              symbol="·"
+              icon="whitespace"
               description="Mark spaces and tabs and show each source line ending without changing text."
               aria-pressed={showWhitespace}
               onClick={() => setShowWhitespace((value) => !value)}
             />
             <ToolButton
               label="Anchor lines"
-              symbol="↧"
+              icon="anchor"
               description={
                 cursorLines.left === null || cursorLines.right === null
                   ? "Place the caret on a line in each pane to pair them as an ephemeral alignment anchor."
@@ -4017,26 +4017,26 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label={`Clear anchors${alignmentAnchors.length ? ` (${alignmentAnchors.length})` : ""}`}
-              symbol="×"
+              icon="clear"
               description="Remove manual line-pair anchors and compare automatically aligned text."
               disabled={busy || !alignmentAnchors.length}
               onClick={() => void attempt(clearAlignmentAnchors)}
             />
             <ToolButton
               label="Rules"
-              symbol="⚙"
+              icon="settings"
               description="Edit comparison rules; changes invalidate existing results."
               onClick={() => controllersCommand("rules")}
             />
             <ToolButton
               label="Format"
-              symbol="▤"
+              icon="format"
               description="Manage comparison-format profiles, not source-code formatting."
               onClick={() => controllersCommand("profiles")}
             />
             <ToolButton
               label="Find / Replace"
-              symbol="⌕"
+              icon="search"
               description="Search either text pane, replace with preview and Undo, or go to a source line (Ctrl+F)."
               onClick={() => controllersCommand("find")}
             />
@@ -4050,7 +4050,7 @@ export function ComparisonWorkspace({
             </button>
             <ToolButton
               label="Reload"
-              symbol="↻"
+              icon="refresh"
               description="Reopen both file inputs and refresh differences without resetting the viewport. Dirty drafts require confirmation."
               disabled={busy || (!editors.left.path && !editors.right.path)}
               onClick={() =>
@@ -4341,7 +4341,7 @@ export function ComparisonWorkspace({
           >
             <ToolButton
               label="Home"
-              symbol="⌂"
+              icon="home"
               description="Return to Home without closing this workspace."
               onClick={onHome}
             />
@@ -4352,7 +4352,7 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="All"
-              symbol="*"
+              icon="all"
               description="Show all scanned entries."
               aria-pressed={filter === "all"}
               onClick={() => setFilter("all")}
@@ -4367,7 +4367,7 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Same"
-              symbol="="
+              icon="same"
               description="Show entries equal under the active rules."
               aria-pressed={filter === "same"}
               onClick={() => setFilter("same")}
@@ -4381,21 +4381,21 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Minor"
-              symbol="~"
+              icon="minor"
               description="Include rule-ignored minor differences in the folder view."
               aria-pressed={showMinor}
               onClick={() => setShowMinor(!showMinor)}
             />
             <ToolButton
               label="Rules"
-              symbol="⚙"
+              icon="settings"
               description="Edit folder comparison rules and scan exclusions; applying invalidates the current results."
               disabled={busy}
               onClick={() => setRulesOpen(true)}
             />
             <ToolButton
               label="Copy"
-              symbol="↔"
+              icon="copy"
               description="Preview selected entries copied from the active side to the opposite side."
               disabled={busy || !selectedFiles.length}
               onClick={() => folderCommand("copySide")}
@@ -4431,13 +4431,13 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Expand"
-              symbol="+"
+              icon="expand"
               description="Expand all scanned folder branches."
               onClick={() => folderCommand("expand")}
             />
             <ToolButton
               label="Collapse"
-              symbol="−"
+              icon="collapse"
               description="Collapse all folder branches without losing selection."
               onClick={() => folderCommand("collapse")}
             />
@@ -4476,14 +4476,14 @@ export function ComparisonWorkspace({
             <ToolButton
               label="Refresh"
               aria-label="Scan folders"
-              symbol="↻"
+              icon="refresh"
               description="Read both roots and refresh their comparison (Ctrl+Enter)."
               disabled={busy}
               onClick={() => void attempt(scan)}
             />
             <ToolButton
               label="Swap"
-              symbol="⇄"
+              icon="swap"
               description="Swap folder roots and discard stale results."
               disabled={busy}
               onClick={() => {
@@ -4496,7 +4496,7 @@ export function ComparisonWorkspace({
             />
             <ToolButton
               label="Stop"
-              symbol="x"
+              icon="stop"
               description={
                 working && cancellableJob
                   ? "Request cancellation. Completed writes are not rolled back."
@@ -4521,13 +4521,13 @@ export function ComparisonWorkspace({
             </label>
             <ToolButton
               label="Filters"
-              symbol="▽"
+              icon="filters"
               description="Edit native scan exclusions and comparison rules."
               onClick={() => controllersCommand("rules")}
             />
             <ToolButton
               label="Peek"
-              symbol="◉"
+              icon="peek"
               description="Temporarily reveal display-filtered and ignored rows, but not excluded or unscanned paths."
               aria-pressed={peek}
               onClick={() => setPeek(!peek)}
