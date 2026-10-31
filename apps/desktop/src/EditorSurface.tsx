@@ -123,10 +123,25 @@ class CopyArrow extends GutterMarker {
     const label = `Copy difference ${this.index + 1} to ${this.destination}`;
     button.type = "button";
     button.className = `copy-arrow${this.singleLine ? " single-line-copy" : ""}`;
-    button.textContent = this.destination === "right" ? "\u2192" : "\u2190";
     button.setAttribute("aria-label", label);
     button.title = `${label}${this.singleLine ? " (single line)" : this.deletes ? " (remove this region from the destination)" : ""}. Changes the draft only; Save writes the file.`;
     button.disabled = this.disabled;
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "copy-arrow-icon");
+    icon.setAttribute("viewBox", "0 0 16 12");
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("focusable", "false");
+    icon.dataset.direction = this.destination;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute(
+      "d",
+      this.destination === "right"
+        ? "M1 4.5h8V1l6 5-6 5V7.5H1z"
+        : "M15 4.5H7V1L1 6l6 5V7.5h8z",
+    );
+    path.setAttribute("fill", "currentColor");
+    icon.append(path);
+    button.append(icon);
     button.addEventListener("click", this.copy);
     return button;
   }
@@ -619,13 +634,15 @@ export function EditorSurface({
         EditorView.decorations.of(Decoration.set(decorations, true)),
         ...(copyEnabled
           ? [
-              gutter({
-                class: "cm-copy-gutter",
-                side: side === "left" ? "after" : "before",
-                markers: () => markers,
-                widgetMarker: (_view, widget) =>
-                  widget instanceof Gap ? widget.copyMarker : null,
-              }),
+              Prec.highest(
+                gutter({
+                  class: "cm-copy-gutter",
+                  side: "before",
+                  markers: () => markers,
+                  widgetMarker: (_view, widget) =>
+                    widget instanceof Gap ? widget.copyMarker : null,
+                }),
+              ),
             ]
           : []),
       ]),

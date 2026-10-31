@@ -164,6 +164,63 @@ try {
   await idle();
   await regions(1);
   assert.equal(await editor("Right").locator(".diff-line").count(), 1);
+  for (const [side, expectedDirection] of [
+    ["Left", "right"],
+    ["Right", "left"],
+  ]) {
+    const gutter = await editor(side).evaluate((content) => {
+      const cmEditor = content.closest(".cm-editor");
+      const copyGutter = cmEditor?.querySelector(".cm-copy-gutter");
+      const button = copyGutter?.querySelector(".copy-arrow");
+      const icon = button?.querySelector(".copy-arrow-icon");
+      const lineNumberGutter = cmEditor?.querySelector(".cm-lineNumbers");
+      const editorContent = cmEditor?.querySelector(".cm-content");
+      if (
+        !cmEditor ||
+        !copyGutter ||
+        !button ||
+        !icon ||
+        !lineNumberGutter ||
+        !editorContent
+      )
+        return null;
+      const gutterBounds = copyGutter.getBoundingClientRect();
+      const lineNumberBounds = lineNumberGutter.getBoundingClientRect();
+      const contentBounds = editorContent.getBoundingClientRect();
+      const buttonStyle = getComputedStyle(button);
+      const iconBounds = icon.getBoundingClientRect();
+      return {
+        gutterLeft: gutterBounds.left,
+        gutterRight: gutterBounds.right,
+        lineNumberLeft: lineNumberBounds.left,
+        lineNumberRight: lineNumberBounds.right,
+        contentLeft: contentBounds.left,
+        contentRight: contentBounds.right,
+        direction: icon.getAttribute("data-direction"),
+        iconWidth: iconBounds.width,
+        iconHeight: iconBounds.height,
+        buttonMargin: buttonStyle.margin,
+        buttonPadding: buttonStyle.padding,
+        buttonBackground: buttonStyle.backgroundColor,
+        iconPathFill: icon.querySelector("path")?.getAttribute("fill"),
+        iconPath: icon.querySelector("path")?.getAttribute("d"),
+      };
+    });
+    assert.ok(gutter, `${side} editor should show a copy arrow`);
+    assert.equal(gutter.direction, expectedDirection);
+    assert.ok(
+      gutter.gutterRight <= gutter.lineNumberLeft + 1 &&
+        gutter.lineNumberRight <= gutter.contentLeft + 1,
+      `${side} editor gutters should be ordered arrow, line number, content: ${JSON.stringify(gutter)}`,
+    );
+    assert.equal(gutter.iconWidth, 15);
+    assert.equal(gutter.iconHeight, 12);
+    assert.equal(gutter.buttonMargin, "0px");
+    assert.equal(gutter.buttonPadding, "0px");
+    assert.equal(gutter.buttonBackground, "rgba(0, 0, 0, 0)");
+    assert.equal(gutter.iconPathFill, "currentColor");
+    assert.ok(gutter.iconPath, `${side} arrow should use a filled SVG icon`);
+  }
 
   // Delay a real native response while a newer edit arrives.
   await page.evaluate(() => {

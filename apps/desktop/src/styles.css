@@ -368,20 +368,25 @@ textarea.rules {
   border-color: var(--border);
 }
 .cm-copy-gutter .cm-gutterElement {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0 2px;
 }
 .cm-copy-gutter button.copy-arrow {
-  display: block;
+  display: grid;
+  place-items: center;
   min-height: 0;
-  width: 23px;
-  height: 21px;
+  width: 20px;
+  height: 18px;
+  margin: 0;
   padding: 0;
-  border-color: transparent;
+  border: 1px solid transparent;
   border-radius: 3px;
   color: var(--accent);
-  background: var(--surface-alt);
+  background: transparent;
   font:
-    bold 18px/19px "Segoe UI",
+    600 15px/1 "Segoe UI",
     system-ui,
     sans-serif;
 }
@@ -395,7 +400,13 @@ textarea.rules {
   border-color: var(--file-right-only);
 }
 .cm-copy-gutter button.copy-arrow:focus-visible {
-  outline-offset: -2px;
+  outline-offset: -1px;
+}
+.cm-copy-gutter .copy-arrow-icon {
+  display: block;
+  width: 15px;
+  height: 12px;
+  overflow: visible;
 }
 .cm-editor .cm-cursor {
   border-left-color: var(--text);
