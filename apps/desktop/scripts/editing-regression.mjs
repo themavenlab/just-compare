@@ -278,6 +278,15 @@ try {
     exact: true,
   });
   await diskChanges.waitFor();
+  const stalePaneTops = await workspace
+    .locator(".code-editor")
+    .evaluateAll((editors) =>
+      editors.map((editor) => editor.getBoundingClientRect().top),
+    );
+  assert.ok(
+    Math.abs(stalePaneTops[0] - stalePaneTops[1]) <= 2,
+    `Stale-file controls must not shift one editor pane: ${JSON.stringify(stalePaneTops)}`,
+  );
   await diskChanges
     .getByRole("button", { name: "Compare left with Disk", exact: true })
     .click();

@@ -2231,31 +2231,33 @@ export function ComparisonWorkspace({
         </div>
         {mode !== "folder" && (
           <>
-            <p className="metadata">
-              {fileMetadata[side]
-                ? `${fileMetadata[side]?.bytes.toLocaleString()} bytes / ${fileMetadata[side]?.modified == null ? "time unavailable" : new Date(fileMetadata[side]!.modified!).toLocaleString()} / `
-                : ""}
-              {e.document?.encoding ?? "UTF-8 draft"}{" "}
-              {e.document?.bom ? "/ BOM" : ""} /{" "}
-              {(e.document?.text ?? e.text).includes("\r\n")
-                ? "CRLF"
-                : (e.document?.text ?? e.text).includes("\r")
-                  ? "CR"
-                  : "LF"}{" "}
-              {e.text !== e.original ? "/ unsaved" : ""}
-              {staleSides.includes(side)
-                ? " / disk changed; draft retained"
-                : ""}
-            </p>
-            {staleSides.includes(side) && (
-              <button
-                aria-label={`Review ${side} disk change`}
-                disabled={busy}
-                onClick={() => reviewDiskChange(side)}
-              >
-                Review disk change
-              </button>
-            )}
+            <div className="metadata">
+              <span>
+                {fileMetadata[side]
+                  ? `${fileMetadata[side]?.bytes.toLocaleString()} bytes / ${fileMetadata[side]?.modified == null ? "time unavailable" : new Date(fileMetadata[side]!.modified!).toLocaleString()} / `
+                  : ""}
+                {e.document?.encoding ?? "UTF-8 draft"}{" "}
+                {e.document?.bom ? "/ BOM" : ""} /{" "}
+                {(e.document?.text ?? e.text).includes("\r\n")
+                  ? "CRLF"
+                  : (e.document?.text ?? e.text).includes("\r")
+                    ? "CR"
+                    : "LF"}{" "}
+                {e.text !== e.original ? "/ unsaved" : ""}
+                {staleSides.includes(side)
+                  ? " / disk changed; draft retained"
+                  : ""}
+              </span>
+              {staleSides.includes(side) && (
+                <button
+                  aria-label={`Review ${side} disk change`}
+                  disabled={busy}
+                  onClick={() => reviewDiskChange(side)}
+                >
+                  Review disk change
+                </button>
+              )}
+            </div>
             <div className="editor-content">
               <span className="sr-only">
                 {side === "left"
