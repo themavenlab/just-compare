@@ -44,9 +44,14 @@ const launch = async (args, raw = false) => {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  let stderr = "";
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
   const timer = setTimeout(() => child.kill(), 15000);
   try {
     const [code] = await once(child, "exit");
+    if (code !== 0) console.error("LAUNCH STDERR:", stderr);
     assert.equal(code, 0, "Secondary shell launch must deliver and exit");
   } finally {
     clearTimeout(timer);
@@ -102,18 +107,20 @@ try {
     await session.call("explorer_integration", { enabled: null }),
     true,
   );
-  const registered = execFileSync(
-    join(process.env.SystemRoot, "System32", "reg.exe"),
-    [
-      "query",
-      "HKCU\\Software\\CompareWorkbench\\Tests",
-      "/s",
-      "/f",
-      "shell-select",
-      "/d",
-    ],
-    { encoding: "utf8" },
-  );
+  const regQuery = (args) =>
+    execFileSync(
+      "cmd.exe",
+      ["/d", "/s", "/c", `chcp 65001 >nul && reg.exe ${args.join(" ")}`],
+      { encoding: "utf8" },
+    );
+  const registered = regQuery([
+    "query",
+    "HKCU\\Software\\JustCompare\\Tests",
+    "/s",
+    "/f",
+    "shell-select",
+    "/d",
+  ]);
   const command = registered
     .split(/\r?\n/)
     .find(
@@ -132,17 +139,17 @@ try {
     "Shell activation must not use a device path",
   );
   const readMenus = () => {
-    const registry = execFileSync(
-      join(process.env.SystemRoot, "System32", "reg.exe"),
-      ["query", "HKCU\\Software\\CompareWorkbench\\Tests", "/s"],
-      { encoding: "utf8" },
-    );
+    const registry = regQuery([
+      "query",
+      "HKCU\\Software\\JustCompare\\Tests",
+      "/s",
+    ]);
     const blocks = registry.split(/\r?\n(?=HKEY_)/);
     return ["*", "Directory", "Directory\\Background"].map((type) => {
       const block = blocks.find((value) =>
         value
           .split(/\r?\n/)[0]
-          .endsWith(`\\${type}\\shell\\CompareWorkbench.compare`),
+          .endsWith(`\\${type}\\shell\\JustCompare.compare`),
       );
       assert.ok(block);
       return { hidden: block.includes("LegacyDisable"), text: block };
@@ -203,18 +210,14 @@ try {
   // Explorer omits background verbs that declare MultiSelectModel.
   assert.ok(!readMenus()[2].text.includes("MultiSelectModel"));
   assert.match(
-    execFileSync(
-      join(process.env.SystemRoot, "System32", "reg.exe"),
-      [
-        "query",
-        "HKCU\\Software\\CompareWorkbench\\Tests",
-        "/s",
-        "/f",
-        "%V",
-        "/d",
-      ],
-      { encoding: "utf8" },
-    ),
+    regQuery([
+      "query",
+      "HKCU\\Software\\JustCompare\\Tests",
+      "/s",
+      "/f",
+      "%V",
+      "/d",
+    ]),
     /shell-compare "%V"/,
   );
   await launch(["shell-compare", rightFolder]);
@@ -329,5 +332,10 @@ try {
       await session.close();
     }
   }
-  await rm(root, { recursive: true, force: true });
+  await rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 }

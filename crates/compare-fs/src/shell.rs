@@ -182,7 +182,7 @@ mod windows {
       let mut hash = std::hash::DefaultHasher::new();
       path.hash(&mut hash);
       return Ok(format!(
-        r"Software\CompareWorkbench\Tests\{:x}\Classes",
+        r"Software\JustCompare\Tests\{:x}\Classes",
         hash.finish()
       ));
     }
@@ -211,7 +211,7 @@ mod windows {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let base = base()?;
     if refresh {
-      let path = format!(r"{base}\*\shell\CompareWorkbench.select");
+      let path = format!(r"{base}\*\shell\JustCompare.select");
       match root.open_subkey_with_flags(path, KEY_READ) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -272,10 +272,10 @@ mod windows {
     // Check every legacy/current key before changing any of them.
     for (class, _, _) in CLASSES {
       for action in VERBS {
-        let path = format!(r"{base}\{class}\shell\CompareWorkbench.{action}");
+        let path = format!(r"{base}\{class}\shell\JustCompare.{action}");
         match root.open_subkey_with_flags(path, KEY_READ) {
           Ok(key) => {
-            let owner: String = key.get_value("CompareWorkbenchOwner")?;
+            let owner: String = key.get_value("JustCompareOwner")?;
             if owner != executable {
               return Err(FileError("Shell entries belong to another executable. Remove them from that installation first.".into()));
             }
@@ -290,7 +290,7 @@ mod windows {
     for (class, directory, argument) in CLASSES {
       let kind = if directory { "folder" } else { "file" };
       for action in VERBS {
-        let path = format!(r"{base}\{class}\shell\CompareWorkbench.{action}");
+        let path = format!(r"{base}\{class}\shell\JustCompare.{action}");
         let command = format!("\"{launch_path}\" shell-{action} \"{argument}\"");
         let key = match root.open_subkey_with_flags(&path, KEY_READ) {
           Ok(key) => Some(key),
@@ -334,8 +334,10 @@ mod windows {
         };
         match enabled {
           Some(true) => {
+            let old_path = format!(r"{base}\{class}\shell\CompareWorkbench.{action}");
+            let _ = root.delete_subkey_all(&old_path);
             let (key, _) = root.create_subkey(&path)?;
-            key.set_value("CompareWorkbenchOwner", &executable)?;
+            key.set_value("JustCompareOwner", &executable)?;
             key.set_value("", &title)?;
             key.set_value("Icon", &format!("\"{launch_path}\",0"))?;
             if background {
@@ -355,6 +357,8 @@ mod windows {
             if key.is_some() {
               root.delete_subkey_all(&path)?;
             }
+            let old_path = format!(r"{base}\{class}\shell\CompareWorkbench.{action}");
+            let _ = root.delete_subkey_all(&old_path);
           }
           None => {
             complete &= match key {
@@ -383,16 +387,13 @@ mod windows {
     #[test]
     fn scoped_registration_is_quoted_owned_and_removable() {
       let root = RegKey::predef(HKEY_CURRENT_USER);
-      let base = format!(
-        r"Software\CompareWorkbench\Tests\unit-{}",
-        std::process::id()
-      );
+      let base = format!(r"Software\JustCompare\Tests\unit-{}", std::process::id());
       let exe = r"\\?\C:\Synthetic Folder\Unicode-é\compare-desktop.exe";
       assert!(!registration_at(&root, &base, exe, None, None).unwrap());
       assert!(registration_at(&root, &base, exe, Some(true), None).unwrap());
       assert!(registration_at(&root, &base, exe, None, None).unwrap());
       let key = root
-        .open_subkey(format!(r"{base}\*\shell\CompareWorkbench.compare\command"))
+        .open_subkey(format!(r"{base}\*\shell\JustCompare.compare\command"))
         .unwrap();
       assert_eq!(
         key.get_value::<String, _>("").unwrap(),
@@ -400,7 +401,7 @@ mod windows {
       );
       let menu = |class: &str, action: &str| {
         root
-          .open_subkey(format!(r"{base}\{class}\shell\CompareWorkbench.{action}"))
+          .open_subkey(format!(r"{base}\{class}\shell\JustCompare.{action}"))
           .unwrap()
       };
       assert_eq!(
@@ -469,7 +470,7 @@ mod windows {
         .is_ok());
       root
         .open_subkey_with_flags(
-          format!(r"{base}\Directory\Background\shell\CompareWorkbench.select"),
+          format!(r"{base}\Directory\Background\shell\JustCompare.select"),
           winreg::enums::KEY_SET_VALUE,
         )
         .unwrap()
@@ -490,13 +491,13 @@ mod windows {
         .is_ok());
       registration_at(&root, &base, exe, Some(true), Some(&folder)).unwrap();
       let (legacy, _) = root
-        .create_subkey(format!(r"{base}\*\shell\CompareWorkbench.open"))
+        .create_subkey(format!(r"{base}\*\shell\JustCompare.open"))
         .unwrap();
-      legacy.set_value("CompareWorkbenchOwner", &exe).unwrap();
+      legacy.set_value("JustCompareOwner", &exe).unwrap();
       assert!(!registration_at(&root, &base, exe, None, Some(&folder)).unwrap());
       registration_at(&root, &base, exe, Some(true), None).unwrap();
       assert!(root
-        .open_subkey(format!(r"{base}\*\shell\CompareWorkbench.open"))
+        .open_subkey(format!(r"{base}\*\shell\JustCompare.open"))
         .is_err());
       assert!(menu("*", "compare")
         .get_value::<String, _>("LegacyDisable")

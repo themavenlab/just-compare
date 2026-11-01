@@ -186,7 +186,7 @@ export async function launchNative(config, args = [], options = {}) {
       console.error("Native renderer error:", error.message),
     );
     await page
-      .getByRole("heading", { name: "Compare Workbench", exact: true })
+      .getByRole("heading", { name: "Just Compare", exact: true })
       .waitFor({ state: "attached" });
     const call = (command, args = {}) =>
       page.evaluate(

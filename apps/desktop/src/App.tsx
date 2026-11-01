@@ -474,7 +474,7 @@ export function App() {
         enabled !== null &&
         !(await confirmAction(
           enabled
-            ? "Add Compare Workbench right-click commands for this Windows user? Windows 11 shows them under Show more options. No administrator access or file associations are changed."
+            ? "Add Just Compare right-click commands for this Windows user? Windows 11 shows them under Show more options. No administrator access or file associations are changed."
             : "Remove this installation's Explorer commands and clear its selected compare path? Source files and open tabs are unchanged.",
         ))
       )
@@ -891,7 +891,7 @@ export function App() {
   return (
     <div className="workbench-shell">
       <header className="shell-header sr-only">
-        <h1>Compare Workbench</h1>
+        <h1>Just Compare</h1>
         <span>Phase 1 / local files</span>
       </header>
       <nav className="menubar" aria-label="Application commands">

@@ -29,7 +29,8 @@ fn main() {
           std::process::exit(2);
         }
       }
-      context.config_mut().identifier = format!("dev.compare-workbench.test-{:x}", hash.finish());
+      context.config_mut().identifier =
+        format!("org.themavenlab.justcompare.test-{:x}", hash.finish());
     }
     // Explorer selection only records state; failures fall through so the window can report them.
     match select_without_window(&context.config().identifier) {
