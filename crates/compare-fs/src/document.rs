@@ -69,6 +69,22 @@ pub fn checked_path(path: &Path, allow_missing_leaf: bool) -> Result<PathBuf, Fi
   }
 }
 
+/// Formats a canonical path for display, removing the Windows verbatim prefix
+/// (`\\?\C:\` and `\\?\UNC\server\share`). Other verbatim forms are left intact.
+pub fn display_path(path: &Path) -> String {
+  let text = path.to_string_lossy();
+  if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+    return format!(r"\\{rest}");
+  }
+  if let Some(rest) = text.strip_prefix(r"\\?\") {
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+      return rest.to_string();
+    }
+  }
+  text.into_owned()
+}
+
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, FileError> {
   let file = fs::File::open(path)?;
   if !file.metadata()?.is_file() {
@@ -271,6 +287,17 @@ impl Document {
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[test]
+  fn display_path_removes_only_safe_verbatim_prefixes() {
+    let shown = |text: &str| display_path(Path::new(text));
+    assert_eq!(shown(r"\\?\C:\Users\me\a.txt"), r"C:\Users\me\a.txt");
+    assert_eq!(
+      shown(r"\\?\UNC\server\share\a.txt"),
+      r"\\server\share\a.txt"
+    );
+    assert_eq!(shown(r"C:\plain\a.txt"), r"C:\plain\a.txt");
+    assert_eq!(shown(r"\\?\Volume{1234}\a.txt"), r"\\?\Volume{1234}\a.txt");
+  }
   #[test]
   fn stale_save_and_clobber_are_rejected() {
     let root = tempfile::tempdir().unwrap();

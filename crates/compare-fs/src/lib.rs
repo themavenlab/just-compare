@@ -6,7 +6,7 @@ mod settings;
 pub mod shell;
 mod windows_metadata;
 
-pub use document::{checked_path, Document, FileError};
+pub use document::{checked_path, display_path, Document, FileError};
 pub use folder::{
   refresh_selection, scan_pair, scan_pair_with_rules, scan_selected_with_rules,
   validate_folder_configuration, ComparisonImportance, ContentMethod, Criterion, FolderEntry,

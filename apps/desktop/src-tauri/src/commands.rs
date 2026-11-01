@@ -123,7 +123,7 @@ pub struct SearchResult {
 fn document_view(id: String, document: &Document) -> DocumentView {
   DocumentView {
     id,
-    path: document.path().to_string_lossy().into_owned(),
+    path: compare_fs::display_path(document.path()),
     text: document.text().into(),
     encoding: format!("{:?}", document.encoding()),
     bom: document.has_bom(),
@@ -571,10 +571,8 @@ pub async fn parent_folder(path: String) -> Result<String, String> {
     }
     let parent = path.parent().ok_or("This folder has no parent.")?;
     compare_fs::checked_path(parent, false)
-      .map_err(|e| e.to_string())?
-      .into_os_string()
-      .into_string()
-      .map_err(|_| "Non-Unicode paths are unsupported.".into())
+      .map(|path| compare_fs::display_path(&path))
+      .map_err(|e| e.to_string())
   })
   .await
 }
