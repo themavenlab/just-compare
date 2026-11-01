@@ -86,6 +86,8 @@ node apps/desktop/scripts/editing-regression.mjs
 
 Use `npm ci` for a fresh checkout. Native suites require an embedded-assets debug build, launch only owned processes, and write only owned temporary fixture trees. They are Windows WebView2/CDP tests, not browser mocks or other-platform evidence. Native runners also honor `COMPARE_TEST_DESKTOP` for an alternate embedded-assets executable.
 
+The native compact-workbench regression checks that Text Compare and Folder Compare action bars wrap without horizontal scrolling at a narrow test viewport. The Tauri window starts maximized with a 1280 px minimum width; browser-only viewport emulation does not verify native window sizing, so confirm startup behavior in the native desktop app when validating a release build.
+
 ### Optimized Local Package
 
 ```text

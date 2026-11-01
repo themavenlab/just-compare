@@ -32,7 +32,7 @@ Goal: a dependable daily-use workbench first, broader format/source coverage sec
 
 ### Starting Baseline
 
-Phase 1 already provides Home, independent tabs, named sessions, compact text/folder/merge views, rules and display filters, plain-text editors, region copy, Undo, automatic comparison after open/copy/Undo/Save/Reload, aligned scroll, folder hierarchy/selection, safe previewed local operations, CLI/Git integration, CRC/NFC matching, and Windows-specific metadata capabilities.
+Phase 1 already provides Home, independent tabs, named sessions, compact text/folder/merge views, rules and display filters, plain-text editors, region copy, Undo, automatic comparison after open/copy/Undo/Save/Reload, aligned scroll, folder hierarchy/selection, safe previewed local operations, CLI/Git integration, CRC/NFC matching, and Windows-specific metadata capabilities. The desktop window starts maximized with standard OS window controls and a 1280 px minimum width to keep comparison panes side by side. Text and folder action bars wrap onto additional rows when needed instead of scrolling horizontally; tab navigation and editor content retain their intentional scrolling behavior.
 
 Do not rebuild these as new features. Inspect their current behavior and extend them. In particular:
 

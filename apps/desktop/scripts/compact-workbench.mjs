@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { launchNative } from "./native-harness.mjs";
+import { launchNative, selectWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-compact-"));
 const screenshots = resolve(
@@ -26,6 +26,27 @@ try {
   await writeFile(join(right, "right-only.txt"), "right only\n");
   session = await launchNative(config);
   const { page, call } = session;
+  const startupWindow = await page.evaluate(() => ({
+    width: outerWidth,
+    screenWidth: screen.availWidth,
+  }));
+  assert.ok(startupWindow.width >= 1280, JSON.stringify(startupWindow));
+  assert.ok(
+    startupWindow.width >= startupWindow.screenWidth - 16,
+    JSON.stringify(startupWindow),
+  );
+  const tauriConfig = JSON.parse(
+    await readFile(
+      new URL("../src-tauri/tauri.conf.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const mainWindow = tauriConfig.app.windows.find(
+    (window) => window.label === "main",
+  );
+  assert.equal(mainWindow.width, 1280);
+  assert.equal(mainWindow.minWidth, 1280);
+  assert.equal(mainWindow.maximized, true);
   const rendererErrors = [];
   page.on("pageerror", (error) => rendererErrors.push(error.message));
   page.setDefaultTimeout(12000);
@@ -56,6 +77,12 @@ try {
   await workspace.getByRole("button", { name: "Context", exact: true }).click();
   await workspace.locator(".comparison-fold").first().waitFor();
   await workspace.getByRole("button", { name: "All", exact: true }).click();
+  assert.equal(
+    await workspace
+      .getByRole("button", { name: "All", exact: true })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
   await page.waitForFunction(() => !document.querySelector(".comparison-fold"));
   assert.equal(
     (await text("Left").locator(".cm-line").allTextContents()).join("\n"),
@@ -75,12 +102,13 @@ try {
           nodes[0].getBoundingClientRect().top -
             nodes[1].getBoundingClientRect().top,
         ),
+        viewport: [innerWidth, innerHeight],
         overflow:
           document.documentElement.scrollHeight > innerHeight ||
           document.documentElement.scrollWidth > innerWidth,
       }));
     assert.ok(
-      geometry.height >= (size.width === 1280 ? 520 : 480),
+      geometry.height >= (size.width === 1280 ? 420 : 300),
       JSON.stringify(geometry),
     );
     assert.ok(geometry.alignment <= 2, JSON.stringify(geometry));
@@ -357,6 +385,12 @@ try {
   await writeFile(join(left, "file01.txt"), "batch first\n");
   await writeFile(join(left, "file02.txt"), "batch second\n");
   await workspace.getByRole("button", { name: "All", exact: true }).click();
+  assert.equal(
+    await workspace
+      .getByRole("button", { name: "All", exact: true })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
   const scanFolders = async () => {
     await workspace
       .getByRole("button", { name: "Scan folders", exact: true })
@@ -367,6 +401,16 @@ try {
       .waitFor();
   };
   await scanFolders();
+  await listing.evaluate((node) => {
+    node.scrollTop = 0;
+    node.dispatchEvent(new Event("scroll"));
+  });
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.paired-folder-row[data-relative="file01.txt"]')
+        ?.getAttribute("data-status") === "different",
+  );
   await row("file01.txt").locator(".folder-side").first().click();
   await row("file02.txt")
     .locator(".folder-side")
@@ -593,6 +637,33 @@ try {
     .getByRole("menuitem", { name: "Toggle theme", exact: true })
     .click();
   await page.screenshot({ path: join(screenshots, "folder-dark.png") });
+  const actionBarGeometry = async () => {
+    await page.setViewportSize({ width: 860, height: 800 });
+    const geometry = await workspace
+      .locator(".compact-command-bar:visible")
+      .evaluate((bar) => ({
+        width: bar.clientWidth,
+        scrollWidth: bar.scrollWidth,
+        rows: new Set(
+          [...bar.children].map((child) =>
+            Math.round(
+              (child.getBoundingClientRect().top +
+                child.getBoundingClientRect().bottom) /
+                16,
+            ),
+          ),
+        ).size,
+      }));
+    assert.ok(geometry.rows > 1, JSON.stringify(geometry));
+    assert.ok(geometry.scrollWidth <= geometry.width, JSON.stringify(geometry));
+    console.log(
+      `Action bar wraps into ${geometry.rows} rows with no horizontal overflow at ${geometry.width}px.`,
+    );
+    await page.setViewportSize({ width: 1420, height: 800 });
+  };
+  await actionBarGeometry();
+  await selectWorkspace(page, "text");
+  await actionBarGeometry();
   assert.deepEqual(rendererErrors, []);
   await session.close();
   session = await launchNative(config, [
@@ -615,7 +686,7 @@ try {
   );
   assert.equal(restartSettings.folderRules.executableVersion, true);
   console.log(
-    "Compact native workbench: Home/blank drafts, comparison filters, geometry, all visible folder menu entries, Rules apply/cancel, selected CRC content, NFC alignment, executable-version errors, disk space, previewed rename, opaque-plan replay, settings restart and explicit Git startup passed.",
+    "Compact native workbench: maximized startup, minimum width, wrapped action bars, Home/blank drafts, comparison filters, geometry, all visible folder menu entries, Rules apply/cancel, selected CRC content, NFC alignment, executable-version errors, disk space, previewed rename, opaque-plan replay, settings restart and explicit Git startup passed.",
   );
   console.log("Screenshots:", screenshots);
 } finally {

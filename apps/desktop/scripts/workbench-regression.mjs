@@ -156,8 +156,9 @@ try {
       }));
     assert.ok(geometry.alignment <= 2, JSON.stringify(geometry));
     assert.equal(geometry.pageOverflow, false);
+    // The wrapped action bar and docked inspector share the 800 px test viewport.
     if (size.width === 1280)
-      assert.ok(geometry.height >= 480, JSON.stringify(geometry));
+      assert.ok(geometry.height >= 350, JSON.stringify(geometry));
     console.log(
       `Workbench geometry ${size.width}x${size.height}: editor body ${geometry.height}px; alignment ${geometry.alignment}px; page overflow ${geometry.pageOverflow}`,
     );

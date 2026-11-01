@@ -14,8 +14,10 @@
       {
         "label": "main",
         "title": "Just Compare",
-        "width": 1100,
-        "height": 800
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1280,
+        "maximized": true
       }
     ],
     "security": {
