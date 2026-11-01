@@ -95,7 +95,6 @@ try {
   );
   await page.getByRole("textbox", { name: "Left text" }).fill("same\nold\n");
   await page.getByRole("textbox", { name: "Right text" }).fill("same\nnew\n");
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
@@ -186,7 +185,7 @@ try {
     2,
   );
   const comparePosition = await page
-    .getByRole("button", { name: "Compare", exact: true })
+    .getByRole("button", { name: "Next difference", exact: true })
     .boundingBox();
   const editorPosition = await page
     .locator(".code-editor")
@@ -224,7 +223,6 @@ try {
       .count(),
     0,
   );
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "0 changed regions", exact: true })
     .waitFor();
@@ -232,7 +230,6 @@ try {
   await page
     .getByRole("textbox", { name: "Right text" })
     .fill("first\nadded\nlast\n");
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .locator('.workspace-slot[aria-hidden="false"]')
     .locator(".cm-editor .diff-insert")
@@ -245,7 +242,6 @@ try {
     0,
   );
   await page.getByRole("button", { name: "Swap sides", exact: true }).click();
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .locator('.workspace-slot[aria-hidden="false"]')
     .locator(".cm-editor .diff-delete")
@@ -272,7 +268,6 @@ try {
   await page
     .getByRole("textbox", { name: "Right text" })
     .fill("new-a\nsame\nnew-b\n");
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "2 changed regions", exact: true })
     .waitFor();
@@ -369,7 +364,6 @@ try {
   for (const [index, test] of arrowCases.entries()) {
     await page.getByRole("textbox", { name: "Left text" }).fill(test.left);
     await page.getByRole("textbox", { name: "Right text" }).fill(test.right);
-    await page.getByRole("button", { name: "Compare", exact: true }).click();
     const arrow = page.getByRole("button", {
       name: `Copy difference 1 to ${test.destination}`,
       exact: true,
@@ -381,7 +375,6 @@ try {
     await page
       .getByRole("heading", { name: "0 changed regions", exact: true })
       .waitFor();
-    await page.getByRole("button", { name: "Compare", exact: true }).waitFor();
     const destinationEditor = page.getByRole("textbox", {
       name: test.destination === "left" ? "Left text" : "Right text",
       exact: true,
@@ -442,14 +435,12 @@ try {
     .getByRole("checkbox", { name: "Ignore whitespace", exact: true })
     .check();
   await togglePanel(page, "rules");
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "0 changed regions", exact: true })
     .waitFor();
   await page
     .getByRole("textbox", { name: "Left text" })
     .fill("x".repeat(1024 * 1024 + 1));
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page.getByRole("alert").waitFor();
   assert.match(await page.getByRole("alert").innerText(), /at most 1 MiB/);
   const leftFile = join(fixtures, "left.txt");
@@ -470,7 +461,6 @@ try {
     .getByText("UTF-8 draft", { exact: false })
     .last()
     .waitFor({ state: "hidden" });
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
   await page
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();

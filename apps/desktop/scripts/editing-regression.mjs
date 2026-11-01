@@ -45,7 +45,6 @@ try {
       .click();
     await idle();
   }
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await regions(0);
   await idle();
   await workspace
@@ -160,7 +159,6 @@ try {
     await editor("Left").evaluate((node) => node === document.activeElement),
     true,
   );
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await idle();
   await regions(1);
   assert.equal(await editor("Right").locator(".diff-line").count(), 1);
@@ -319,7 +317,6 @@ try {
     .waitFor();
   assert.match(await editor("Left").innerText(), /recoverable edit/);
   assert.equal(await workspace.locator(".diff-line").count(), 0);
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await idle();
   await regions(1);
 

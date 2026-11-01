@@ -70,7 +70,6 @@ try {
   assert.equal(await text("Right").textContent(), "");
   await text("Left").fill(original);
   await text("Right").fill(changed);
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await workspace
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
@@ -123,7 +122,6 @@ try {
   await workspace.locator(".text-rules > summary").click();
   await text("Left").fill("CASE\n");
   await text("Right").fill("case\n");
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await workspace
     .getByRole("heading", { name: "0 changed regions", exact: true })
     .waitFor();
@@ -140,9 +138,6 @@ try {
   ]) {
     await text("Left").fill(a);
     await text("Right").fill(b);
-    await workspace
-      .getByRole("button", { name: "Compare", exact: true })
-      .click();
     await workspace.getByRole("heading", { name: /changed regions/ }).waitFor();
     for (const filter of ["Same", "Diffs", "Context", "All"]) {
       await workspace
@@ -177,7 +172,6 @@ try {
   assert.deepEqual(rendererErrors, []);
   await text("Left").fill(original);
   await text("Right").fill(changed);
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await workspace
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();

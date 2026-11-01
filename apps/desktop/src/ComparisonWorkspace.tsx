@@ -38,10 +38,6 @@ import {
 import { FolderRulesDialog } from "./FolderRulesDialog";
 import { FolderView, type FolderSide } from "./FolderView";
 import { LineInspector } from "./LineInspector";
-import { RefinedRegion } from "./RefinedRegion";
-import { TextSearchPanel } from "./TextSearchPanel";
-import { ToolButton } from "./ToolButton";
-import { VirtualList } from "./VirtualList";
 import {
   fileName,
   relatedPaths,
@@ -80,11 +76,20 @@ function recoveredEditor(text: string | undefined, path: string): Editor {
 }
 type Editors = Record<Side, Editor>;
 const noDifferences: DiffSpan[] = [];
-type Refinement = {
+type IntralineRegion = {
   spans: DiffSpan[];
   leftBaseByte: number;
   rightBaseByte: number;
 };
+type Intraline = {
+  source: DiffSpan[];
+  leftText: string;
+  rightText: string;
+  regions: IntralineRegion[];
+};
+const noIntralineRegions: IntralineRegion[] = [];
+const maxIntralineRegions = 300;
+const maxIntralineChars = 200_000;
 interface DiskComparison {
   side: Side;
   draft: string;
@@ -213,7 +218,8 @@ export function ComparisonWorkspace({
     side: "left" | "right";
     line: number;
   } | null>(null);
-  const [refinement, setRefinement] = useState<Refinement | null>(null);
+  const [intraline, setIntraline] = useState<Intraline | null>(null);
+  const [showIntraline, setShowIntraline] = useState(true);
   const [alignmentAnchors, setAlignmentAnchors] = useState<
     { left: number; right: number }[]
   >([]);
@@ -652,7 +658,6 @@ export function ComparisonWorkspace({
     setPendingEdit(null);
     if (clearComparison) setSpans(null);
     if (clearComparison) setDetailRow(null);
-    setRefinement(null);
     setBlocks(null);
     setChoices({});
     setResolutionHistory([]);
@@ -675,9 +680,7 @@ export function ComparisonWorkspace({
     setNotice("");
   }
   function change(side: Side, text: string) {
-    const refresh =
-      mode === "text" &&
-      (hasCompared.current || spans !== null || pendingEdit !== null);
+    const refresh = mode === "text";
     invalidate(!refresh);
     if (refresh) setPendingEdit(revision.current);
     if (liveComparisonJob.current)
@@ -909,7 +912,6 @@ export function ComparisonWorkspace({
       startJob(jobId);
     }
     if (!preserveViewport) setSpans(null);
-    setRefinement(null);
     const profile = settings.formats.find((f) =>
       (inputs.left.document?.path || inputs.left.path)
         .toLowerCase()
@@ -1010,15 +1012,13 @@ export function ComparisonWorkspace({
     editInFlight.current = true;
     const request = revision.current + 1;
     try {
-      if (
+      const oversized =
         !fitsLiveComparisonBounds(editors.left.text) ||
-        !fitsLiveComparisonBounds(editors.right.text)
-      ) {
-        setSpans(null);
-        setRefinement(null);
+        !fitsLiveComparisonBounds(editors.right.text);
+      if (oversized) {
         setDetailRow(null);
-        setNotice(
-          "Automatic comparison skipped: each pane is limited to 256 KiB and 5,000 lines. Use Compare to update results.",
+        await attempt(() =>
+          compareInputs(editors, undefined, minorText, true, false),
         );
         return;
       }
@@ -1031,13 +1031,146 @@ export function ComparisonWorkspace({
       setEditRefresh((value) => value + 1);
     }
   });
+  const oversizedEdit =
+    !fitsLiveComparisonBounds(editors.left.text) ||
+    !fitsLiveComparisonBounds(editors.right.text);
   useEffect(() => {
     if (pendingEdit === null || busy) return;
-    const timer = window.setTimeout(() => {
-      void refreshEditedComparison();
-    }, 150);
+    const timer = window.setTimeout(
+      () => {
+        void refreshEditedComparison();
+      },
+      oversizedEdit ? 750 : 150,
+    );
     return () => window.clearTimeout(timer);
-  }, [pendingEdit, busy, editRefresh]);
+  }, [pendingEdit, busy, editRefresh, oversizedEdit]);
+  const autoCompareKey = useRef("");
+  useEffect(() => {
+    if (
+      mode !== "text" ||
+      !initialized.current ||
+      busy ||
+      globalBusy ||
+      pendingEdit !== null ||
+      spans !== null ||
+      !(editors.left.text !== "" || editors.left.path) ||
+      !(editors.right.text !== "" || editors.right.path)
+    )
+      return;
+    const key = JSON.stringify([
+      editors.left.text,
+      editors.right.text,
+      settings.ignoreCase,
+      settings.ignoreWhitespace,
+      settings.ignoreLineEndings,
+      settings.unimportantPatterns,
+      settings.formats,
+      minorText,
+    ]);
+    if (key === autoCompareKey.current) return;
+    const timer = window.setTimeout(() => {
+      autoCompareKey.current = key;
+      void attempt(() => compareInputs());
+    }, 200);
+    return () => window.clearTimeout(timer);
+    // Any stale comparison (rules, file loads, swaps) refreshes once per distinct input state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    busy,
+    globalBusy,
+    pendingEdit,
+    spans,
+    editors,
+    settings,
+    minorText,
+  ]);
+  useEffect(() => {
+    if (
+      mode !== "text" ||
+      spans === null ||
+      pendingEdit !== null ||
+      !showIntraline
+    )
+      return;
+    const source = spans;
+    const leftText = editors.left.text;
+    const rightText = editors.right.text;
+    let disposed = false;
+    const encoder = new TextEncoder();
+    const left = textLines(leftText);
+    const right = textLines(rightText);
+    const text = (lines: typeof left, start: number, end: number) =>
+      lines
+        .slice(start, end)
+        .map((line) => line.full)
+        .join("");
+    const baseByte = (lines: typeof left, full: string, index: number) =>
+      encoder.encode(full.slice(0, lines[index]?.start ?? full.length)).length;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const regions: IntralineRegion[] = [];
+        let budget = maxIntralineChars;
+        for (const span of source) {
+          if (disposed || regions.length >= maxIntralineRegions) break;
+          if (span.kind !== "replace") continue;
+          const leftRegion = text(left, span.leftStart, span.leftEnd);
+          const rightRegion = text(right, span.rightStart, span.rightEnd);
+          budget -= leftRegion.length + rightRegion.length;
+          if (budget < 0) break;
+          try {
+            const refined = await native("refine_text", {
+              left: leftRegion,
+              right: rightRegion,
+            });
+            regions.push({
+              spans: refined,
+              leftBaseByte: baseByte(left, leftText, span.leftStart),
+              rightBaseByte: baseByte(right, rightText, span.rightStart),
+            });
+          } catch {
+            break;
+          }
+        }
+        if (!disposed) setIntraline({ source, leftText, rightText, regions });
+      })();
+    }, 50);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    mode,
+    spans,
+    pendingEdit,
+    showIntraline,
+    editors.left.text,
+    editors.right.text,
+  ]);
+  const intralineRegions =
+    showIntraline &&
+    intraline !== null &&
+    intraline.source === spans &&
+    intraline.leftText === editors.left.text &&
+    intraline.rightText === editors.right.text
+      ? intraline.regions
+      : noIntralineRegions;
+  const intralineBySide = useMemo(
+    () => ({
+      left: intralineRegions.map((region) => ({
+        spans: region.spans,
+        baseByte: region.leftBaseByte,
+      })),
+      right: intralineRegions.map((region) => ({
+        spans: region.spans,
+        baseByte: region.rightBaseByte,
+      })),
+    }),
+    [intralineRegions],
+  );
+  function intralineRegionsFor(side: "left" | "right") {
+    return intralineBySide[side];
+  }
   useEffect(() => {
     if (!active || mode !== "text") return;
     const keys = (event: KeyboardEvent) => {
@@ -1062,14 +1195,21 @@ export function ComparisonWorkspace({
     }),
     [spans],
   );
-  const selected = suppressSelectedDifference ? undefined : changes[current];
+  const selected = suppressSelectedDifference
+    ? undefined
+    : changes[Math.min(current, changes.length - 1)];
+  function copyCurrentDifference(destination: "left" | "right") {
+    const target = selected ?? changes[Math.min(current, changes.length - 1)];
+    if (busy || mode !== "text" || !target) return;
+    const source = destination === "right" ? "left" : "right";
+    void attempt(() => copyDifference(source, target));
+  }
   function selectDifference(index: number) {
     setSuppressSelectedDifference(false);
     setSingleLineCopy(null);
     if (textFilter === "same") setTextFilter("all");
     setCurrent(index);
     setDetailRow(null);
-    setRefinement(null);
     setNavigation((value) => value + 1);
   }
   function navigateDifference(direction: -1 | 1) {
@@ -1170,7 +1310,6 @@ export function ComparisonWorkspace({
       },
     };
     revision.current += 1;
-    setRefinement(null);
     setBlocks(null);
     setChoices({});
     setEditors(inputs);
@@ -2317,15 +2456,10 @@ export function ComparisonWorkspace({
                 }}
                 displayMode={mode === "text" ? textFilter : "all"}
                 showWhitespace={mode === "text" && showWhitespace}
-                intralineSpans={
+                intralineRegions={
                   mode === "text" && side !== "base"
-                    ? (refinement?.spans ?? noDifferences)
-                    : noDifferences
-                }
-                intralineBaseByte={
-                  side === "left"
-                    ? (refinement?.leftBaseByte ?? 0)
-                    : (refinement?.rightBaseByte ?? 0)
+                    ? intralineRegionsFor(side)
+                    : undefined
                 }
                 differences={
                   mode === "text" && side !== "base"
@@ -2967,6 +3101,14 @@ export function ComparisonWorkspace({
         ) {
           event.preventDefault();
           navigateDifference(event.key === "ArrowDown" ? 1 : -1);
+        } else if (
+          mode === "text" &&
+          event.altKey &&
+          changes.length &&
+          (event.key === "ArrowRight" || event.key === "ArrowLeft")
+        ) {
+          event.preventDefault();
+          copyCurrentDifference(event.key === "ArrowRight" ? "right" : "left");
         }
       }}
     >
@@ -4003,6 +4145,13 @@ export function ComparisonWorkspace({
               onClick={() => setShowWhitespace((value) => !value)}
             />
             <ToolButton
+              label="Inline changes"
+              icon="minor"
+              description="Highlight the changed characters inside changed lines."
+              aria-pressed={showIntraline}
+              onClick={() => setShowIntraline((value) => !value)}
+            />
+            <ToolButton
               label="Anchor lines"
               icon="anchor"
               description={
@@ -4040,14 +4189,6 @@ export function ComparisonWorkspace({
               description="Search either text pane, replace with preview and Undo, or go to a source line (Ctrl+F)."
               onClick={() => controllersCommand("find")}
             />
-            <button
-              className="primary"
-              title="Compare the current drafts (Ctrl+Enter); does not save either file."
-              disabled={busy}
-              onClick={() => void attempt(() => compareInputs())}
-            >
-              {busy ? "Comparing..." : "Compare"}
-            </button>
             <ToolButton
               label="Reload"
               icon="refresh"
@@ -4117,66 +4258,22 @@ export function ComparisonWorkspace({
                   : "No differences"
                 : "Not compared"}
             </span>
-            {selected && (
-              <>
-                <button
-                  aria-label="Copy region to right"
-                  title="Copy the selected region into the right draft. Save is separate."
-                  disabled={busy}
-                  onClick={() =>
-                    void attempt(() => copyDifference("left", selected))
-                  }
-                >
-                  Copy to right
-                </button>
-                <button
-                  aria-label="Copy region to left"
-                  title="Copy the selected region into the left draft. Save is separate."
-                  disabled={busy}
-                  onClick={() =>
-                    void attempt(() => copyDifference("right", selected))
-                  }
-                >
-                  Copy to left
-                </button>
-                <button
-                  aria-label="Highlight intraline differences"
-                  title="Highlight intraline differences in both editable panes and the read-only detail view."
-                  disabled={busy}
-                  onClick={() =>
-                    void attempt(async () => {
-                      const left = leftLines
-                        .slice(selected.leftStart, selected.leftEnd)
-                        .map((line) => line.full)
-                        .join("");
-                      const right = rightLines
-                        .slice(selected.rightStart, selected.rightEnd)
-                        .map((line) => line.full)
-                        .join("");
-                      setRefinement({
-                        spans: await native("refine_text", { left, right }),
-                        leftBaseByte: new TextEncoder().encode(
-                          editors.left.text.slice(
-                            0,
-                            leftLines[selected.leftStart]?.start ??
-                              editors.left.text.length,
-                          ),
-                        ).length,
-                        rightBaseByte: new TextEncoder().encode(
-                          editors.right.text.slice(
-                            0,
-                            rightLines[selected.rightStart]?.start ??
-                              editors.right.text.length,
-                          ),
-                        ).length,
-                      });
-                    })
-                  }
-                >
-                  Highlight intraline
-                </button>
-              </>
-            )}
+            <button
+              aria-label="Copy region to right"
+              title="Copy the current difference into the right draft (Alt+Right). Save is separate."
+              disabled={busy || !changes.length}
+              onClick={() => copyCurrentDifference("right")}
+            >
+              Copy to right
+            </button>
+            <button
+              aria-label="Copy region to left"
+              title="Copy the current difference into the left draft (Alt+Left). Save is separate."
+              disabled={busy || !changes.length}
+              onClick={() => copyCurrentDifference("left")}
+            >
+              Copy to left
+            </button>
           </div>
           {searchMode && (
             <TextSearchPanel
@@ -4224,8 +4321,8 @@ export function ComparisonWorkspace({
           )}
           {!spans && (
             <p className="empty-state">
-              Run Compare to highlight changed lines. Copies refresh differences
-              automatically, as do manual edits after the first comparison.
+              Open or paste text on both sides; differences update automatically
+              as you type.
             </p>
           )}
           {spans && (
@@ -4304,31 +4401,6 @@ export function ComparisonWorkspace({
                   </p>
                 )}
               </details>
-              {refinement && selected && (
-                <RefinedRegion
-                  left={leftLines
-                    .slice(selected.leftStart, selected.leftEnd)
-                    .map((l) => l.full)
-                    .join("")}
-                  right={rightLines
-                    .slice(selected.rightStart, selected.rightEnd)
-                    .map((l) => l.full)
-                    .join("")}
-                  spans={refinement.spans}
-                />
-              )}
-              {refinement && (
-                <p>
-                  Intraline changed byte ranges:{" "}
-                  {refinement.spans
-                    .filter((s) => s.kind !== "equal")
-                    .map(
-                      (s) =>
-                        `${s.kind}: left ${s.leftStart}..${s.leftEnd}, right ${s.rightStart}..${s.rightEnd}`,
-                    )
-                    .join("; ")}
-                </p>
-              )}
             </section>
           )}
         </>

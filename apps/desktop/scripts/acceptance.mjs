@@ -163,11 +163,6 @@ try {
   assert.ok(Buffer.byteLength(overLimit) > 256 * 1024);
   await replaceEditorText(page, leftEditor, overLimit);
   await page
-    .getByText("Automatic comparison skipped:", { exact: false })
-    .waitFor();
-  assert.equal(await page.locator(".cm-editor .diff-line").count(), 0);
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
-  await page
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
   const alerts = await page.getByRole("alert").allTextContents();

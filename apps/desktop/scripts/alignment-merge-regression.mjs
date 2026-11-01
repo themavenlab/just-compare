@@ -55,16 +55,9 @@ try {
   await selectWorkspace(page, "text");
   await openInput("left", textLeftPath);
   await openInput("right", textRightPath);
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await regions(1);
   await workspace
     .getByRole("button", { name: "Next difference", exact: true })
-    .click();
-  await workspace
-    .getByRole("button", {
-      name: "Highlight intraline differences",
-      exact: true,
-    })
     .click();
   await workspace.locator(".cm-intraline-change").first().waitFor();
   await workspace
@@ -80,7 +73,6 @@ try {
 
   await editor("Left").fill("top\nA\nB\nmiddle\nend\n");
   await editor("Right").fill("top\nmiddle\nend\nA\nB\n");
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await regions(2);
   await workspace.locator(".diff-move-marker").first().waitFor();
 

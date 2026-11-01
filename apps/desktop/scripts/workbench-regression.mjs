@@ -48,9 +48,6 @@ try {
   const text = (side) =>
     workspace.getByRole("textbox", { name: `${side} text`, exact: true });
   const compare = async () => {
-    await workspace
-      .getByRole("button", { name: "Compare", exact: true })
-      .click();
     await workspace.getByRole("heading", { name: /changed regions/ }).waitFor();
   };
   const idle = () =>

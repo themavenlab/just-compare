@@ -10,6 +10,8 @@
   --accent: #245db4;
   --accent-soft: #e8f0ff;
   --changed: #fff1ce;
+  --intraline-text: #b3261e;
+  --selection-row: #cfe0fb;
   --added: #e1f3e9;
   --removed: #ffe5e5;
   --danger: #a52929;
@@ -33,6 +35,8 @@
   --accent: #9ac1ff;
   --accent-soft: #2b4161;
   --changed: #50452d;
+  --intraline-text: #ffa657;
+  --selection-row: #35527d;
   --added: #25483c;
   --removed: #523238;
   --danger: #ffb3b3;
@@ -431,9 +435,8 @@ textarea.rules {
   box-shadow: inset 3px 0 var(--selected);
 }
 .cm-editor .cm-intraline-change {
-  outline: 1px solid var(--selected);
-  text-decoration: underline;
-  text-decoration-style: dotted;
+  color: var(--intraline-text);
+  font-weight: 700;
 }
 .cm-editor .cm-visible-space {
   text-decoration: underline dotted;

@@ -12,6 +12,12 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { type DiffSpan } from "./comparison";
 import { createIconElement, iconSymbols } from "./icons";
 
+export interface IntralineRegion {
+  spans: DiffSpan[];
+  baseByte: number;
+}
+const noIntralineRegions: IntralineRegion[] = [];
+
 class Gap extends WidgetType {
   constructor(
     private readonly lines: number,
@@ -158,8 +164,7 @@ export function EditorSurface({
   singleLineCopy,
   displayMode = "all",
   showWhitespace = false,
-  intralineSpans = [],
-  intralineBaseByte = 0,
+  intralineRegions = noIntralineRegions,
   onSelectLine,
   onLineNumberClick,
   onEditorContentClick,
@@ -185,8 +190,7 @@ export function EditorSurface({
   singleLineCopy?: { side: "left" | "right"; line: number } | undefined;
   displayMode?: "all" | "differences" | "same" | "context";
   showWhitespace?: boolean;
-  intralineSpans?: DiffSpan[];
-  intralineBaseByte?: number;
+  intralineRegions?: IntralineRegion[] | undefined;
   onSelectLine?: ((line: number) => void) | undefined;
   onLineNumberClick?: ((line: number) => void) | undefined;
   onEditorContentClick?: (() => void) | undefined;
@@ -486,7 +490,7 @@ export function EditorSurface({
         }).range(position);
       });
     const bytePositions = new Map<number, number>([[0, 0]]);
-    if (intralineSpans.length) {
+    if (intralineRegions.length) {
       let byteOffset = 0;
       let editorOffset = 0;
       for (let index = 0; index < text.length;) {
@@ -512,25 +516,26 @@ export function EditorSurface({
         }
       }
     }
-    for (const span of intralineSpans) {
-      if (span.kind === "equal") continue;
-      const startByte =
-        intralineBaseByte +
-        (side === "left" ? span.leftStart : span.rightStart);
-      const endByte =
-        intralineBaseByte + (side === "left" ? span.leftEnd : span.rightEnd);
-      const from = bytePositions.get(startByte);
-      const to = bytePositions.get(endByte);
-      if (
-        from !== undefined &&
-        to !== undefined &&
-        to > from &&
-        to <= instance.state.doc.length
-      )
-        decorations.push(
-          Decoration.mark({ class: "cm-intraline-change" }).range(from, to),
-        );
-    }
+    for (const region of intralineRegions)
+      for (const span of region.spans) {
+        if (span.kind === "equal") continue;
+        const startByte =
+          region.baseByte +
+          (side === "left" ? span.leftStart : span.rightStart);
+        const endByte =
+          region.baseByte + (side === "left" ? span.leftEnd : span.rightEnd);
+        const from = bytePositions.get(startByte);
+        const to = bytePositions.get(endByte);
+        if (
+          from !== undefined &&
+          to !== undefined &&
+          to > from &&
+          to <= instance.state.doc.length
+        )
+          decorations.push(
+            Decoration.mark({ class: "cm-intraline-change" }).range(from, to),
+          );
+      }
     if (showWhitespace) {
       let whitespaceMarks = 0;
       for (let number = 1; number <= instance.state.doc.lines; number++) {
@@ -675,8 +680,7 @@ export function EditorSurface({
     copyEnabled,
     displayMode,
     showWhitespace,
-    intralineSpans,
-    intralineBaseByte,
+    intralineRegions,
     selectedLine,
     singleLineCopy,
     navigation,

@@ -77,6 +77,7 @@ npm run test:workflows --workspace apps/desktop
 npm run test:workbench --workspace apps/desktop
 npm run test:compact --workspace apps/desktop
 npm run test:interactions --workspace apps/desktop
+npm run test:auto-compare --workspace apps/desktop
 npm run test:sessions --workspace apps/desktop
 npm run test:history --workspace apps/desktop
 npm run test:inspector --workspace apps/desktop

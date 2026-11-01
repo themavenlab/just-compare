@@ -30,9 +30,6 @@ try {
   const right = "equal\nALPHA cafe\t y\nBETA " + "b".repeat(800) + "\nend\n";
   await editor("Left").fill(left);
   await editor("Right").fill(right);
-  await workspace()
-    .getByRole("button", { name: "Compare", exact: true })
-    .click();
   await inspector().locator("mark").first().waitFor();
   await idle();
   const originalLeft = await editor("Left").innerText();

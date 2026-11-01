@@ -53,9 +53,6 @@ try {
   }
   async function compare() {
     await workspace
-      .getByRole("button", { name: "Compare", exact: true })
-      .click();
-    await workspace
       .getByRole("heading", { name: "2 changed regions" })
       .waitFor();
   }

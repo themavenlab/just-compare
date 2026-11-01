@@ -134,7 +134,7 @@ try {
     launcher: cli,
   });
   await session.page
-    .getByRole("button", { name: "Compare", exact: true })
+    .getByRole("button", { name: "Next difference", exact: true })
     .waitFor();
   await session.destroy();
   assert.equal(await session.waitExit(), 0);

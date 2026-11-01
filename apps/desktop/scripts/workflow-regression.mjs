@@ -32,8 +32,9 @@ try {
   const content = async (side) =>
     (await text(side).locator(".cm-line").allTextContents()).join("\n");
   const compare = async () => {
-    await page.getByRole("button", { name: "Compare", exact: true }).click();
     await page.getByRole("heading", { name: /changed regions/ }).waitFor();
+    // Automatic comparison is debounced; let the final result replace any stale one.
+    await page.waitForTimeout(700);
   };
   await selectWorkspace(page, "folder");
   const roots = await call("normalize_folder_roots", { left, right });

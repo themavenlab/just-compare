@@ -401,7 +401,6 @@ try {
       .click();
     await idle();
   }
-  await workspace.getByRole("button", { name: "Compare", exact: true }).click();
   await workspace
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
