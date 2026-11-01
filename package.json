@@ -19,7 +19,8 @@
     "lint": "eslint apps/desktop/src",
     "format:check": "prettier --check \"apps/desktop/src/**/*.{ts,tsx,css}\" \"apps/desktop/scripts/*.mjs\" \"apps/desktop/*.{json,ts,html}\" \"apps/desktop/src-tauri/**/*.json\" package.json eslint.config.js",
     "desktop:dev": "npm run tauri --workspace apps/desktop -- dev",
-    "desktop:build": "npm run tauri --workspace apps/desktop -- build"
+    "desktop:build": "npm run tauri --workspace apps/desktop -- build",
+    "package:msix": "npm run package:msix --workspace apps/desktop"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -21,6 +21,7 @@
     "test:recovery": "node scripts/recovery-regression.mjs",
     "test:alignment-merge": "node scripts/alignment-merge-regression.mjs",
     "package:windows": "node scripts/package-windows.mjs",
+    "package:msix": "node scripts/package-msix.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
