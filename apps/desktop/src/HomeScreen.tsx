@@ -82,18 +82,102 @@ export function HomeScreen({
   const [base, setBase] = useState("");
   const matches = (text: string) =>
     text.toLocaleLowerCase().includes(query.toLocaleLowerCase());
+  const recentList = settings.recentComparisons ?? [];
+  const modeLabel = { text: "Text", folder: "Folder", merge: "Merge" } as const;
   return (
     <section className="home-screen" aria-label="Home">
+      <div className="home-main">
+        <div className="home-hero">
+          <h2>Start a comparison</h2>
+          <p>
+            Compare files and folders, merge three ways, and review every change
+            before anything is written. Everything stays on this computer.
+          </p>
+        </div>
+        <div className="launcher-grid">
+          {launchers.map((item) => (
+            <button
+              key={item.mode}
+              className="workflow-launcher"
+              data-workflow={item.mode}
+              aria-label={item.title}
+              disabled={!ready || busy}
+              title={item.description}
+              onClick={() => openTab(item.mode)}
+            >
+              <WorkflowIcon mode={item.mode} />
+              <span className="launcher-title">{item.title}</span>
+              <span className="launcher-description">{item.description}</span>
+            </button>
+          ))}
+        </div>
+        <section className="home-panel" aria-labelledby="recent-heading">
+          <div className="home-panel-heading">
+            <h3 id="recent-heading">Recent comparisons</h3>
+            <button
+              className="ghost"
+              disabled={busy || !ready || !recentList.length}
+              onClick={() => saveHistory([])}
+            >
+              Clear comparison history
+            </button>
+          </div>
+          {!recentList.length && (
+            <p className="metadata empty-panel">
+              Completed comparisons appear here.
+            </p>
+          )}
+          {recentList.map(
+            (comparison, index) =>
+              matches(
+                `${comparison.mode} ${comparison.left} ${comparison.right} ${comparison.base}`,
+              ) && (
+                <div className="session-item" key={index}>
+                  <button
+                    className="session-open"
+                    disabled={busy}
+                    title={`${comparison.mode}: ${comparison.left} / ${comparison.right}${comparison.base ? ` / base: ${comparison.base}` : ""}`}
+                    onClick={() => openTab(comparison.mode, comparison)}
+                  >
+                    <span
+                      className="session-kind"
+                      data-kind={comparison.mode}
+                      aria-hidden="true"
+                    >
+                      {modeLabel[comparison.mode]}
+                    </span>
+                    <span className="session-names">
+                      {comparison.mode}: {comparison.left.split(/[\\/]/).at(-1)}{" "}
+                      / {comparison.right.split(/[\\/]/).at(-1)}
+                    </span>
+                  </button>
+                  <button
+                    className="icon-button"
+                    disabled={busy}
+                    aria-label={`Remove recent comparison ${index + 1}`}
+                    title="Remove history only; source files are not deleted"
+                    onClick={() =>
+                      saveHistory(recentList.filter((_, i) => i !== index))
+                    }
+                  >
+                    <Icon name="close" />
+                  </button>
+                </div>
+              ),
+          )}
+        </section>
+      </div>
       <aside className="home-sidebar" aria-label="Sessions and recent paths">
         <div className="sidebar-heading">
           <strong>Sessions</strong>
           <button
+            className="icon-button"
             title="Add a named session without opening files"
             aria-label="Add saved session"
             disabled={busy || !ready}
             onClick={() => setAdding(!adding)}
           >
-            +
+            <Icon name="plus" />
           </button>
         </div>
         <label className="session-search">
@@ -184,19 +268,24 @@ export function HomeScreen({
                 />
               </label>
             )}
-            <button
-              disabled={busy || !name.trim() || settings.sessions.length >= 100}
-            >
-              Add session
-            </button>
+            <div className="form-actions">
+              <button
+                className="primary"
+                disabled={
+                  busy || !name.trim() || settings.sessions.length >= 100
+                }
+              >
+                Add session
+              </button>
+              <button type="button" onClick={() => setAdding(false)}>
+                Cancel
+              </button>
+            </div>
             {sessionError && (
               <p className="error" role="alert">
                 {sessionError}
               </p>
             )}
-            <button type="button" onClick={() => setAdding(false)}>
-              Cancel
-            </button>
           </form>
         )}
         <h3>Saved sessions</h3>
@@ -208,13 +297,16 @@ export function HomeScreen({
             matches(session.name) && (
               <div className="session-item" key={`${index}-${session.name}`}>
                 <button
+                  className="session-open"
                   disabled={busy}
                   title={`${session.name}: ${session.left} / ${session.right}`}
                   onClick={() => openSession(session)}
                 >
-                  {session.name}
+                  <Icon name="sessions" />
+                  <span className="session-names">{session.name}</span>
                 </button>
                 <button
+                  className="icon-button"
                   disabled={busy}
                   aria-label={`Remove saved session ${session.name}`}
                   title="Remove this session from preferences; files are not deleted"
@@ -224,55 +316,14 @@ export function HomeScreen({
                     )
                   }
                 >
-                  −
+                  <Icon name="close" />
                 </button>
               </div>
             ),
         )}
-        <h3>Recent comparisons</h3>
-        {!settings.recentComparisons?.length && (
-          <p className="metadata">Completed comparisons appear here.</p>
-        )}
-        {(settings.recentComparisons ?? []).map(
-          (comparison, index) =>
-            matches(
-              `${comparison.mode} ${comparison.left} ${comparison.right} ${comparison.base}`,
-            ) && (
-              <div className="session-item" key={index}>
-                <button
-                  disabled={busy}
-                  title={`${comparison.mode}: ${comparison.left} / ${comparison.right}${comparison.base ? ` / base: ${comparison.base}` : ""}`}
-                  onClick={() => openTab(comparison.mode, comparison)}
-                >
-                  {comparison.mode}: {comparison.left.split(/[\\/]/).at(-1)} /{" "}
-                  {comparison.right.split(/[\\/]/).at(-1)}
-                </button>
-                <button
-                  disabled={busy}
-                  aria-label={`Remove recent comparison ${index + 1}`}
-                  title="Remove history only; source files are not deleted"
-                  onClick={() =>
-                    saveHistory(
-                      (settings.recentComparisons ?? []).filter(
-                        (_, i) => i !== index,
-                      ),
-                    )
-                  }
-                >
-                  −
-                </button>
-              </div>
-            ),
-        )}
-        <button
-          disabled={busy || !ready || !settings.recentComparisons?.length}
-          onClick={() => saveHistory([])}
-        >
-          Clear comparison history
-        </button>
         <h3>Draft recovery</h3>
         <div className="home-preferences">
-          <label>
+          <label className="check-row">
             <input
               type="checkbox"
               checked={settings.recoverDrafts}
@@ -336,8 +387,9 @@ export function HomeScreen({
             ))}
           </>
         )}
+        <h3>Preferences</h3>
         <div className="home-preferences">
-          <label>
+          <label className="check-row">
             <input
               type="checkbox"
               checked={settings.contentComparison?.prompt !== false}
@@ -354,51 +406,34 @@ export function HomeScreen({
             />
             Ask before comparing selected contents
           </label>
-          <button
-            disabled={busy || !ready}
-            title="Persist current preferences, named sessions and recent paths"
-            onClick={savePreferences}
-          >
-            Save preferences
-          </button>
-          <button
-            title="Switch between light and dark appearance"
-            onClick={() =>
-              update((prior) => ({
-                ...prior,
-                theme: prior.theme === "light" ? "dark" : "light",
-              }))
-            }
-          >
-            Toggle theme
-          </button>
+          <div className="form-actions">
+            <button
+              title="Switch between light and dark appearance"
+              onClick={() =>
+                update((prior) => ({
+                  ...prior,
+                  theme: prior.theme === "light" ? "dark" : "light",
+                }))
+              }
+            >
+              <Icon name={settings.theme === "light" ? "moon" : "sun"} />
+              Toggle theme
+            </button>
+            <button
+              className="primary"
+              disabled={busy || !ready}
+              title="Persist current preferences, named sessions and recent paths"
+              onClick={savePreferences}
+            >
+              Save preferences
+            </button>
+          </div>
           <p className="metadata">
             Most preferences persist when saved; drafts are stored only when
             crash recovery is enabled above.
           </p>
         </div>
       </aside>
-      <div className="home-launchers">
-        <p>Choose a workspace to begin, or drop paths onto its icon.</p>
-        <div className="launcher-grid">
-          {launchers.map((item) => (
-            <button
-              key={item.mode}
-              className="workflow-launcher"
-              data-workflow={item.mode}
-              disabled={!ready || busy}
-              title={item.description}
-              onClick={() => openTab(item.mode)}
-            >
-              <WorkflowIcon mode={item.mode} />
-              <span>{item.title}</span>
-            </button>
-          ))}
-        </div>
-        <p className="home-note">
-          Local files. Independent workspaces. Explicit saves.
-        </p>
-      </div>
     </section>
   );
 }
