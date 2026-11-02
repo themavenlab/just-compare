@@ -84,7 +84,7 @@ try {
     workspace.getByRole("textbox", { name: `${side} text`, exact: true });
   const idle = () =>
     page.waitForFunction(
-      () => !document.querySelector(".new-comparisons button")?.disabled,
+      () => !document.querySelector(".new-tab-button")?.disabled,
     );
   for (const [side, path] of [
     ["left", leftPath],

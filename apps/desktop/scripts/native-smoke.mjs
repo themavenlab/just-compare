@@ -926,7 +926,7 @@ try {
     .getByRole("menuitem", { name: "Recheck disk", exact: true })
     .click();
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   assert.match(
     await page
@@ -947,7 +947,7 @@ try {
     .locator('.folder-row[data-relative="external-recheck.txt"]')
     .waitFor();
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   assert.doesNotMatch(
     await page

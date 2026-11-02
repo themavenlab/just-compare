@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { Icon, type IconName } from "./icons";
 
 export interface MenuCommand {
   label: string;
@@ -12,12 +13,14 @@ export function CommandMenu({
   position,
   onClose,
   description,
+  icon,
 }: {
   label: string;
   commands: MenuCommand[];
   position?: { x: number; y: number };
   onClose?: () => void;
   description?: string;
+  icon?: IconName;
 }) {
   const [open, setOpen] = useState(position !== undefined);
   const [anchor, setAnchor] = useState(position);
@@ -107,7 +110,8 @@ export function CommandMenu({
             setOpen((prior) => !prior);
           }}
         >
-          {label}
+          {icon && <Icon name={icon} className="tool-symbol" />}
+          <span>{label}</span>
         </button>
       )}
       {open && (

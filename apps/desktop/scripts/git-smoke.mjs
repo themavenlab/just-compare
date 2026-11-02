@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchNative } from "./native-harness.mjs";
+import { launchNative, openWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-git-"));
 const config = join(root, "config");
@@ -43,9 +43,7 @@ try {
     .getAttribute("id");
   const unrelated = join(root, "unrelated.txt");
   await writeFile(unrelated, "unrelated\n");
-  await session.page
-    .getByRole("button", { name: "Text Compare", exact: true })
-    .click();
+  await openWorkspace(session.page, "text");
   await session.page
     .getByRole("combobox", { name: "left path", exact: true })
     .fill(unrelated);
@@ -74,9 +72,7 @@ try {
   await session.page
     .getByRole("heading", { name: "0 unresolved conflicts", exact: true })
     .waitFor();
-  await session.page
-    .getByRole("button", { name: "3-Way Merge", exact: true })
-    .click();
+  await openWorkspace(session.page, "merge");
   await session.page
     .getByRole("textbox", { name: "Base text", exact: true })
     .fill("a\n");

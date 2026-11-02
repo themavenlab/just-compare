@@ -6,6 +6,24 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
+const workflowLabels = {
+  text: "Text Compare",
+  folder: "Folder Compare",
+  merge: "3-Way Merge",
+};
+
+export async function openWorkspace(page, mode) {
+  const label = workflowLabels[mode];
+  if (!label) throw new Error(`Unsupported test workspace: ${mode}`);
+  await page
+    .getByRole("button", { name: "New comparison", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "New comparison", exact: true })
+    .getByRole("button", { name: `New ${label}`, exact: true })
+    .click();
+}
+
 export async function selectWorkspace(page, mode) {
   const kind = { text: "Text", folder: "Folder", merge: "Merge" }[mode];
   if (!kind) throw new Error(`Unsupported test workspace: ${mode}`);
@@ -13,18 +31,7 @@ export async function selectWorkspace(page, mode) {
     has: page.locator(".tab-kind", { hasText: new RegExp(`^${kind}$`) }),
   });
   if (await tabs.count()) await tabs.last().getByRole("tab").click();
-  else
-    await page
-      .locator(".new-comparisons")
-      .getByRole("button", {
-        name: {
-          text: "Text Compare",
-          folder: "Folder Compare",
-          merge: "3-Way Merge",
-        }[mode],
-        exact: true,
-      })
-      .click();
+  else await openWorkspace(page, mode);
 }
 
 export async function togglePanel(page, panel) {

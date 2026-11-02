@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchNative } from "./native-harness.mjs";
+import { launchNative, openWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-auto-"));
 let session;
@@ -82,9 +82,7 @@ try {
     .waitFor();
 
   // Folder arrow navigation follows Explorer, even after clicking a control.
-  await page
-    .getByRole("button", { name: "Folder Compare", exact: true })
-    .click();
+  await openWorkspace(page, "folder");
   await workspace.getByLabel("left path", { exact: true }).fill(left);
   await workspace.getByLabel("right path", { exact: true }).fill(right);
   await workspace

@@ -21,7 +21,7 @@ try {
     workspace().getByRole("textbox", { name: `${side} text`, exact: true });
   const idle = () =>
     page.waitForFunction(
-      () => !document.querySelector(".new-comparisons button")?.disabled,
+      () => !document.querySelector(".new-tab-button")?.disabled,
     );
   await selectWorkspace(page, "text");
   await editor("Left").locator(".cm-line").first().waitFor();

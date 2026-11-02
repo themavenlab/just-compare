@@ -29,7 +29,7 @@ try {
   };
   const idle = () =>
     page.waitForFunction(
-      () => !document.querySelector(".new-comparisons button")?.disabled,
+      () => !document.querySelector(".new-tab-button")?.disabled,
     );
   let browserDialogs = 0;
   page.on("dialog", async (event) => {

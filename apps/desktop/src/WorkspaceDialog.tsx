@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { Icon } from "./icons";
 
 export function WorkspaceDialog({
   title,
@@ -33,7 +34,7 @@ export function WorkspaceDialog({
           title="Close without applying changes"
           onClick={onClose}
         >
-          x
+          <Icon name="close" />
         </button>
       </header>
       {children}

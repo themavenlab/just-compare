@@ -23,7 +23,7 @@ try {
   const workspace = () => page.locator('.workspace-slot[aria-hidden="false"]');
   const idle = () =>
     page.waitForFunction(
-      () => !document.querySelector(".new-comparisons button")?.disabled,
+      () => !document.querySelector(".new-tab-button")?.disabled,
     );
   await selectWorkspace(page, "folder");
   await workspace()

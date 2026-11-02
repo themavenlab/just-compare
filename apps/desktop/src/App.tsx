@@ -11,7 +11,8 @@ import { defaults, native, type DraftRecovery, type Settings } from "./api";
 import { errorMessage } from "./comparison";
 import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
-import { HomeScreen } from "./HomeScreen";
+import { HomeScreen, WorkflowIcon } from "./HomeScreen";
+import { Icon } from "./icons";
 import {
   fileName,
   sameSummary,
@@ -1156,27 +1157,27 @@ export function App() {
             },
           ]}
         />
-        <div className="new-comparisons" aria-label="New comparison">
-          {workflows.map(([mode, label]) => (
-            <button
-              key={mode}
-              disabled={!ready || blocked}
-              onClick={() => openTab(mode)}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="menubar-brand" aria-hidden="true">
+          <Icon name="workflowMerge" className="brand-mark" />
+          Just Compare
         </div>
       </nav>
       <div className="tabbar">
-        <button onClick={() => setActive(null)} aria-pressed={active === null}>
-          Home
+        <button
+          className="tab-home"
+          onClick={() => setActive(null)}
+          aria-pressed={active === null}
+          title="Home"
+        >
+          <Icon name="home" />
+          <span>Home</span>
         </button>
         <button
+          className="tab-scroll"
           aria-label="Scroll tabs left"
           onClick={() => tabStrip.current?.scrollBy({ left: -240 })}
         >
-          {"\u2039"}
+          <Icon name="chevronLeft" />
         </button>
         <div
           className="tabstrip"
@@ -1221,33 +1222,66 @@ export function App() {
                 title={`${workflows.find(([mode]) => mode === tab.mode)?.[1]}: ${summaries[tab.id]?.title ?? "Loading"}`}
                 onClick={() => setActive(tab.id)}
               >
-                <span className="tab-kind">
-                  {tab.mode === "folder"
-                    ? "Folder"
-                    : tab.mode === "merge"
-                      ? "Merge"
-                      : "Text"}
+                <span className="tab-kind" data-kind={tab.mode}>
+                  <Icon
+                    name={
+                      tab.mode === "folder"
+                        ? "workflowFolder"
+                        : tab.mode === "merge"
+                          ? "workflowMerge"
+                          : "workflowText"
+                    }
+                  />
+                  <span className="sr-only">
+                    {tab.mode === "folder"
+                      ? "Folder"
+                      : tab.mode === "merge"
+                        ? "Merge"
+                        : "Text"}
+                  </span>
                 </span>
                 {summaries[tab.id]?.error ? "! " : ""}
-                {summaries[tab.id]?.dirty ? "* " : ""}
-                {summaries[tab.id]?.title ?? "Loading"}
+                {summaries[tab.id]?.dirty ? (
+                  <>
+                    <span className="sr-only">* </span>
+                    <span
+                      className="tab-dirty"
+                      aria-hidden="true"
+                      title="Unsaved changes"
+                    />
+                  </>
+                ) : null}
+                <span className="tab-title">
+                  {summaries[tab.id]?.title ?? "Loading"}
+                </span>
               </button>
               <button
                 className="tab-close"
                 aria-label={`Close ${summaries[tab.id]?.title ?? "comparison"}`}
+                title="Close tab (Ctrl+W)"
                 disabled={blocked}
                 onClick={() => void closeTab(tab.id)}
               >
-                x
+                <Icon name="close" />
               </button>
             </div>
           ))}
         </div>
         <button
+          className="tab-scroll"
           aria-label="Scroll tabs right"
           onClick={() => tabStrip.current?.scrollBy({ left: 240 })}
         >
-          {"\u203a"}
+          <Icon name="chevronRight" />
+        </button>
+        <button
+          className="new-tab-button"
+          aria-label="New comparison"
+          title="New comparison (Ctrl+T)"
+          disabled={!ready || blocked}
+          onClick={() => setNewTabChooser(true)}
+        >
+          <Icon name="plus" />
         </button>
       </div>
       {error && (
@@ -1386,18 +1420,20 @@ export function App() {
           title="New comparison"
           onClose={() => setNewTabChooser(false)}
         >
-          <div className="dialog-actions">
+          <div className="new-comparison-grid">
             {workflows.map(([mode, label]) => (
               <button
                 key={mode}
                 type="button"
+                className="new-comparison-card"
                 disabled={!ready || blocked}
                 onClick={() => {
                   setNewTabChooser(false);
                   openTab(mode);
                 }}
               >
-                New {label}
+                <WorkflowIcon mode={mode} />
+                <span>New {label}</span>
               </button>
             ))}
           </div>

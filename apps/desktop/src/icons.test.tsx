@@ -11,17 +11,20 @@ describe("named SVG icon paths", () => {
     }
   });
 
-  it("defines a glyph for every named toolbar symbol", () => {
+  it("defines a glyph for every named marker symbol", () => {
     for (const [name, symbol] of Object.entries(iconSymbols))
       expect(symbol.trim(), name).toBeTruthy();
   });
 
-  it("renders path icons and toolbar glyphs from their names", () => {
+  it("renders path icons and marker glyphs from their names", () => {
     expect(renderToStaticMarkup(<Icon name="copyRight" />)).toContain(
       'data-icon="copyRight"',
     );
-    expect(renderToStaticMarkup(<Icon name="home" />)).toContain(
-      `data-icon="home">${iconSymbols.home}</span>`,
+    const toolbar = renderToStaticMarkup(<Icon name="home" />);
+    expect(toolbar).toContain("<svg");
+    expect(toolbar).toContain('stroke-linecap="round"');
+    expect(renderToStaticMarkup(<Icon name="moveFrom" />)).toContain(
+      `data-icon="moveFrom">${iconSymbols.moveFrom}</span>`,
     );
   });
 });

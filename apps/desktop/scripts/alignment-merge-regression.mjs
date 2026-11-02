@@ -31,7 +31,7 @@ try {
   const workspace = page.locator('.workspace-slot[aria-hidden="false"]');
   const idle = () =>
     page.waitForFunction(
-      () => !document.querySelector(".new-comparisons button")?.disabled,
+      () => !document.querySelector(".new-tab-button")?.disabled,
     );
   const editor = (side) =>
     workspace.getByRole("textbox", { name: `${side} text`, exact: true });
