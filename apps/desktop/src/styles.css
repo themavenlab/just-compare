@@ -1202,9 +1202,11 @@ body,
   content: "...";
   font-size: 12px;
 }
-.focused-row {
+.paired-folder-row.focused-row {
   background: var(--accent-soft);
-  box-shadow: inset 2px 0 var(--accent);
+  box-shadow: inset 3px 0 var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .sync-preview {
   position: absolute;
@@ -1633,8 +1635,8 @@ body,
   color: inherit;
   font-size: 11px;
 }
-.selected-folder-row {
-  background: var(--accent-soft) !important;
+.paired-folder-row.selected-folder-row {
+  background: var(--selection-row);
 }
 .row-hover-actions {
   display: none;

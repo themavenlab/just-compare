@@ -58,6 +58,7 @@ export function FolderView({
     y: number;
   } | null>(null);
   const element = useRef<HTMLDivElement>(null);
+  const anchorPath = useRef<string | null>(null);
   const id = useId();
   const rows = useMemo(
     () => folderRows(entries, filter, tree, collapsed, sort, descending),
@@ -261,25 +262,66 @@ export function FolderView({
             tree && focusedIndex >= 0 ? `${id}-${focusedIndex}` : undefined
           }
           onKeyDown={(event) => {
-            if (event.defaultPrevented || event.target !== event.currentTarget)
+            const target = event.target as HTMLElement;
+            if (
+              event.defaultPrevented ||
+              target.closest("input,textarea,select") ||
+              ((event.key === " " || event.key === "Enter") &&
+                target !== event.currentTarget)
+            )
               return;
             const index = focusedIndex < 0 ? 0 : focusedIndex;
             const row = rows[index];
-            if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            if (
+              [
+                "ArrowDown",
+                "ArrowUp",
+                "Home",
+                "End",
+                "PageDown",
+                "PageUp",
+              ].includes(event.key)
+            ) {
               event.preventDefault();
+              const step =
+                event.key === "ArrowDown"
+                  ? 1
+                  : event.key === "ArrowUp"
+                    ? -1
+                    : event.key === "PageDown"
+                      ? 15
+                      : -15;
               const next =
                 event.key === "Home"
                   ? 0
                   : event.key === "End"
                     ? rows.length - 1
-                    : Math.max(
+                    : Math.max(0, Math.min(rows.length - 1, index + step));
+              const nextRow = rows[next];
+              if (!nextRow) return;
+              setFocused(nextRow.path);
+              if (!busy && !event.ctrlKey && !event.metaKey) {
+                const anchor =
+                  event.shiftKey && anchorPath.current !== null
+                    ? Math.max(
                         0,
-                        Math.min(
-                          rows.length - 1,
-                          index + (event.key === "ArrowDown" ? 1 : -1),
-                        ),
-                      );
-              setFocused(rows[next]?.path ?? null);
+                        rows.findIndex((r) => r.path === anchorPath.current),
+                      )
+                    : next;
+                if (!event.shiftKey) anchorPath.current = nextRow.path;
+                else if (anchorPath.current === null)
+                  anchorPath.current = row?.path ?? nextRow.path;
+                const range = new Set(
+                  rows
+                    .slice(Math.min(anchor, next), Math.max(anchor, next) + 1)
+                    .filter((r) => r.entry && r.entry.status !== "error")
+                    .map((r) => r.path),
+                );
+                for (const path of selected)
+                  if (!range.has(path)) onSelect(path, false);
+                for (const path of range)
+                  if (!selected.includes(path)) onSelect(path, true);
+              }
             } else if (row && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
               event.preventDefault();
               if (row.branch) {
@@ -383,6 +425,7 @@ export function FolderView({
                           }
                         }
                         setFocused(node.path);
+                        if (!event.shiftKey) anchorPath.current = node.path;
                         element.current
                           ?.querySelector<HTMLElement>(".virtual")
                           ?.focus({ preventScroll: true });
@@ -436,6 +479,10 @@ export function FolderView({
                             onClick={(event) => {
                               event.stopPropagation();
                               toggle(node.path);
+                              setFocused(node.path);
+                              element.current
+                                ?.querySelector<HTMLElement>(".virtual")
+                                ?.focus({ preventScroll: true });
                             }}
                           >
                             {collapsed.has(node.path) ? "+" : "-"}
