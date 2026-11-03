@@ -60,8 +60,7 @@ try {
       () =>
         !document.querySelector(
           '.workspace-slot[aria-hidden="false"] .path-inputs button',
-        )?.disabled &&
-        !document.querySelector(".new-comparisons button")?.disabled,
+        )?.disabled && !document.querySelector(".new-tab-button")?.disabled,
     );
   // Only the OS chooser response is simulated; the real Browse handler and all
   // filesystem, comparison and rendering commands run in the native app.
@@ -241,9 +240,9 @@ try {
         const color = getComputedStyle(node.closest(".cm-content")).color;
         return {
           color,
-          tokens: [...node.querySelectorAll("span")].map(
-            (span) => getComputedStyle(span).color,
-          ),
+          tokens: [
+            ...node.querySelectorAll("span:not(.cm-intraline-change)"),
+          ].map((span) => getComputedStyle(span).color),
         };
       });
     assert.ok(

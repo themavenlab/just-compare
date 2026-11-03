@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { native } from "./api";
 import { errorMessage, type DiffSpan } from "./comparison";
+import { Icon } from "./icons";
 import { RefinedRegion } from "./RefinedRegion";
 
 export interface InspectorLine {
@@ -57,32 +58,43 @@ export function LineInspector({
     result?.left === left && result.right === right ? result : null;
   return (
     <section className="line-inspector" aria-label="Line-by-line detail">
-      <div className="toolbar compact">
+      <div className="toolbar compact inspector-bar">
         <strong>Line detail</strong>
         <button
+          className="icon-button"
           aria-expanded={!layout.collapsed}
+          aria-label={
+            layout.collapsed ? "Expand line detail" : "Collapse line detail"
+          }
+          title={
+            layout.collapsed ? "Expand line detail" : "Collapse line detail"
+          }
           onClick={() => onLayout({ ...layout, collapsed: !layout.collapsed })}
         >
-          {layout.collapsed ? "Expand line detail" : "Collapse line detail"}
+          <Icon name={layout.collapsed ? "chevronUp" : "chevronDown"} />
         </button>
         {!layout.collapsed && (
           <>
             <button
+              className="icon-button"
               aria-label="Previous detail line"
+              title="Previous detail line"
               disabled={!row || index <= 0}
               onClick={() => select(index - 1)}
             >
-              Previous line
+              <Icon name="arrowUp" />
             </button>
             <button
+              className="icon-button"
               aria-label="Next detail line"
+              title="Next detail line"
               disabled={!row || index + 1 >= count}
               onClick={() => select(index + 1)}
             >
-              Next line
+              <Icon name="arrowDown" />
             </button>
-            <label>
-              Detail height{" "}
+            <label className="inspector-height">
+              <span className="sr-only">Detail height</span>
               <select
                 aria-label="Detail height"
                 value={layout.height}
@@ -97,7 +109,7 @@ export function LineInspector({
                 ))}
               </select>
             </label>
-            <span>
+            <span className="inspector-meta">
               {row
                 ? `${row.minor ? "Minor " : ""}${row.kind} - aligned line ${index + 1} / ${count}`
                 : "No selection / comparison stale"}

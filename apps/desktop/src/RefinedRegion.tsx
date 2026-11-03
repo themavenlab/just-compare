@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { type DiffSpan } from "./comparison";
+import { Icon } from "./icons";
 
 export function RefinedRegion({
   left,
@@ -42,7 +43,7 @@ export function RefinedRegion({
                 disabled={disableCopyToRight}
                 onClick={onCopyToRight}
               >
-                {"\u2192"}
+                <Icon name="copyRight" />
               </button>
             )}
             {labels && side === "right" && onCopyToLeft && (
@@ -54,7 +55,7 @@ export function RefinedRegion({
                 disabled={disableCopyToLeft}
                 onClick={onCopyToLeft}
               >
-                {"\u2190"}
+                <Icon name="copyLeft" />
               </button>
             )}
             {spans.map((span, index) => {

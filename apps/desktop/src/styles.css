@@ -944,9 +944,6 @@ body,
   border-bottom: 0;
   overflow: hidden;
 }
-.comparison-workspace .pane-heading {
-  min-height: 22px;
-}
 .comparison-workspace .pane-heading h3 {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -955,17 +952,6 @@ body,
 .comparison-workspace .badge {
   padding: 0 4px;
   font-size: 10px;
-}
-.comparison-workspace .editor > label {
-  gap: 0;
-  font-size: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-.comparison-workspace .editor > label > input {
-  padding: 3px 5px;
-  height: 26px;
-  font-size: 12px;
 }
 .comparison-workspace .editor > .editor-content {
   display: flex;
@@ -1336,34 +1322,8 @@ body,
   position: relative;
   padding: 0 3px;
 }
-.comparison-workspace .pane-heading {
-  display: none;
-}
-.comparison-workspace .editor > label {
-  flex-shrink: 0;
-}
 .comparison-workspace .editor > .editor-content {
   flex: 1;
-}
-.comparison-workspace .editor > label > input {
-  padding-right: 260px;
-  border-radius: 0;
-  height: 25px;
-}
-.comparison-workspace .editor > .toolbar {
-  position: absolute;
-  top: 0;
-  right: 5px;
-  height: 25px;
-  gap: 1px;
-  background: var(--surface);
-}
-.comparison-workspace .editor > .toolbar button,
-.comparison-workspace .editor > .toolbar summary {
-  min-height: 22px;
-  height: 22px;
-  padding: 2px 4px;
-  font-size: 11px;
 }
 .folder-workspace .panes {
   grid-template-rows: 25px;
@@ -1991,9 +1951,6 @@ body,
   .home-sidebar {
     width: 200px;
   }
-  .comparison-workspace .editor > label > input {
-    padding-right: 220px;
-  }
   .folder-workspace .editor > label > input {
     padding-right: 60px;
   }
@@ -2529,6 +2486,247 @@ input::placeholder {
   opacity: 0.8;
 }
 
+/* Editor panes */
+.comparison-workspace {
+  padding: 0;
+  gap: 0;
+  background: var(--canvas);
+}
+.comparison-workspace .panes {
+  --pane-header: 88px;
+  gap: 0;
+}
+.comparison-workspace .editor {
+  padding: 0;
+  gap: 0;
+  border: 0;
+  background: var(--surface);
+}
+.pane-heading {
+  flex: 0 0 26px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+.comparison-workspace .pane-heading h3 {
+  font-size: 12px;
+  font-weight: 600;
+}
+.workbench-shell .badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.workbench-shell .badge.unsaved {
+  background: var(--changed);
+  border-color: var(--warning);
+}
+.folder-workspace .pane-heading .badge {
+  display: none;
+}
+.path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 36px;
+  height: 36px;
+  padding: 0 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.path-row .path-label {
+  flex: 1;
+}
+.path-row .path-label > label {
+  display: block;
+}
+.path-row input {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12.5px;
+}
+.path-row .toolbar {
+  flex-wrap: nowrap;
+  gap: 1px;
+  margin: 0;
+}
+.workbench-shell .path-row .toolbar button,
+.workbench-shell .path-row .toolbar summary {
+  min-height: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 5px;
+}
+.path-row .toolbar summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border-radius: var(--radius);
+  list-style: none;
+  cursor: pointer;
+}
+.path-row .toolbar summary::-webkit-details-marker {
+  display: none;
+}
+.path-row .toolbar summary svg {
+  width: 16px;
+  height: 16px;
+}
+.workbench-shell .path-row .toolbar button:hover:not(:disabled),
+.path-row .toolbar summary:hover {
+  background: var(--hover);
+}
+.path-row .toolbar button:not(:disabled) svg {
+  color: var(--muted);
+}
+.path-row .toolbar button:hover:not(:disabled) svg {
+  color: var(--accent);
+}
+.comparison-workspace .file-options {
+  position: relative;
+}
+.comparison-workspace .file-options[open] {
+  position: relative;
+  top: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.comparison-workspace .file-options[open] > summary {
+  margin: 0;
+  background: var(--accent-soft);
+}
+.comparison-workspace .file-options[open] > .toolbar {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.comparison-workspace .file-options > .toolbar button {
+  justify-content: flex-start;
+  width: 100%;
+  white-space: nowrap;
+}
+.comparison-workspace .editor .metadata {
+  flex: 0 0 22px;
+  height: 22px;
+  padding: 0 10px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 22px;
+}
+.comparison-workspace .code-editor {
+  border: 0;
+  font-size: 13px;
+}
+.pane-divider {
+  background: var(--border);
+}
+.cm-editor .diff-selected {
+  box-shadow: inset 3px 0 var(--selected);
+}
+.difference-rail {
+  top: var(--pane-header, 88px);
+  border: 0;
+  border-right: 1px solid var(--border);
+}
+
+/* Line detail */
+.line-inspector {
+  border-top: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.line-inspector .inspector-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.line-inspector .inspector-bar strong {
+  margin-right: 4px;
+  font-size: 12px;
+}
+.inspector-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.inspector-height select {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+.line-inspector-content {
+  padding: 10px 12px;
+}
+.line-inspector .panes {
+  grid-template-columns: max-content minmax(max-content, 1fr);
+  align-items: center;
+  gap: 6px 10px;
+}
+.inspector-source {
+  padding: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.line-inspector pre {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  font:
+    13px/1.5 Consolas,
+    monospace;
+}
+.workbench-shell .line-inspector .inspector-copy-arrow {
+  width: 24px;
+  min-height: 22px;
+  height: 22px;
+  margin-inline-end: 8px;
+  padding: 0;
+  border-radius: var(--radius);
+  vertical-align: middle;
+}
+.line-inspector .inspector-copy-arrow svg {
+  width: 14px;
+  height: 11px;
+}
+.line-inspector mark {
+  border-radius: 3px;
+}
+
+/* Status bar */
+.comparison-workspace .status-bar {
+  min-height: 28px;
+  padding: 2px 112px 2px 12px;
+  background: var(--surface-alt);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.folder-status-counts {
+  font-variant-numeric: tabular-nums;
+}
+.folder-workspace .status-bar {
+  font-size: 12px;
+  min-height: 28px;
+}
+
 /* Home */
 .home-screen {
   display: grid;
@@ -2730,6 +2928,49 @@ input::placeholder {
   padding: 10px 0;
 }
 
+/* Merge */
+.merge-workspace > section {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.merge-workspace > section h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.merge-workspace > section > label {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.merge-workspace > section > button {
+  margin-top: 8px;
+}
+.conflict {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-alt);
+}
+.conflict.conflict-active {
+  border-color: var(--accent);
+}
+.conflict h3 {
+  margin-bottom: 6px;
+}
+.conflict pre {
+  margin: 2px 0;
+  font:
+    12.5px/1.5 Consolas,
+    monospace;
+  white-space: pre-wrap;
+}
+.conflict button {
+  margin: 8px 6px 0 0;
+}
 @media (max-width: 900px) {
   .home-screen {
     grid-template-columns: 1fr;

@@ -37,7 +37,9 @@ import {
 } from "./folderPresentation";
 import { FolderRulesDialog } from "./FolderRulesDialog";
 import { FolderView, type FolderSide } from "./FolderView";
+import { Icon } from "./icons";
 import { LineInspector } from "./LineInspector";
+import { ToolButton } from "./ToolButton";
 import {
   fileName,
   relatedPaths,
@@ -893,6 +895,20 @@ export function ComparisonWorkspace({
     setFileMetadata((prior) => ({ ...prior, [side]: metadata }));
     if (mode === "text") await compareInputs(inputs, selected, minorText, true);
   }
+  const comparedKey = useRef("");
+  const failedKey = useRef("");
+  function comparisonKey(inputs: Editors, includeMinor: boolean) {
+    return JSON.stringify([
+      inputs.left.text,
+      inputs.right.text,
+      settings.ignoreCase,
+      settings.ignoreWhitespace,
+      settings.ignoreLineEndings,
+      settings.unimportantPatterns,
+      settings.formats,
+      includeMinor,
+    ]);
+  }
   async function compareInputs(
     inputs = editors,
     afterCopy?: DiffSpan,
@@ -937,15 +953,20 @@ export function ComparisonWorkspace({
       },
     })
       .catch((failure: unknown) => {
-        if (request === revision.current) setSpans(null);
+        if (request === revision.current) {
+          failedKey.current = comparisonKey(inputs, includeMinor);
+          setSpans(null);
+        }
         throw failure;
       })
       .finally(() => {
         if (liveComparisonJob.current === jobId)
           liveComparisonJob.current = null;
+        setEditRefresh((value) => value + 1);
       });
     if (request === revision.current) {
       hasCompared.current = true;
+      comparedKey.current = comparisonKey(inputs, includeMinor);
       setSpans(result);
       if (!preserveViewport) setSuppressSelectedDifference(false);
       if (afterCopy) {
@@ -1044,7 +1065,6 @@ export function ComparisonWorkspace({
     );
     return () => window.clearTimeout(timer);
   }, [pendingEdit, busy, editRefresh, oversizedEdit]);
-  const autoCompareKey = useRef("");
   useEffect(() => {
     if (
       mode !== "text" ||
@@ -1052,28 +1072,24 @@ export function ComparisonWorkspace({
       busy ||
       globalBusy ||
       pendingEdit !== null ||
-      spans !== null ||
+      editInFlight.current ||
+      liveComparisonJob.current ||
       !(editors.left.text !== "" || editors.left.path) ||
       !(editors.right.text !== "" || editors.right.path)
     )
       return;
-    const key = JSON.stringify([
-      editors.left.text,
-      editors.right.text,
-      settings.ignoreCase,
-      settings.ignoreWhitespace,
-      settings.ignoreLineEndings,
-      settings.unimportantPatterns,
-      settings.formats,
-      minorText,
-    ]);
-    if (key === autoCompareKey.current) return;
+    const key = comparisonKey(editors, minorText);
+    if (key === failedKey.current) return;
+    if (spans !== null && key === comparedKey.current) return;
     const timer = window.setTimeout(() => {
-      autoCompareKey.current = key;
-      void attempt(() => compareInputs());
+      if (oversizedEdit) void attempt(() => compareInputs());
+      else
+        void compareInputs(editors, undefined, minorText, true, true).catch(
+          (failure: unknown) => setError(errorMessage(failure)),
+        );
     }, 200);
     return () => window.clearTimeout(timer);
-    // Any stale comparison (rules, file loads, swaps) refreshes once per distinct input state.
+    // Any result that does not match the current inputs (rules, loads, swaps, dropped late results) is recomputed; failures are not retried for the same inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mode,
@@ -1084,6 +1100,7 @@ export function ComparisonWorkspace({
     editors,
     settings,
     minorText,
+    editRefresh,
   ]);
   useEffect(() => {
     if (
@@ -2182,191 +2199,209 @@ export function ComparisonWorkspace({
                   : "Draft"}
           </span>
         </div>
-        <div className="path-label">
-          {mode === "folder" && side !== "base" ? (
-            <>
-              <span>Folder path</span>
-              <FolderPathInput
-                side={side}
-                value={folderRoots[side]}
-                recent={settings.recentFolders ?? []}
-                disabled={busy}
-                change={(path) => {
-                  invalidateFolders();
-                  setFolderRoots((prior) => ({ ...prior, [side]: path }));
-                }}
-                choose={(path) => void attempt(() => chooseFolder(side, path))}
-                onSaveHistory={(paths) =>
-                  void attempt(() => saveFolderHistory(paths))
-                }
-              />
-            </>
-          ) : (
-            <label>
-              {mode === "folder" ? "Folder path" : "File path"}
-              <input
-                aria-label={`${side} path`}
-                name={`${side}-path`}
-                autoComplete="off"
-                spellCheck={false}
-                list={`recent-${tab.id}-${side}`}
-                placeholder={
-                  mode === "folder"
-                    ? "Choose a folder or paste its path..."
-                    : "Choose a file or paste its path..."
-                }
-                value={
-                  mode === "folder" && side !== "base"
-                    ? folderRoots[side]
-                    : e.path
-                }
-                disabled={busy}
-                onChange={(event) => {
-                  const path = event.target.value;
-                  if (mode === "folder" && side !== "base") {
+        <div className="path-row">
+          <div className="path-label">
+            {mode === "folder" && side !== "base" ? (
+              <>
+                <span className="sr-only">Folder path</span>
+                <FolderPathInput
+                  side={side}
+                  value={folderRoots[side]}
+                  recent={settings.recentFolders ?? []}
+                  disabled={busy}
+                  change={(path) => {
                     invalidateFolders();
                     setFolderRoots((prior) => ({ ...prior, [side]: path }));
-                  } else {
-                    setEditors((prior) => ({
-                      ...prior,
-                      [side]: { ...prior[side], path },
-                    }));
+                  }}
+                  choose={(path) =>
+                    void attempt(() => chooseFolder(side, path))
                   }
-                }}
-              />
-              <datalist id={`recent-${tab.id}-${side}`}>
-                {settings.recent.map((path) => (
-                  <option key={path} value={path} />
-                ))}
-              </datalist>
-            </label>
-          )}
-        </div>
-        <div className="toolbar compact">
-          {mode === "folder" && side !== "base" && (
-            <>
-              <button
-                aria-label={`Back ${side}`}
-                title="Navigate back in this side's path history"
-                disabled={busy || rootHistory[side].index === 0}
-                onClick={() => void attempt(() => navigateHistory(side, -1))}
-              >
-                {"<"}
-              </button>
-              <button
-                aria-label={`Forward ${side}`}
-                title="Navigate forward in this side's path history"
-                disabled={
-                  busy ||
-                  rootHistory[side].index + 1 >= rootHistory[side].paths.length
-                }
-                onClick={() => void attempt(() => navigateHistory(side, 1))}
-              >
-                {">"}
-              </button>
-              <button
-                aria-label={`Parent ${side}`}
-                title="Navigate to this folder's parent"
-                disabled={busy || !folderRoots[side]}
-                onClick={() => void attempt(() => navigateParent(side))}
-              >
-                Up
-              </button>
-              <button
-                aria-label={`Linked parents ${side}`}
-                title="Navigate both roots to their parents together"
-                disabled={busy || !folderRoots.left || !folderRoots.right}
-                onClick={() => void attempt(() => navigateParent(side, true))}
-              >
-                Both up
-              </button>
-            </>
-          )}
-          <button
-            aria-label={`Browse ${side}`}
-            title={`Choose a ${mode === "folder" ? "folder" : "file"} for the ${side} input`}
-            disabled={busy}
-            onClick={() => void attempt(() => loadDialog(side))}
-          >
-            Browse
-          </button>
-          {mode !== "folder" && (
-            <>
-              <button
-                aria-label={`Open ${side}`}
-                title={`Open the typed ${side} file path; dirty drafts require confirmation`}
-                disabled={busy || !e.path}
-                onClick={() => void attempt(() => openSide(side))}
-              >
-                Open
-              </button>
-              <button
-                aria-label={`Save ${side}`}
-                title={`Save the ${side} draft with stale-file checks (Ctrl+S in this editor)`}
-                disabled={busy}
-                onClick={() => void attempt(() => saveSide(side))}
-              >
-                Save
-              </button>
-              <button
-                aria-label={`Save ${side} As`}
-                title="Save a new file without overwriting an existing file"
-                disabled={busy}
-                onClick={() => void attempt(() => saveSide(side, true))}
-              >
-                Save As
-              </button>
-              <button
-                aria-label={`Undo ${side}`}
-                title={`Undo the previous ${side} draft change`}
-                disabled={busy || !e.history.length}
-                onClick={() => void attempt(() => undoSide(side))}
-              >
-                Undo
-              </button>
-              <button
-                aria-label={`Redo ${side}`}
-                title={`Redo the previous ${side} draft change`}
-                disabled={busy || !e.future.length}
-                onClick={() => void attempt(() => redoSide(side))}
-              >
-                Redo
-              </button>
-              <details className="file-options">
-                <summary>More</summary>
-                <div className="toolbar compact">
-                  <button
-                    disabled={busy || !e.path}
-                    onClick={() =>
-                      void attempt(async () => {
-                        const encoding = window.prompt(
-                          "Encoding label (for example windows-1252 or utf-16le):",
-                        );
-                        if (encoding) await openSide(side, encoding);
-                      })
+                  onSaveHistory={(paths) =>
+                    void attempt(() => saveFolderHistory(paths))
+                  }
+                />
+              </>
+            ) : (
+              <label>
+                <span className="sr-only">
+                  {mode === "folder" ? "Folder path" : "File path"}
+                </span>
+                <input
+                  aria-label={`${side} path`}
+                  name={`${side}-path`}
+                  autoComplete="off"
+                  spellCheck={false}
+                  list={`recent-${tab.id}-${side}`}
+                  placeholder={
+                    mode === "folder"
+                      ? "Choose a folder or paste its path..."
+                      : "Choose a file or paste its path..."
+                  }
+                  value={
+                    mode === "folder" && side !== "base"
+                      ? folderRoots[side]
+                      : e.path
+                  }
+                  disabled={busy}
+                  onChange={(event) => {
+                    const path = event.target.value;
+                    if (mode === "folder" && side !== "base") {
+                      invalidateFolders();
+                      setFolderRoots((prior) => ({ ...prior, [side]: path }));
+                    } else {
+                      setEditors((prior) => ({
+                        ...prior,
+                        [side]: { ...prior[side], path },
+                      }));
                     }
-                  >
-                    Encoding...
-                  </button>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      void attempt(async () => {
-                        if (
-                          await confirmAction(
-                            "Convert to UTF-8 and save to a new file?",
+                  }}
+                />
+                <datalist id={`recent-${tab.id}-${side}`}>
+                  {settings.recent.map((path) => (
+                    <option key={path} value={path} />
+                  ))}
+                </datalist>
+              </label>
+            )}
+          </div>
+          <div className="toolbar compact">
+            {mode === "folder" && side !== "base" && (
+              <>
+                <button
+                  aria-label={`Back ${side}`}
+                  title="Navigate back in this side's path history"
+                  disabled={busy || rootHistory[side].index === 0}
+                  onClick={() => void attempt(() => navigateHistory(side, -1))}
+                >
+                  <Icon name="chevronLeft" />
+                </button>
+                <button
+                  aria-label={`Forward ${side}`}
+                  title="Navigate forward in this side's path history"
+                  disabled={
+                    busy ||
+                    rootHistory[side].index + 1 >=
+                      rootHistory[side].paths.length
+                  }
+                  onClick={() => void attempt(() => navigateHistory(side, 1))}
+                >
+                  <Icon name="chevronRight" />
+                </button>
+                <button
+                  aria-label={`Parent ${side}`}
+                  title="Navigate to this folder's parent"
+                  disabled={busy || !folderRoots[side]}
+                  onClick={() => void attempt(() => navigateParent(side))}
+                >
+                  <Icon name="arrowUp" />
+                  <span className="btn-text">Up</span>
+                </button>
+                <button
+                  aria-label={`Linked parents ${side}`}
+                  title="Navigate both roots to their parents together"
+                  disabled={busy || !folderRoots.left || !folderRoots.right}
+                  onClick={() => void attempt(() => navigateParent(side, true))}
+                >
+                  <Icon name="arrowUp" />
+                  <span className="btn-text">Both up</span>
+                </button>
+              </>
+            )}
+            <button
+              aria-label={`Browse ${side}`}
+              title={`Choose a ${mode === "folder" ? "folder" : "file"} for the ${side} input`}
+              disabled={busy}
+              onClick={() => void attempt(() => loadDialog(side))}
+            >
+              <Icon name="openFolder" />
+              <span className="btn-text">Browse</span>
+            </button>
+            {mode !== "folder" && (
+              <>
+                <button
+                  aria-label={`Open ${side}`}
+                  title={`Open the typed ${side} file path; dirty drafts require confirmation`}
+                  disabled={busy || !e.path}
+                  onClick={() => void attempt(() => openSide(side))}
+                >
+                  <Icon name="check" />
+                  <span className="btn-text">Open</span>
+                </button>
+                <button
+                  aria-label={`Save ${side}`}
+                  title={`Save the ${side} draft with stale-file checks (Ctrl+S in this editor)`}
+                  disabled={busy}
+                  onClick={() => void attempt(() => saveSide(side))}
+                >
+                  <Icon name="save" />
+                  <span className="btn-text">Save</span>
+                </button>
+                <button
+                  aria-label={`Save ${side} As`}
+                  title="Save a new file without overwriting an existing file"
+                  disabled={busy}
+                  onClick={() => void attempt(() => saveSide(side, true))}
+                >
+                  <Icon name="saveAs" />
+                  <span className="btn-text">Save As</span>
+                </button>
+                <button
+                  aria-label={`Undo ${side}`}
+                  title={`Undo the previous ${side} draft change`}
+                  disabled={busy || !e.history.length}
+                  onClick={() => void attempt(() => undoSide(side))}
+                >
+                  <Icon name="undo" />
+                  <span className="btn-text">Undo</span>
+                </button>
+                <button
+                  aria-label={`Redo ${side}`}
+                  title={`Redo the previous ${side} draft change`}
+                  disabled={busy || !e.future.length}
+                  onClick={() => void attempt(() => redoSide(side))}
+                >
+                  <Icon name="redo" />
+                  <span className="btn-text">Redo</span>
+                </button>
+                <details className="file-options">
+                  <summary>
+                    <Icon name="more" />
+                    <span className="btn-text">More</span>
+                  </summary>
+                  <div className="toolbar compact">
+                    <button
+                      disabled={busy || !e.path}
+                      onClick={() =>
+                        void attempt(async () => {
+                          const encoding = window.prompt(
+                            "Encoding label (for example windows-1252 or utf-16le):",
+                          );
+                          if (encoding) await openSide(side, encoding);
+                        })
+                      }
+                    >
+                      Encoding...
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void attempt(async () => {
+                          if (
+                            await confirmAction(
+                              "Convert to UTF-8 and save to a new file?",
+                            )
                           )
-                        )
-                          await saveSide(side, true, true);
-                      })
-                    }
-                  >
-                    UTF-8 copy
-                  </button>
-                </div>
-              </details>
-            </>
-          )}
+                            await saveSide(side, true, true);
+                        })
+                      }
+                    >
+                      UTF-8 copy
+                    </button>
+                  </div>
+                </details>
+              </>
+            )}
+          </div>
         </div>
         {mode !== "folder" && (
           <>
@@ -4079,201 +4114,233 @@ export function ComparisonWorkspace({
       {mode === "text" && (
         <>
           <div
-            className="toolbar command-bar compact-command-bar"
+            className="toolbar command-bar compact-command-bar text-toolbar"
             aria-label="Text comparison actions"
           >
-            <ToolButton
-              label="Home"
-              icon="home"
-              description="Return to Home, keeping this workspace and unsaved drafts."
-              onClick={onHome}
-            />
-            <CommandMenu
-              label="Sessions"
-              description="Start a new comparison or open a saved session."
-              commands={sessionCommands()}
-            />
-            <ToolButton
-              label="All"
-              icon="all"
-              description="Show every source line."
-              aria-pressed={textFilter === "all"}
-              onClick={() => setTextFilter("all")}
-            />
-            <ToolButton
-              label="Diffs"
-              icon="differences"
-              description="Fold equal lines while retaining complete editable source documents."
-              aria-pressed={textFilter === "differences"}
-              disabled={!spans}
-              onClick={() => setTextFilter("differences")}
-            />
-            <ToolButton
-              label="Same"
-              icon="same"
-              description="Fold changed lines; hidden text remains in the source document."
-              aria-pressed={textFilter === "same"}
-              disabled={!spans}
-              onClick={() => setTextFilter("same")}
-            />
-            <ToolButton
-              label="Context"
-              icon="context"
-              description="Show changes with three surrounding equal lines on either side."
-              aria-pressed={textFilter === "context"}
-              disabled={!spans}
-              onClick={() => setTextFilter("context")}
-            />
-            <ToolButton
-              label="Minor"
-              icon="minor"
-              description="Show raw differences ignored by the active comparison rules, without changing source text."
-              aria-pressed={minorText}
-              disabled={busy}
-              onClick={() => {
-                setMinorText(!minorText);
-                void attempt(() =>
-                  compareInputs(editors, undefined, !minorText),
-                );
-              }}
-            />
-            <ToolButton
-              label="Whitespace / EOL"
-              icon="whitespace"
-              description="Mark spaces and tabs and show each source line ending without changing text."
-              aria-pressed={showWhitespace}
-              onClick={() => setShowWhitespace((value) => !value)}
-            />
-            <ToolButton
-              label="Inline changes"
-              icon="minor"
-              description="Highlight the changed characters inside changed lines."
-              aria-pressed={showIntraline}
-              onClick={() => setShowIntraline((value) => !value)}
-            />
-            <ToolButton
-              label="Anchor lines"
-              icon="anchor"
-              description={
-                cursorLines.left === null || cursorLines.right === null
-                  ? "Place the caret on a line in each pane to pair them as an ephemeral alignment anchor."
-                  : `Pair left line ${cursorLines.left + 1} with right line ${cursorLines.right + 1}; anchors clear when text changes.`
-              }
-              disabled={
-                busy || cursorLines.left === null || cursorLines.right === null
-              }
-              onClick={() => void attempt(anchorCurrentLines)}
-            />
-            <ToolButton
-              label={`Clear anchors${alignmentAnchors.length ? ` (${alignmentAnchors.length})` : ""}`}
-              icon="clear"
-              description="Remove manual line-pair anchors and compare automatically aligned text."
-              disabled={busy || !alignmentAnchors.length}
-              onClick={() => void attempt(clearAlignmentAnchors)}
-            />
-            <ToolButton
-              label="Rules"
-              icon="settings"
-              description="Edit comparison rules; changes invalidate existing results."
-              onClick={() => controllersCommand("rules")}
-            />
-            <ToolButton
-              label="Format"
-              icon="format"
-              description="Manage comparison-format profiles, not source-code formatting."
-              onClick={() => controllersCommand("profiles")}
-            />
-            <ToolButton
-              label="Find / Replace"
-              icon="search"
-              description="Search either text pane, replace with preview and Undo, or go to a source line (Ctrl+F)."
-              onClick={() => controllersCommand("find")}
-            />
-            <ToolButton
-              label="Reload"
-              icon="refresh"
-              description="Reopen both file inputs and refresh differences without resetting the viewport. Dirty drafts require confirmation."
-              disabled={busy || (!editors.left.path && !editors.right.path)}
-              onClick={() =>
-                void attempt(async () => {
-                  if (!(await discard("left")) || !(await discard("right")))
-                    return;
-                  const inputs = { ...editors };
-                  try {
-                    if (editors.left.path)
-                      inputs.left =
-                        (await load(
-                          "left",
-                          editors.left.path,
-                          null,
-                          false,
-                          true,
-                        )) ?? inputs.left;
-                    if (editors.right.path)
-                      inputs.right =
-                        (await load(
-                          "right",
-                          editors.right.path,
-                          null,
-                          false,
-                          true,
-                        )) ?? inputs.right;
-                    await compareInputs(inputs, selected, minorText, true);
-                  } catch (failure) {
-                    setSpans(null);
-                    throw failure;
-                  }
-                })
-              }
-            />
-            <button
-              disabled={busy}
-              title="Swap both inputs, their drafts, and metadata without writing files."
-              onClick={() => controllersCommand("swap")}
+            <div className="tool-group" role="group" aria-label="Workspace">
+              <ToolButton
+                label="Home"
+                icon="home"
+                iconOnly
+                description="Return to Home, keeping this workspace and unsaved drafts."
+                onClick={onHome}
+              />
+              <CommandMenu
+                label="Sessions"
+                icon="sessions"
+                description="Start a new comparison or open a saved session."
+                commands={sessionCommands()}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Show lines">
+              <ToolButton
+                label="All"
+                icon="all"
+                description="Show every source line."
+                aria-pressed={textFilter === "all"}
+                onClick={() => setTextFilter("all")}
+              />
+              <ToolButton
+                label="Diffs"
+                icon="differences"
+                description="Fold equal lines while retaining complete editable source documents."
+                aria-pressed={textFilter === "differences"}
+                disabled={!spans}
+                onClick={() => setTextFilter("differences")}
+              />
+              <ToolButton
+                label="Same"
+                icon="same"
+                description="Fold changed lines; hidden text remains in the source document."
+                aria-pressed={textFilter === "same"}
+                disabled={!spans}
+                onClick={() => setTextFilter("same")}
+              />
+              <ToolButton
+                label="Context"
+                icon="context"
+                description="Show changes with three surrounding equal lines on either side."
+                aria-pressed={textFilter === "context"}
+                disabled={!spans}
+                onClick={() => setTextFilter("context")}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Highlights">
+              <ToolButton
+                label="Minor"
+                icon="minor"
+                description="Show raw differences ignored by the active comparison rules, without changing source text."
+                aria-pressed={minorText}
+                disabled={busy}
+                onClick={() => {
+                  setMinorText(!minorText);
+                  void attempt(() =>
+                    compareInputs(editors, undefined, !minorText),
+                  );
+                }}
+              />
+              <ToolButton
+                label="Whitespace / EOL"
+                icon="whitespace"
+                iconOnly
+                description="Mark spaces and tabs and show each source line ending without changing text."
+                aria-pressed={showWhitespace}
+                onClick={() => setShowWhitespace((value) => !value)}
+              />
+              <ToolButton
+                label="Inline changes"
+                icon="inline"
+                iconOnly
+                description="Color the changed characters inside changed lines."
+                aria-pressed={showIntraline}
+                onClick={() => setShowIntraline((value) => !value)}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Alignment">
+              <ToolButton
+                label="Anchor lines"
+                icon="anchor"
+                iconOnly
+                description={
+                  cursorLines.left === null || cursorLines.right === null
+                    ? "Place the caret on a line in each pane to pair them as an ephemeral alignment anchor."
+                    : `Pair left line ${cursorLines.left + 1} with right line ${cursorLines.right + 1}; anchors clear when text changes.`
+                }
+                disabled={
+                  busy ||
+                  cursorLines.left === null ||
+                  cursorLines.right === null
+                }
+                onClick={() => void attempt(anchorCurrentLines)}
+              />
+              <ToolButton
+                label={`Clear anchors${alignmentAnchors.length ? ` (${alignmentAnchors.length})` : ""}`}
+                icon="clear"
+                iconOnly
+                description="Remove manual line-pair anchors and compare automatically aligned text."
+                disabled={busy || !alignmentAnchors.length}
+                onClick={() => void attempt(clearAlignmentAnchors)}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Tools">
+              <ToolButton
+                label="Rules"
+                icon="settings"
+                iconOnly
+                description="Edit comparison rules; changes invalidate existing results."
+                onClick={() => controllersCommand("rules")}
+              />
+              <ToolButton
+                label="Format"
+                icon="format"
+                iconOnly
+                description="Manage comparison-format profiles, not source-code formatting."
+                onClick={() => controllersCommand("profiles")}
+              />
+              <ToolButton
+                label="Find / Replace"
+                icon="search"
+                description="Search either text pane, replace with preview and Undo, or go to a source line (Ctrl+F)."
+                onClick={() => controllersCommand("find")}
+              />
+              <ToolButton
+                label="Reload"
+                icon="refresh"
+                iconOnly
+                description="Reopen both file inputs and refresh differences without resetting the viewport. Dirty drafts require confirmation."
+                disabled={busy || (!editors.left.path && !editors.right.path)}
+                onClick={() =>
+                  void attempt(async () => {
+                    if (!(await discard("left")) || !(await discard("right")))
+                      return;
+                    const inputs = { ...editors };
+                    try {
+                      if (editors.left.path)
+                        inputs.left =
+                          (await load(
+                            "left",
+                            editors.left.path,
+                            null,
+                            false,
+                            true,
+                          )) ?? inputs.left;
+                      if (editors.right.path)
+                        inputs.right =
+                          (await load(
+                            "right",
+                            editors.right.path,
+                            null,
+                            false,
+                            true,
+                          )) ?? inputs.right;
+                      await compareInputs(inputs, selected, minorText, true);
+                    } catch (failure) {
+                      setSpans(null);
+                      throw failure;
+                    }
+                  })
+                }
+              />
+              <ToolButton
+                label="Swap sides"
+                icon="swap"
+                iconOnly
+                description="Swap both inputs, their drafts, and metadata without writing files."
+                disabled={busy}
+                onClick={() => controllersCommand("swap")}
+              />
+            </div>
+            <div
+              className="tool-group primary-group"
+              role="group"
+              aria-label="Differences"
             >
-              Swap sides
-            </button>
-            <button
-              aria-label="Previous difference"
-              title="Previous difference (Alt+Up)"
-              disabled={busy || !changes.length}
-              onClick={() => navigateDifference(-1)}
-            >
-              Previous
-            </button>
-            <button
-              aria-label="Next difference"
-              title="Next difference (Alt+Down)"
-              disabled={busy || !changes.length}
-              onClick={() => navigateDifference(1)}
-            >
-              Next
-            </button>
-            <span className="difference-count">
-              {spans
-                ? changes.length
-                  ? suppressSelectedDifference
-                    ? `${changes.length} differences; select Previous or Next`
-                    : `${current + 1} / ${changes.length} differences`
-                  : "No differences"
-                : "Not compared"}
-            </span>
-            <button
-              aria-label="Copy region to right"
-              title="Copy the current difference into the right draft (Alt+Right). Save is separate."
-              disabled={busy || !changes.length}
-              onClick={() => copyCurrentDifference("right")}
-            >
-              Copy to right
-            </button>
-            <button
-              aria-label="Copy region to left"
-              title="Copy the current difference into the left draft (Alt+Left). Save is separate."
-              disabled={busy || !changes.length}
-              onClick={() => copyCurrentDifference("left")}
-            >
-              Copy to left
-            </button>
+              <ToolButton
+                label="Previous difference"
+                icon="arrowUp"
+                iconOnly
+                description="Previous difference (Alt+Up)"
+                disabled={busy || !changes.length}
+                onClick={() => navigateDifference(-1)}
+              />
+              <ToolButton
+                label="Next difference"
+                icon="arrowDown"
+                iconOnly
+                description="Next difference (Alt+Down)"
+                disabled={busy || !changes.length}
+                onClick={() => navigateDifference(1)}
+              />
+              <span className="difference-count">
+                {spans
+                  ? changes.length
+                    ? suppressSelectedDifference
+                      ? `${changes.length} differences; select Previous or Next`
+                      : `${current + 1} / ${changes.length} differences`
+                    : "No differences"
+                  : "Not compared"}
+              </span>
+              <ToolButton
+                className="copy-action"
+                label="Copy region to left"
+                icon="copyLeft"
+                description="Copy the current difference into the left draft (Alt+Left). Save is separate."
+                disabled={busy || !changes.length}
+                onClick={() => copyCurrentDifference("left")}
+              >
+                Copy to left
+              </ToolButton>
+              <ToolButton
+                className="copy-action"
+                label="Copy region to right"
+                icon="copyRight"
+                description="Copy the current difference into the right draft (Alt+Right). Save is separate."
+                disabled={busy || !changes.length}
+                onClick={() => copyCurrentDifference("right")}
+              >
+                Copy to right
+              </ToolButton>
+            </div>
           </div>
           {searchMode && (
             <TextSearchPanel
