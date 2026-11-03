@@ -897,7 +897,7 @@ export function ComparisonWorkspace({
     if (mode === "text") await compareInputs(inputs, selected, minorText, true);
   }
   const comparedKey = useRef("");
-  const failedKey = useRef("");
+  const failedComparison = useRef({ key: "", count: 0 });
   function comparisonKey(inputs: Editors, includeMinor: boolean) {
     return JSON.stringify([
       inputs.left.text,
@@ -955,7 +955,14 @@ export function ComparisonWorkspace({
     })
       .catch((failure: unknown) => {
         if (request === revision.current) {
-          failedKey.current = comparisonKey(inputs, includeMinor);
+          const failedFor = comparisonKey(inputs, includeMinor);
+          failedComparison.current = {
+            key: failedFor,
+            count:
+              failedComparison.current.key === failedFor
+                ? failedComparison.current.count + 1
+                : 1,
+          };
           setSpans(null);
         }
         throw failure;
@@ -1080,7 +1087,11 @@ export function ComparisonWorkspace({
     )
       return;
     const key = comparisonKey(editors, minorText);
-    if (key === failedKey.current) return;
+    if (
+      key === failedComparison.current.key &&
+      failedComparison.current.count >= 2
+    )
+      return;
     if (spans !== null && key === comparedKey.current) return;
     const timer = window.setTimeout(() => {
       if (oversizedEdit) void attempt(() => compareInputs());
@@ -1090,7 +1101,7 @@ export function ComparisonWorkspace({
         );
     }, 200);
     return () => window.clearTimeout(timer);
-    // Any result that does not match the current inputs (rules, loads, swaps, dropped late results) is recomputed; failures are not retried for the same inputs.
+    // Any result that does not match the current inputs (rules, loads, swaps, dropped late results) is recomputed; a failing input is retried once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mode,
