@@ -1329,9 +1329,6 @@ body,
   grid-template-rows: 25px;
   flex: 0 0 25px;
 }
-.folder-workspace .editor > label > input {
-  padding-right: 60px;
-}
 .folder-workspace .result-summary {
   height: 18px;
   line-height: 18px;
@@ -1820,9 +1817,6 @@ body,
   background: var(--surface-alt);
   text-decoration: underline dotted;
 }
-.folder-workspace .editor > label > input {
-  padding-right: 185px;
-}
 .folder-workspace {
   gap: 0;
   padding: 0;
@@ -1950,9 +1944,6 @@ body,
   }
   .home-sidebar {
     width: 200px;
-  }
-  .folder-workspace .editor > label > input {
-    padding-right: 60px;
   }
 }
 .confirmation-dialog {
@@ -2725,6 +2716,175 @@ input::placeholder {
 .folder-workspace .status-bar {
   font-size: 12px;
   min-height: 28px;
+}
+
+/* Folder compare */
+.folder-workspace {
+  background: var(--surface);
+}
+.folder-workspace .panes {
+  grid-template-rows: auto;
+  flex: 0 0 auto;
+}
+.folder-workspace .editor {
+  background: var(--surface);
+}
+.folder-path-field {
+  align-items: stretch;
+}
+.folder-path-field input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.workbench-shell .folder-path-field > button {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-left: 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-alt);
+}
+.folder-history {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.paired-folder-head {
+  height: 28px;
+  background: var(--surface-alt);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+}
+.workbench-shell .paired-folder-head button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.workbench-shell .paired-folder-head button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.paired-folder-row,
+.folder-browser .paired-folder-row.folder-row {
+  height: 26px;
+  min-height: 26px;
+  font-size: 12.5px;
+  line-height: 26px;
+}
+.paired-folder-row.alternate-row {
+  background: var(--surface-alt);
+}
+.paired-folder-row[data-status="different"] {
+  background: color-mix(in srgb, var(--removed) 55%, transparent);
+}
+.paired-folder-row[data-status="leftOnly"] {
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+.paired-folder-row[data-status="rightOnly"] {
+  background: color-mix(in srgb, var(--added) 70%, transparent);
+}
+.paired-folder-row[data-status="error"] {
+  background: var(--changed);
+}
+.paired-folder-row.paired-folder-row.selected-folder-row {
+  background: var(--selection-row);
+}
+.paired-folder-row.focused-row {
+  background: var(--accent-soft);
+}
+.paired-folder-row.selected-folder-row.focused-row {
+  background: var(--selection-row);
+}
+.folder-side {
+  padding: 0 6px;
+}
+.folder-side.same {
+  color: var(--text);
+}
+.folder-side .file-size {
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.folder-side .file-modified {
+  color: var(--muted);
+}
+.folder-name-cell button.tree-toggle {
+  color: var(--muted);
+}
+.tree-toggle-icon {
+  width: 12px;
+  height: 12px;
+}
+.folder-name-cell button svg {
+  width: 12px;
+  height: 12px;
+}
+.entry-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+}
+.activity-log {
+  height: auto;
+  max-height: 140px;
+  flex-direction: column;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+.activity-log .log-controls {
+  order: -1;
+  width: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.workbench-shell .activity-log .log-controls button {
+  min-height: 22px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.workbench-shell .activity-log .log-controls button:first-child {
+  margin-right: auto;
+}
+.activity-log pre {
+  min-height: 24px;
+  max-height: 100px;
+  padding: 4px 12px;
+  font:
+    12px/18px Consolas,
+    monospace;
+  color: var(--muted);
+}
+.workbench-shell .show-log {
+  align-self: flex-start;
+  min-height: 22px;
+  margin: 2px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.workbench-shell .row-hover-actions button {
+  min-height: 20px;
+  height: 20px;
+  margin: 3px 1px;
+  padding: 0 6px;
+  font-size: 11px;
 }
 
 /* Home */

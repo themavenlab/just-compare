@@ -4,10 +4,16 @@ import {
   canCopy,
   differenceFilters,
   folderRows,
+  formatSize,
   matchesFilter,
   matchesName,
 } from "./folderPresentation";
-import { relatedPaths, sameSummary, sessionWorkflow } from "./workbench";
+import {
+  plainPath,
+  relatedPaths,
+  sameSummary,
+  sessionWorkflow,
+} from "./workbench";
 
 const entry = (
   relative: string,
@@ -251,5 +257,16 @@ describe("folder presentation", () => {
       relatedPaths("\\\\?\\UNC\\server\\share\\a.txt", "\\\\server\\share"),
     ).toBe(true);
     expect(relatedPaths("/", "/tmp/a")).toBe(true);
+  });
+  it("formats sizes for people and hides the extended path prefix for display", () => {
+    expect(formatSize(0)).toBe("0 B");
+    expect(formatSize(680)).toBe("680 B");
+    expect(formatSize(4000)).toBe("3.9 KB");
+    expect(formatSize(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(formatSize(300 * 1024)).toBe("300 KB");
+    expect(plainPath("\\\\?\\C:\\a\\b")).toBe("C:\\a\\b");
+    expect(plainPath("\\\\?\\UNC\\server\\share")).toBe("\\\\server\\share");
+    expect(plainPath("\\\\?\\Volume{1}\\a")).toBe("\\\\?\\Volume{1}\\a");
+    expect(plainPath("/tmp/a")).toBe("/tmp/a");
   });
 });

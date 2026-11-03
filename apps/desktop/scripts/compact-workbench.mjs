@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { launchNative, selectWorkspace } from "./native-harness.mjs";
+import {
+  launchNative,
+  openWorkspace,
+  selectWorkspace,
+} from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-compact-"));
 const screenshots = resolve(
@@ -177,10 +181,7 @@ try {
     .waitFor();
   await page.screenshot({ path: join(screenshots, "text-light.png") });
 
-  await page
-    .locator(".new-comparisons")
-    .getByRole("button", { name: "Folder Compare", exact: true })
-    .click();
+  await openWorkspace(page, "folder");
   await workspace.getByLabel("left path", { exact: true }).fill(left);
   await workspace.getByLabel("right path", { exact: true }).fill(right);
   await workspace
@@ -211,8 +212,8 @@ try {
         document.documentElement.scrollWidth > innerWidth,
     };
   });
-  assert.equal(folderGeometry.rowHeight, 18);
-  assert.ok(folderGeometry.visibleRows >= 28, JSON.stringify(folderGeometry));
+  assert.equal(folderGeometry.rowHeight, 26);
+  assert.ok(folderGeometry.visibleRows >= 18, JSON.stringify(folderGeometry));
   assert.ok(folderGeometry.alignment <= 2);
   assert.equal(folderGeometry.overflow, false);
   console.log("Folder geometry:", folderGeometry);
@@ -232,7 +233,7 @@ try {
   await workspace.locator('[data-relative="left-only.txt"]').waitFor();
   assert.equal(await workspace.locator(".paired-folder-row").count(), 1);
   await workspace.getByRole("button", { name: "All", exact: true }).click();
-  await workspace.getByRole("button", { name: "Filters", exact: true }).click();
+  await workspace.getByRole("button", { name: "Rules", exact: true }).click();
   const rulesDialog = page.getByRole("dialog", {
     name: "Session Settings - Folder Compare",
     exact: true,
@@ -560,7 +561,7 @@ try {
   );
   assert.match(
     await workspace.locator(".folder-disk-space").innerText(),
-    /Free L:.*bytes free.*R:.*bytes free/,
+    /Free L:.*free.*R:.*free/,
   );
   await writeFile(join(left, "\u00e9.txt"), "unicode fixture");
   await writeFile(join(right, "e\u0301.txt"), "unicode fixture");

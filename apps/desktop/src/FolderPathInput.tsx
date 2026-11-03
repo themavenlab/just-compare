@@ -1,4 +1,6 @@
 import { useId, useState } from "react";
+import { Icon } from "./icons";
+import { plainPath } from "./workbench";
 
 export function FolderPathInput({
   side,
@@ -52,7 +54,7 @@ export function FolderPathInput({
           autoComplete="off"
           spellCheck={false}
           placeholder="Choose a folder or paste its path..."
-          value={value}
+          value={plainPath(value)}
           disabled={disabled}
           onChange={(event) => change(event.target.value)}
           onKeyDown={(event) => {
@@ -62,7 +64,7 @@ export function FolderPathInput({
               setIndex(0);
             } else if (event.key === "Enter") {
               event.preventDefault();
-              select(value);
+              select(plainPath(value));
             }
           }}
         />
@@ -77,7 +79,7 @@ export function FolderPathInput({
             setIndex(0);
           }}
         >
-          v
+          <Icon name="chevronDown" />
         </button>
       </div>
       {open && (
@@ -122,7 +124,7 @@ export function FolderPathInput({
                   title={path}
                   onClick={() => select(path)}
                 >
-                  {path}
+                  {plainPath(path)}
                 </button>
                 <button
                   aria-label={`Remove recent folder ${path}`}
@@ -130,7 +132,7 @@ export function FolderPathInput({
                     onSaveHistory(recent.filter((item) => item !== path))
                   }
                 >
-                  x
+                  <Icon name="close" />
                 </button>
               </div>
             ))}

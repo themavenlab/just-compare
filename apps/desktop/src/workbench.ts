@@ -41,6 +41,12 @@ export interface WorkspaceController {
 export function fileName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
 }
+/** Removes the Windows extended-length prefix for display; the stored path is unchanged. */
+export function plainPath(path: string) {
+  return path
+    .replace(/^\\\\\?\\UNC\\/i, "\\\\")
+    .replace(/^\\\\\?\\(?=[a-z]:)/i, "");
+}
 export function relatedPaths(a: string, b: string) {
   const normalized = (path: string) => {
     if (/^(?:[a-z]:[\\/]|\\\\)/i.test(path))

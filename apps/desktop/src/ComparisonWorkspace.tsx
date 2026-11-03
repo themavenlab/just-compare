@@ -32,6 +32,7 @@ import { errorMessage, type DiffSpan } from "./comparison";
 import { FolderPathInput } from "./FolderPathInput";
 import {
   differenceFilters,
+  formatSize,
   matchesFilter,
   matchesName,
 } from "./folderPresentation";
@@ -1205,6 +1206,15 @@ export function ComparisonWorkspace({
     pendingEdit === null
       ? (spans?.filter((s) => s.kind !== "equal") ?? [])
       : [];
+  const folderBytes = (side: "left" | "right") =>
+    folders.reduce(
+      (sum, entry) =>
+        sum +
+        (entry.isDirectory
+          ? 0
+          : ((side === "left" ? entry.leftSize : entry.rightSize) ?? 0)),
+      0,
+    );
   const editorGaps = useMemo(
     () => ({
       left: alignmentGaps(spans ?? [], "left"),
@@ -1443,7 +1453,7 @@ export function ComparisonWorkspace({
       if (!roots[side]) return "";
       try {
         const value = await native("disk_space", { path: roots[side] });
-        return `${BigInt(value.availableBytes).toLocaleString()} bytes free`;
+        return `${formatSize(Number(value.availableBytes))} free`;
       } catch (failure) {
         return `Free space unavailable: ${errorMessage(failure)}`;
       }
@@ -3701,23 +3711,8 @@ export function ComparisonWorkspace({
           <span className="folder-status-counts">
             {folderStale ? "Results stale / " : ""}
             {visibleFolders.length} visible / {selectedFiles.length} selected /
-            L:{" "}
-            {folders
-              .reduce(
-                (sum, entry) =>
-                  sum + (!entry.isDirectory ? (entry.leftSize ?? 0) : 0),
-                0,
-              )
-              .toLocaleString()}{" "}
-            bytes / R:{" "}
-            {folders
-              .reduce(
-                (sum, entry) =>
-                  sum + (!entry.isDirectory ? (entry.rightSize ?? 0) : 0),
-                0,
-              )
-              .toLocaleString()}{" "}
-            bytes
+            L: {formatSize(folderBytes("left"))} / R:{" "}
+            {formatSize(folderBytes("right"))}
             {(diskSpace.left || diskSpace.right) && (
               <span
                 className="folder-disk-space"
@@ -4475,202 +4470,229 @@ export function ComparisonWorkspace({
       {mode === "folder" && (
         <>
           <div
-            className="toolbar command-bar compact-command-bar"
+            className="toolbar command-bar compact-command-bar folder-toolbar"
             aria-label="Folder comparison actions"
           >
-            <ToolButton
-              label="Home"
-              icon="home"
-              description="Return to Home without closing this workspace."
-              onClick={onHome}
-            />
-            <CommandMenu
-              label="Sessions"
-              description="Start a new comparison or open a saved session."
-              commands={sessionCommands()}
-            />
-            <ToolButton
-              label="All"
-              icon="all"
-              description="Show all scanned entries."
-              aria-pressed={filter === "all"}
-              onClick={() => setFilter("all")}
-            />
-            <CommandMenu
-              label="Diffs"
-              description={`Current filter: ${differenceFilters.find(([value]) => value === filter)?.[1] ?? filter}. Comparison and refresh preserve this choice.`}
-              commands={differenceFilters.map(([value, label]) => ({
-                label,
-                run: () => setFilter(value),
-              }))}
-            />
-            <ToolButton
-              label="Same"
-              icon="same"
-              description="Show entries equal under the active rules."
-              aria-pressed={filter === "same"}
-              onClick={() => setFilter("same")}
-            />
-            <CommandMenu
-              label="Structure"
-              commands={[
-                { label: "Tree view", run: () => folderCommand("tree") },
-                { label: "Flat view", run: () => folderCommand("flat") },
-              ]}
-            />
-            <ToolButton
-              label="Minor"
-              icon="minor"
-              description="Include rule-ignored minor differences in the folder view."
-              aria-pressed={showMinor}
-              onClick={() => setShowMinor(!showMinor)}
-            />
-            <ToolButton
-              label="Rules"
-              icon="settings"
-              description="Edit folder comparison rules and scan exclusions; applying invalidates the current results."
-              disabled={busy}
-              onClick={() => setRulesOpen(true)}
-            />
-            <ToolButton
-              label="Copy"
-              icon="copy"
-              description="Preview selected entries copied from the active side to the opposite side."
-              disabled={busy || !selectedFiles.length}
-              onClick={() => folderCommand("copySide")}
-            />
-            <CommandMenu
-              label="Copy options"
-              commands={[
-                {
-                  label: "Preview update left to right",
-                  disabled: busy,
-                  run: () =>
-                    void attempt(() => createPreview("update", null, "right")),
-                },
-                {
-                  label: "Preview update right to left",
-                  disabled: busy,
-                  run: () =>
-                    void attempt(() => createPreview("update", null, "left")),
-                },
-                {
-                  label: "Preview mirror left to right",
-                  disabled: busy,
-                  run: () =>
-                    void attempt(() => createPreview("mirror", null, "right")),
-                },
-                {
-                  label: "Preview mirror right to left",
-                  disabled: busy,
-                  run: () =>
-                    void attempt(() => createPreview("mirror", null, "left")),
-                },
-              ]}
-            />
-            <ToolButton
-              label="Expand"
-              icon="expand"
-              description="Expand all scanned folder branches."
-              onClick={() => folderCommand("expand")}
-            />
-            <ToolButton
-              label="Collapse"
-              icon="collapse"
-              description="Collapse all folder branches without losing selection."
-              onClick={() => folderCommand("collapse")}
-            />
-            <CommandMenu
-              label="Select"
-              commands={[
-                {
-                  label: "All visible",
-                  run: () => folderCommand("selectAll"),
-                  disabled: busy,
-                },
-                {
-                  label: "None visible",
-                  run: () => folderCommand("selectNone"),
-                  disabled: busy,
-                },
-                {
-                  label: "Invert visible",
-                  run: () => folderCommand("selectInvert"),
-                  disabled: busy,
-                },
-              ]}
-            />
-            <CommandMenu
-              label="Files"
-              commands={[
-                ["all", "Files and folders"],
-                ["files", "Files only"],
-                ["folders", "Folders only"],
-              ].map(([value, label]) => ({
-                label: label ?? "",
-                run: () =>
-                  setFilesVisible(value as "all" | "files" | "folders"),
-              }))}
-            />
-            <ToolButton
-              label="Refresh"
-              aria-label="Scan folders"
-              icon="refresh"
-              description="Read both roots and refresh their comparison (Ctrl+Enter)."
-              disabled={busy}
-              onClick={() => void attempt(scan)}
-            />
-            <ToolButton
-              label="Swap"
-              icon="swap"
-              description="Swap folder roots and discard stale results."
-              disabled={busy}
-              onClick={() => {
-                invalidateFolders();
-                setFolderRoots((prior) => ({
-                  left: prior.right,
-                  right: prior.left,
-                }));
-              }}
-            />
-            <ToolButton
-              label="Stop"
-              icon="stop"
-              description={
-                working && cancellableJob
-                  ? "Request cancellation. Completed writes are not rolled back."
-                  : "No cancellable operation is active in this workspace."
-              }
-              disabled={!working || !cancellableJob}
-              onClick={() => {
-                if (cancellableJob)
-                  void native("cancel_job", { jobId: cancellableJob }).catch(
-                    (failure) => setError(errorMessage(failure)),
-                  );
-              }}
-            />
-            <label className="quick-filter">
-              Filters:
-              <input
-                aria-label="Filename display filter"
-                title="Filename patterns separated by semicolons; * and ? are wildcards. Display only, not scan exclusions."
-                value={quickFilter}
-                onChange={(event) => setQuickFilter(event.target.value)}
+            <div className="tool-group" role="group" aria-label="Workspace">
+              <ToolButton
+                label="Home"
+                icon="home"
+                iconOnly
+                description="Return to Home without closing this workspace."
+                onClick={onHome}
               />
-            </label>
-            <ToolButton
-              label="Filters"
-              icon="filters"
-              description="Edit native scan exclusions and comparison rules."
-              onClick={() => controllersCommand("rules")}
-            />
-            <ToolButton
-              label="Peek"
-              icon="peek"
-              description="Temporarily reveal display-filtered and ignored rows, but not excluded or unscanned paths."
-              aria-pressed={peek}
-              onClick={() => setPeek(!peek)}
-            />
+              <CommandMenu
+                label="Sessions"
+                icon="sessions"
+                description="Start a new comparison or open a saved session."
+                commands={sessionCommands()}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Show entries">
+              <ToolButton
+                label="All"
+                icon="all"
+                description="Show all scanned entries."
+                aria-pressed={filter === "all"}
+                onClick={() => setFilter("all")}
+              />
+              <CommandMenu
+                label="Diffs"
+                icon="differences"
+                description={`Current filter: ${differenceFilters.find(([value]) => value === filter)?.[1] ?? filter}. Comparison and refresh preserve this choice.`}
+                commands={differenceFilters.map(([value, label]) => ({
+                  label,
+                  run: () => setFilter(value),
+                }))}
+              />
+              <ToolButton
+                label="Same"
+                icon="same"
+                description="Show entries equal under the active rules."
+                aria-pressed={filter === "same"}
+                onClick={() => setFilter("same")}
+              />
+              <CommandMenu
+                label="Structure"
+                icon="folder"
+                commands={[
+                  { label: "Tree view", run: () => folderCommand("tree") },
+                  { label: "Flat view", run: () => folderCommand("flat") },
+                ]}
+              />
+              <CommandMenu
+                label="Files"
+                icon="file"
+                commands={[
+                  ["all", "Files and folders"],
+                  ["files", "Files only"],
+                  ["folders", "Folders only"],
+                ].map(([value, label]) => ({
+                  label: label ?? "",
+                  run: () =>
+                    setFilesVisible(value as "all" | "files" | "folders"),
+                }))}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Highlights">
+              <ToolButton
+                label="Minor"
+                icon="minor"
+                description="Include rule-ignored minor differences in the folder view."
+                aria-pressed={showMinor}
+                onClick={() => setShowMinor(!showMinor)}
+              />
+              <ToolButton
+                label="Peek"
+                icon="peek"
+                iconOnly
+                description="Temporarily reveal display-filtered and ignored rows, but not excluded or unscanned paths."
+                aria-pressed={peek}
+                onClick={() => setPeek(!peek)}
+              />
+              <ToolButton
+                label="Expand"
+                icon="expand"
+                iconOnly
+                description="Expand all scanned folder branches."
+                onClick={() => folderCommand("expand")}
+              />
+              <ToolButton
+                label="Collapse"
+                icon="collapse"
+                iconOnly
+                description="Collapse all folder branches without losing selection."
+                onClick={() => folderCommand("collapse")}
+              />
+              <CommandMenu
+                label="Select"
+                icon="check"
+                commands={[
+                  {
+                    label: "All visible",
+                    run: () => folderCommand("selectAll"),
+                    disabled: busy,
+                  },
+                  {
+                    label: "None visible",
+                    run: () => folderCommand("selectNone"),
+                    disabled: busy,
+                  },
+                  {
+                    label: "Invert visible",
+                    run: () => folderCommand("selectInvert"),
+                    disabled: busy,
+                  },
+                ]}
+              />
+            </div>
+            <div className="tool-group" role="group" aria-label="Filters">
+              <label className="quick-filter">
+                <Icon name="filters" className="tool-symbol" />
+                <span className="sr-only">Filters:</span>
+                <input
+                  aria-label="Filename display filter"
+                  placeholder="Filter names, e.g. *.ts;*.md"
+                  title="Filename patterns separated by semicolons; * and ? are wildcards. Display only, not scan exclusions."
+                  value={quickFilter}
+                  onChange={(event) => setQuickFilter(event.target.value)}
+                />
+              </label>
+              <ToolButton
+                label="Rules"
+                icon="settings"
+                description="Edit folder comparison rules and scan exclusions; applying invalidates the current results."
+                disabled={busy}
+                onClick={() => setRulesOpen(true)}
+              />
+            </div>
+            <div
+              className="tool-group primary-group"
+              role="group"
+              aria-label="Compare and copy"
+            >
+              <ToolButton
+                label="Copy"
+                icon="copy"
+                description="Preview selected entries copied from the active side to the opposite side."
+                disabled={busy || !selectedFiles.length}
+                onClick={() => folderCommand("copySide")}
+              />
+              <CommandMenu
+                label="Copy options"
+                icon="chevronDown"
+                commands={[
+                  {
+                    label: "Preview update left to right",
+                    disabled: busy,
+                    run: () =>
+                      void attempt(() =>
+                        createPreview("update", null, "right"),
+                      ),
+                  },
+                  {
+                    label: "Preview update right to left",
+                    disabled: busy,
+                    run: () =>
+                      void attempt(() => createPreview("update", null, "left")),
+                  },
+                  {
+                    label: "Preview mirror left to right",
+                    disabled: busy,
+                    run: () =>
+                      void attempt(() =>
+                        createPreview("mirror", null, "right"),
+                      ),
+                  },
+                  {
+                    label: "Preview mirror right to left",
+                    disabled: busy,
+                    run: () =>
+                      void attempt(() => createPreview("mirror", null, "left")),
+                  },
+                ]}
+              />
+              <ToolButton
+                label="Swap"
+                icon="swap"
+                iconOnly
+                description="Swap folder roots and discard stale results."
+                disabled={busy}
+                onClick={() => {
+                  invalidateFolders();
+                  setFolderRoots((prior) => ({
+                    left: prior.right,
+                    right: prior.left,
+                  }));
+                }}
+              />
+              <ToolButton
+                label="Stop"
+                icon="stop"
+                iconOnly
+                description={
+                  working && cancellableJob
+                    ? "Request cancellation. Completed writes are not rolled back."
+                    : "No cancellable operation is active in this workspace."
+                }
+                disabled={!working || !cancellableJob}
+                onClick={() => {
+                  if (cancellableJob)
+                    void native("cancel_job", { jobId: cancellableJob }).catch(
+                      (failure) => setError(errorMessage(failure)),
+                    );
+                }}
+              />
+              <ToolButton
+                className="accent-action"
+                label="Refresh"
+                aria-label="Scan folders"
+                icon="refresh"
+                description="Read both roots and refresh their comparison (Ctrl+Enter)."
+                disabled={busy}
+                onClick={() => void attempt(scan)}
+              />
+            </div>
           </div>
           {inputs}
           <p className="result-summary">

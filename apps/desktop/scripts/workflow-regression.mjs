@@ -31,6 +31,16 @@ try {
     page.getByRole("textbox", { name: `${side} text`, exact: true });
   const content = async (side) =>
     (await text(side).locator(".cm-line").allTextContents()).join("\n");
+  // Opening a pair loads both sides asynchronously.
+  const expectContent = async (side, expected) => {
+    const deadline = Date.now() + 10000;
+    let actual = await content(side);
+    while (actual !== expected && Date.now() < deadline) {
+      await page.waitForTimeout(100);
+      actual = await content(side);
+    }
+    assert.equal(actual, expected);
+  };
   const compare = async () => {
     await page.getByRole("heading", { name: /changed regions/ }).waitFor();
     // Automatic comparison is debounced; let the final result replace any stale one.
@@ -39,6 +49,9 @@ try {
   await selectWorkspace(page, "folder");
   const roots = await call("normalize_folder_roots", { left, right });
   const { left: leftRoot, right: rightRoot } = roots;
+  // The folder path boxes hide the extended-length prefix; stored roots keep it.
+  const shown = (path) => path.replace(/^\\\\\?\\/, "");
+  assert.ok(leftRoot.startsWith("\\\\?\\"), "Normalized roots stay extended.");
   await page
     .getByRole("combobox", { name: "left path", exact: true })
     .fill(leftRoot);
@@ -62,13 +75,13 @@ try {
       await page
         .getByRole("combobox", { name: "left path", exact: true })
         .inputValue(),
-      leftRoot,
+      shown(leftRoot),
     );
     assert.equal(
       await page
         .getByRole("combobox", { name: "right path", exact: true })
         .inputValue(),
-      rightRoot,
+      shown(rightRoot),
     );
     assert.equal(await row("first.txt").getAttribute("aria-selected"), "true");
     await folderList
@@ -76,8 +89,8 @@ try {
       .click();
     await openPair("nested/second.txt");
     await text("Left").waitFor();
-    assert.equal(await content("Left"), "second left\n");
-    assert.equal(await content("Right"), "second right\n");
+    await expectContent("Left", "second left\n");
+    await expectContent("Right", "second right\n");
     assert.equal(await page.getByRole("alert").count(), 0);
     await selectWorkspace(page, "folder");
     await page
@@ -95,13 +108,13 @@ try {
       await page
         .getByRole("combobox", { name: "left path", exact: true })
         .inputValue(),
-      rightRoot,
+      shown(rightRoot),
     );
     assert.equal(
       await page
         .getByRole("combobox", { name: "right path", exact: true })
         .inputValue(),
-      leftRoot,
+      shown(leftRoot),
     );
     await page.getByRole("button", { name: "Swap", exact: true }).click();
     await selectWorkspace(page, "text");
@@ -279,6 +292,18 @@ try {
     );
   }
 
+  async function confirmDiscardIfAsked() {
+    const dialog = page.getByRole("dialog", {
+      name: "Confirm action",
+      exact: true,
+    });
+    try {
+      await dialog.waitFor({ timeout: 1500 });
+    } catch {
+      return;
+    }
+    await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+  }
   const boundedLines = Array.from(
     { length: 19999 },
     (_, index) => `bounded ${index}`,
@@ -293,15 +318,17 @@ try {
     .getByRole("combobox", { name: "left path", exact: true })
     .fill(boundedLeft);
   await page.getByRole("button", { name: "Open left", exact: true }).click();
+  await confirmDiscardIfAsked();
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   await page
     .getByRole("combobox", { name: "right path", exact: true })
     .fill(boundedRight);
   await page.getByRole("button", { name: "Open right", exact: true }).click();
+  await confirmDiscardIfAsked();
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   await compare();
   await page

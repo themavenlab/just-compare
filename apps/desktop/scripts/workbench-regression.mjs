@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
+import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   launchNative,
+  openWorkspace,
   previewUpdate,
   selectWorkspace,
   togglePanel,
 } from "./native-harness.mjs";
 
-const root = await mkdtemp(join(tmpdir(), "compare-workbench-"));
+// Expected paths must not use 8.3 short names, which canonicalization expands.
+const root = await mkdtemp(
+  join(realpathSync.native(tmpdir()), "compare-workbench-"),
+);
 let session;
 try {
   const left = join(root, "left"),
@@ -52,13 +57,13 @@ try {
   };
   const idle = () =>
     page.waitForFunction(
-      () => !document.querySelector(".new-comparisons button")?.disabled,
+      () => !document.querySelector(".new-tab-button")?.disabled,
     );
   await text("Left").waitFor();
   await text("Left").fill("Keep this unsaved draft\n");
   const originalTab = page.getByRole("tab", { selected: true });
   const originalId = await originalTab.getAttribute("id");
-  await page.getByRole("button", { name: "Text Compare", exact: true }).click();
+  await openWorkspace(page, "text");
   await text("Left").fill("one\nleft\n");
   await text("Right").fill("one\nright\n");
   await compare();
@@ -103,7 +108,7 @@ try {
   const closeDialog = await session.respondToDialog("Cancel");
   assert.match(closeDialog, /Discard unsaved edits/);
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   assert.equal(await page.locator(`#${originalId}`).count(), 1);
   assert.equal(
@@ -212,9 +217,7 @@ try {
   );
   await text("Right").fill("one\nright\n");
   await compare();
-  await page
-    .getByRole("button", { name: "Folder Compare", exact: true })
-    .click();
+  await openWorkspace(page, "folder");
   await workspace.getByLabel("left path", { exact: true }).fill(left);
   await workspace.getByLabel("right path", { exact: true }).fill(right);
   await workspace
@@ -292,7 +295,7 @@ try {
   const reverseDialog = await session.respondToDialog("Confirm");
   assert.match(reverseDialog, /RIGHT to LEFT/);
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   await idle();
   assert.deepEqual(
@@ -316,7 +319,7 @@ try {
   const forwardDialog = await session.respondToDialog("Confirm");
   assert.match(forwardDialog, /LEFT to RIGHT/);
   await page.waitForFunction(
-    () => !document.querySelector(".new-comparisons button")?.disabled,
+    () => !document.querySelector(".new-tab-button")?.disabled,
   );
   await idle();
   assert.equal(
@@ -426,9 +429,7 @@ try {
   await workspace
     .getByRole("heading", { name: "Sync preview: 1 operations" })
     .waitFor();
-  await page
-    .getByRole("button", { name: "Folder Compare", exact: true })
-    .click();
+  await openWorkspace(page, "folder");
   const secondFolderId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
@@ -499,7 +500,7 @@ try {
     28,
     "Four document handles belong to the two opened pairs; total capacity stays 32.",
   );
-  await page.getByRole("button", { name: "Text Compare", exact: true }).click();
+  await openWorkspace(page, "text");
   await workspace
     .getByLabel("left path", { exact: true })
     .fill(join(left, "first.txt"));
@@ -532,9 +533,7 @@ try {
         await writeFile(join(largeRight, name), "x".repeat(4096));
       }),
     );
-  await page
-    .getByRole("button", { name: "Folder Compare", exact: true })
-    .click();
+  await openWorkspace(page, "folder");
   const scanTabId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
@@ -547,7 +546,7 @@ try {
   await page.locator(".background-job").waitFor();
   assert.equal(
     await page
-      .getByRole("button", { name: "Folder Compare", exact: true })
+      .getByRole("button", { name: "New comparison", exact: true })
       .isDisabled(),
     true,
   );
@@ -567,7 +566,7 @@ try {
   );
   await page.keyboard.press("Control+w");
   await idle();
-  await page.getByRole("button", { name: "3-Way Merge", exact: true }).click();
+  await openWorkspace(page, "merge");
   const mergeTabId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
@@ -582,7 +581,7 @@ try {
     exact: true,
   });
   await mergeOutput.fill("manual output\n");
-  await page.getByRole("button", { name: "3-Way Merge", exact: true }).click();
+  await openWorkspace(page, "merge");
   await text("Base").fill("b\n");
   await text("Left").fill("b\n");
   await text("Right").fill("B\n");

@@ -1,7 +1,12 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FolderEntry } from "./api";
 import { CommandMenu, type MenuCommand } from "./CommandMenu";
-import { canCopy, folderRows, type FolderSort } from "./folderPresentation";
+import {
+  canCopy,
+  folderRows,
+  formatSize,
+  type FolderSort,
+} from "./folderPresentation";
 import { Icon } from "./icons";
 import { VirtualList } from "./VirtualList";
 
@@ -252,7 +257,7 @@ export function FolderView({
       >
         <VirtualList
           count={rows.length}
-          rowHeight={18}
+          rowHeight={26}
           fill
           label={tree ? "Paired folder hierarchy" : "Paired folder entries"}
           role={tree ? "tree" : "region"}
@@ -474,6 +479,7 @@ export function FolderView({
                         )}
                         {tree && node.branch ? (
                           <button
+                            className="tree-toggle"
                             disabled={missing}
                             aria-label={`${collapsed.has(node.path) ? "Expand" : "Collapse"} ${node.path} ${pane}`}
                             onClick={(event) => {
@@ -485,7 +491,14 @@ export function FolderView({
                                 ?.focus({ preventScroll: true });
                             }}
                           >
-                            {collapsed.has(node.path) ? "+" : "-"}
+                            <Icon
+                              name={
+                                collapsed.has(node.path)
+                                  ? "chevronRight"
+                                  : "chevronDown"
+                              }
+                              className="tree-toggle-icon"
+                            />
                           </button>
                         ) : tree ? (
                           <span className="tree-spacer" />
@@ -513,12 +526,15 @@ export function FolderView({
                         </span>
                       </span>
                       <span className="file-size">
-                        {missing
+                        {missing || node.branch || entry?.isDirectory
                           ? ""
-                          : ((pane === "left"
-                              ? entry?.leftSize
-                              : entry?.rightSize
-                            )?.toLocaleString() ?? "")}
+                          : (() => {
+                              const size =
+                                pane === "left"
+                                  ? entry?.leftSize
+                                  : entry?.rightSize;
+                              return size == null ? "" : formatSize(size);
+                            })()}
                       </span>
                       <span className="file-modified">
                         {missing
