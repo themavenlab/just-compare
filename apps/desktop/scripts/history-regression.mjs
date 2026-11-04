@@ -75,6 +75,25 @@ try {
     ];
     return {
       field: [field.left, field.bottom, field.width],
+      input: (() => {
+        const box = ws
+          .querySelector('[aria-label="left path"]')
+          .getBoundingClientRect();
+        return [box.left, box.right, box.top, box.bottom];
+      })(),
+      toggle: (() => {
+        const button = ws.querySelector(".path-input-toggle");
+        const box = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        return {
+          left: box.left,
+          right: box.right,
+          top: box.top,
+          bottom: box.bottom,
+          position: style.position,
+          borderWidth: style.borderTopWidth,
+        };
+      })(),
       options: options.map((option) => {
         const box = option.getBoundingClientRect();
         const hit = document.elementFromPoint(
@@ -91,6 +110,15 @@ try {
     };
   });
   assert.equal(geometry.options.length, 2);
+  assert.equal(geometry.toggle.position, "absolute");
+  assert.equal(geometry.toggle.borderWidth, "0px");
+  assert.ok(geometry.toggle.left > geometry.input[0]);
+  assert.ok(geometry.toggle.right < geometry.input[1]);
+  assert.ok(
+    geometry.toggle.top >= geometry.input[2] &&
+      geometry.toggle.bottom <= geometry.input[3],
+    JSON.stringify(geometry),
+  );
   for (const option of geometry.options) {
     assert.ok(
       option.hit,

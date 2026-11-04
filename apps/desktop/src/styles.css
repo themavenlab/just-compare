@@ -2762,19 +2762,37 @@ input::placeholder {
 }
 .path-input-field {
   align-items: stretch;
+  position: relative;
 }
 .path-input-field input {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+  padding-right: 36px;
 }
 .workbench-shell .path-input-field > button {
-  min-height: 26px;
-  height: 26px;
-  padding: 0 6px;
-  border: 1px solid var(--border-strong);
-  border-left: 0;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  background: var(--surface-alt);
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 28px;
+  min-height: 22px;
+  height: 22px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.workbench-shell .path-input-toggle:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.workbench-shell .path-input-toggle svg {
+  transition: transform 160ms ease;
+}
+.workbench-shell .path-input-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 .path-history {
   border: 1px solid var(--border);

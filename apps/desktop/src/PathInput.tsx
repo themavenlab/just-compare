@@ -131,6 +131,7 @@ export function PathInput({
         />
         <button
           type="button"
+          className="path-input-toggle"
           aria-label={`Recent ${side} ${noun}`}
           title={`Show recently opened ${noun}`}
           aria-expanded={open}
