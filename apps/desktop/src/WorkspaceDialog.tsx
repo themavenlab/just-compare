@@ -5,10 +5,12 @@ export function WorkspaceDialog({
   title,
   children,
   onClose,
+  className,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  className?: string;
 }) {
   const element = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -20,7 +22,9 @@ export function WorkspaceDialog({
   return (
     <dialog
       ref={element}
-      className="workspace-dialog"
+      className={
+        className ? `workspace-dialog ${className}` : "workspace-dialog"
+      }
       aria-labelledby={id}
       onCancel={(event) => {
         event.preventDefault();

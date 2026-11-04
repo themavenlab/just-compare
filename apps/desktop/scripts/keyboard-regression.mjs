@@ -12,6 +12,12 @@ try {
   session = await launchNative(config);
   const { page } = session;
   page.setDefaultTimeout(12000);
+  await page.waitForFunction(() => {
+    const button = document.querySelector(
+      'button[aria-label="New comparison"]',
+    );
+    return button && !button.disabled;
+  });
   await page.keyboard.press("Control+t");
   const chooser = page.getByRole("dialog", { name: "New comparison" });
   await chooser.waitFor();
@@ -217,13 +223,65 @@ try {
   await page
     .getByRole("menuitem", { name: "Keyboard shortcuts", exact: true })
     .click();
-  assert.match(
-    await page.locator(".shell-message[role='status']").innerText(),
-    /F3 \/ Shift\+F3.*Ctrl\+N \/ Ctrl\+P.*Ctrl\+T.*F6/,
+  const help = page.getByRole("dialog", { name: "Help & About" });
+  await help.waitFor();
+  await help
+    .getByRole("heading", { name: "Keyboard shortcuts", exact: true })
+    .waitFor();
+  const dialogHeight = await help.evaluate(
+    (dialog) => dialog.getBoundingClientRect().height,
   );
+  assert.match(await help.innerText(), /F3 \/ Shift\+F3/);
+  assert.match(await help.innerText(), /Ctrl\+N \/ Ctrl\+P/);
+  assert.equal(
+    await page.locator(".shell-message[role='status']").count(),
+    0,
+    "help content should not use the top status banner",
+  );
+  await help
+    .getByRole("button", { name: "Getting Started", exact: true })
+    .click();
+  await help
+    .getByRole("heading", { name: "Getting Started", exact: true })
+    .waitFor();
+  assert.equal(
+    await help.evaluate((dialog) => dialog.getBoundingClientRect().height),
+    dialogHeight,
+    "Help dialog height should not change between sections",
+  );
+  assert.match(await help.innerText(), /Text Compare/);
+  assert.match(await help.innerText(), /Folder Compare/);
+  assert.match(await help.innerText(), /3-Way Merge/);
+  await page.keyboard.press("Escape");
+  await help.waitFor({ state: "hidden" });
+
+  await page.getByRole("button", { name: "Help", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Getting Started", exact: true })
+    .click();
+  const gettingStarted = page.getByRole("dialog", { name: "Help & About" });
+  await gettingStarted
+    .getByRole("heading", { name: "Getting Started", exact: true })
+    .waitFor();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Help", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "About Just Compare", exact: true })
+    .click();
+  const about = page.getByRole("dialog", { name: "Help & About" });
+  await about
+    .getByRole("heading", { name: "About Just Compare", exact: true })
+    .waitFor();
+  assert.match(await about.innerText(), /does not upload your files/);
+  assert.match(
+    await about.innerText(),
+    /not a claim of complete feature parity/,
+  );
+  await page.keyboard.press("Escape");
   assert.equal(await page.locator(".shell-message[role='alert']").count(), 0);
   console.log(
-    "PASS: new-tab chooser, difference navigation, whole-side and line copy, F3 search navigation, F5 compare, F6 pane focus and shortcut help.",
+    "PASS: new-tab chooser, difference navigation, whole-side and line copy, F3 search navigation, F5 compare, F6 pane focus and Help dialog sections.",
   );
 } finally {
   if (session) await session.close();

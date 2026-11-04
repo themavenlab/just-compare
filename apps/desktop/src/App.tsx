@@ -11,6 +11,7 @@ import { defaults, native, type DraftRecovery, type Settings } from "./api";
 import { errorMessage } from "./comparison";
 import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
+import { HelpDialog, type HelpSection } from "./HelpDialog";
 import { HomeScreen, WorkflowIcon } from "./HomeScreen";
 import { Icon } from "./icons";
 import {
@@ -78,6 +79,7 @@ export function App() {
   );
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [helpSection, setHelpSection] = useState<HelpSection | null>(null);
   const [newTabChooser, setNewTabChooser] = useState(false);
   const [confirmation, setConfirmation] = useState<{
     message: string;
@@ -1142,18 +1144,16 @@ export function App() {
           label="Help"
           commands={[
             {
-              label: "Keyboard shortcuts",
-              run: () =>
-                setInfo(
-                  "Shortcuts: Ctrl+Enter or F5 run; Ctrl+S save focused editor; Ctrl+Z undo; Ctrl+Y redo; Ctrl+F find; F3 / Shift+F3 next / previous match; Ctrl+H replace; Ctrl+G go to line; Ctrl+N / Ctrl+P next / previous difference (also Alt+Down / Alt+Up); Ctrl+R copy left to right; Ctrl+L copy right to left (Ctrl+A then copy replaces the whole destination); Ctrl+T new comparison; F6 focus the other text pane; Ctrl+Tab switch tabs; Ctrl+W close tab; arrow keys navigate menus and folder rows.",
-                ),
+              label: "Getting Started",
+              run: () => setHelpSection("getting-started"),
             },
             {
-              label: "About Phase 1",
-              run: () =>
-                setInfo(
-                  "Original local text/folder/merge workbench. Copies in text edit drafts; folder actions require previews. No uploads. Not complete Beyond Compare parity.",
-                ),
+              label: "Keyboard shortcuts",
+              run: () => setHelpSection("shortcuts"),
+            },
+            {
+              label: "About Just Compare",
+              run: () => setHelpSection("about"),
             },
           ]}
         />
@@ -1438,6 +1438,12 @@ export function App() {
             ))}
           </div>
         </WorkspaceDialog>
+      )}
+      {helpSection && (
+        <HelpDialog
+          initialSection={helpSection}
+          onClose={() => setHelpSection(null)}
+        />
       )}
     </div>
   );

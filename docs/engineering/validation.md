@@ -148,6 +148,7 @@ Windows MSVC: TypeScript, ESLint, source/script Prettier, all 21 frontend tests 
 | **Settings** | Restart persistence, additive version-1 profile migration, retained corruption diagnostics |
 | **Packaging** | Optimized extracted Windows x64 executable launched with loader and performed Rust IPC comparison |
 | **Accessibility basics** | Accessible editor/button/region names, native keyboard save/compare/navigation, editable row alignment, explicit live errors and dirty-close prevention |
+| **Help dialog** | `test:keyboard`: Help menu destinations, section navigation, Escape dismissal, and no help text in the top status banner |
 
 Unix-specific symlink and backslash tests are configured but not run on Windows. Native screen-reader behavior, exhaustive assistive-technology and contrast auditing, and other OS builds remain unverified. Automated acceptance verifies that a dirty-close request leaves the app alive without confirmation. Accepting or dismissing every native discard/regenerate prompt still needs manual UX regression testing. Filesystem race and metadata restrictions are documented in the [Data Safety Contract](data-safety.md#implemented-local-backend).
 
