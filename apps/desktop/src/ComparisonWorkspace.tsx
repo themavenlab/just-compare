@@ -27,19 +27,8 @@ import {
   type Settings,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
-import { CommandMenu } from "./CommandMenu";
-import { errorMessage, type DiffSpan } from "./comparison";
-import { FolderPathInput } from "./FolderPathInput";
-import {
-  differenceFilters,
-  formatSize,
-  matchesFilter,
-  matchesName,
-} from "./folderPresentation";
-import { FolderRulesDialog } from "./FolderRulesDialog";
-import { FolderView, type FolderSide } from "./FolderView";
-import { Icon } from "./icons";
 import { LineInspector } from "./LineInspector";
+import { PathInput } from "./PathInput";
 import { ToolButton } from "./ToolButton";
 import {
   fileName,
@@ -827,6 +816,10 @@ export function ComparisonWorkspace({
   }
   async function openSide(side: Side, encoding: string | null = null) {
     await load(side, editors[side].path, encoding);
+  }
+  async function openRecent(side: Side, path: string) {
+    setEditors((prior) => ({ ...prior, [side]: { ...prior[side], path } }));
+    await load(side, path);
   }
   async function undoSide(side: Side) {
     const text = editors[side].history.at(-1);
@@ -2222,67 +2215,48 @@ export function ComparisonWorkspace({
         </div>
         <div className="path-row">
           <div className="path-label">
+            <span className="sr-only">
+              {mode === "folder" && side !== "base"
+                ? "Folder path"
+                : "File path"}
+            </span>
             {mode === "folder" && side !== "base" ? (
-              <>
-                <span className="sr-only">Folder path</span>
-                <FolderPathInput
-                  side={side}
-                  value={folderRoots[side]}
-                  recent={settings.recentFolders ?? []}
-                  disabled={busy}
-                  change={(path) => {
-                    invalidateFolders();
-                    setFolderRoots((prior) => ({ ...prior, [side]: path }));
-                  }}
-                  choose={(path) =>
-                    void attempt(() => chooseFolder(side, path))
-                  }
-                  onSaveHistory={(paths) =>
-                    void attempt(() => saveFolderHistory(paths))
-                  }
-                />
-              </>
+              <PathInput
+                kind="folder"
+                side={side}
+                value={folderRoots[side]}
+                recent={settings.recentFolders ?? []}
+                disabled={busy}
+                onPathChange={(path) => {
+                  invalidateFolders();
+                  setFolderRoots((prior) => ({ ...prior, [side]: path }));
+                }}
+                onChoose={(path) =>
+                  void attempt(() => chooseFolder(side, path))
+                }
+                onSaveHistory={(paths) =>
+                  void attempt(() => saveFolderHistory(paths))
+                }
+              />
             ) : (
-              <label>
-                <span className="sr-only">
-                  {mode === "folder" ? "Folder path" : "File path"}
-                </span>
-                <input
-                  aria-label={`${side} path`}
-                  name={`${side}-path`}
-                  autoComplete="off"
-                  spellCheck={false}
-                  list={`recent-${tab.id}-${side}`}
-                  placeholder={
-                    mode === "folder"
-                      ? "Choose a folder or paste its path..."
-                      : "Choose a file or paste its path..."
-                  }
-                  value={
-                    mode === "folder" && side !== "base"
-                      ? folderRoots[side]
-                      : e.path
-                  }
-                  disabled={busy}
-                  onChange={(event) => {
-                    const path = event.target.value;
-                    if (mode === "folder" && side !== "base") {
-                      invalidateFolders();
-                      setFolderRoots((prior) => ({ ...prior, [side]: path }));
-                    } else {
-                      setEditors((prior) => ({
-                        ...prior,
-                        [side]: { ...prior[side], path },
-                      }));
-                    }
-                  }}
-                />
-                <datalist id={`recent-${tab.id}-${side}`}>
-                  {settings.recent.map((path) => (
-                    <option key={path} value={path} />
-                  ))}
-                </datalist>
-              </label>
+              <PathInput
+                kind="file"
+                side={side}
+                value={e.path}
+                recent={settings.recent}
+                disabled={busy}
+                onPathChange={(path) =>
+                  setEditors((prior) => ({
+                    ...prior,
+                    [side]: { ...prior[side], path },
+                  }))
+                }
+                onChoose={(path) => {
+                  // PathInput calls onChoose only from click/keyboard handlers.
+                  // eslint-disable-next-line react-hooks/refs
+                  void attempt(() => openRecent(side, path));
+                }}
+              />
             )}
           </div>
           <div className="toolbar compact">
@@ -4374,9 +4348,6 @@ export function ComparisonWorkspace({
                 ? ""
                 : (rightLines[detailLine.right]?.full ?? "")
             }
-            index={detailIndex}
-            count={aligned.length}
-            select={setDetailRow}
             layout={
               sharedSettings.lineDetail ?? { collapsed: false, height: 140 }
             }

@@ -132,6 +132,10 @@ Windows MSVC: TypeScript, ESLint, 16 frontend Vitest tests, settings unit tests,
 
 Windows MSVC: TypeScript, ESLint, Prettier, all 16 frontend Vitest tests, production frontend build, and embedded-assets debug and release builds passed. `node apps/desktop/scripts/editing-regression.mjs` verifies actual keyboard typing, automatic localized CRLF differences and explicit recompare, CR and mixed-EOL restoration, significant real EOL differences, serialized superseded responses, retained alignment with stale copy arrows unavailable, insertion gaps, Undo, explicit refresh failure and recovery, invalid document handles, and unchanged source bytes on disk. Native inspector, smoke, interaction, and Git suites also passed. Smoke and inspector assertions now expect automatic refresh instead of manual edit invalidation.
 
+### Compact Detail, Recent-Path Dropdowns and Pane Fit (Windows/MSVC)
+
+Windows MSVC: TypeScript, ESLint, source/script Prettier, all 21 frontend tests and embedded-assets native builds passed. The inspector, history, compact, keyboard, workflow, interaction, auto-compare, editing, session, recovery, alignment-merge and explorer native scripts passed. The inspector regression now covers the two-line panel (no Previous/Next or height selector, horizontal overflow only) and hover-only tooltips on a focused, clicked tool. The history regression covers unclipped, hit-testable folder options and the recent-file dropdown; compact geometry asserts both editor panes end above line detail and reach their last line at 1280x800 and 1024x768. `native-smoke` (copy-arrow focus), `workbench-regression` (stale folder summary) and `acceptance` (comparison cancellation timing) failed identically or independently of this UI change; the first two also failed on a HEAD baseline. macOS/Linux remain unverified.
+
 | Area | Evidence |
 | :--- | :--- |
 | **Rust core** | 21 text tests, 13 Windows filesystem/settings/folder tests, 5 merge tests and 1 CLI process test |

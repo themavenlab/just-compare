@@ -116,6 +116,40 @@ try {
     );
     assert.ok(geometry.alignment <= 2, JSON.stringify(geometry));
     assert.equal(geometry.overflow, false);
+    // Panes must not overflow under the line detail: the scroller ends above it
+    // and its last line is reachable.
+    const reach = await workspace.evaluate(async (ws) => {
+      const inspector = ws.querySelector(".line-inspector");
+      const results = [];
+      for (const editor of ws.querySelectorAll(".editor")) {
+        const scroller = editor.querySelector(".cm-scroller");
+        scroller.scrollTop = scroller.scrollHeight;
+        await new Promise((done) => requestAnimationFrame(() => done()));
+        await new Promise((done) => requestAnimationFrame(() => done()));
+        const last = [...scroller.querySelectorAll(".cm-line")].at(-1);
+        results.push({
+          pane: [editor.scrollTop, editor.scrollHeight, editor.clientHeight],
+          scrollerBottom: scroller.getBoundingClientRect().bottom,
+          inspectorTop: inspector?.getBoundingClientRect().top ?? innerHeight,
+          lastText: last.textContent,
+          lastBottom: last.getBoundingClientRect().bottom,
+        });
+      }
+      return results;
+    });
+    for (const pane of reach) {
+      assert.equal(pane.pane[0], 0, JSON.stringify(pane));
+      assert.ok(pane.pane[1] <= pane.pane[2] + 1, JSON.stringify(pane));
+      assert.ok(
+        pane.scrollerBottom <= pane.inspectorTop + 1,
+        JSON.stringify(pane),
+      );
+      assert.equal(pane.lastText, "line 79");
+      assert.ok(
+        pane.lastBottom <= pane.scrollerBottom + 1,
+        JSON.stringify(pane),
+      );
+    }
     console.log("Text geometry:", size, geometry);
   }
   await page.setViewportSize({ width: 1420, height: 800 });

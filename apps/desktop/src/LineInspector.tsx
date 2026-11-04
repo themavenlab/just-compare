@@ -15,9 +15,6 @@ export function LineInspector({
   row,
   left,
   right,
-  index,
-  count,
-  select,
   layout,
   onLayout,
   onCopyLine,
@@ -25,9 +22,6 @@ export function LineInspector({
   row: InspectorLine | undefined;
   left: string;
   right: string;
-  index: number;
-  count: number;
-  select: (index: number) => void;
   layout: { collapsed: boolean; height: number };
   onLayout: (layout: { collapsed: boolean; height: number }) => void;
   onCopyLine: (source: "left" | "right") => void;
@@ -73,55 +67,9 @@ export function LineInspector({
         >
           <Icon name={layout.collapsed ? "chevronUp" : "chevronDown"} />
         </button>
-        {!layout.collapsed && (
-          <>
-            <button
-              className="icon-button"
-              aria-label="Previous detail line"
-              title="Previous detail line"
-              disabled={!row || index <= 0}
-              onClick={() => select(index - 1)}
-            >
-              <Icon name="arrowUp" />
-            </button>
-            <button
-              className="icon-button"
-              aria-label="Next detail line"
-              title="Next detail line"
-              disabled={!row || index + 1 >= count}
-              onClick={() => select(index + 1)}
-            >
-              <Icon name="arrowDown" />
-            </button>
-            <label className="inspector-height">
-              <span className="sr-only">Detail height</span>
-              <select
-                aria-label="Detail height"
-                value={layout.height}
-                onChange={(event) =>
-                  onLayout({ ...layout, height: Number(event.target.value) })
-                }
-              >
-                {[80, 140, 220, 320].map((height) => (
-                  <option key={height} value={height}>
-                    {height} px
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span className="inspector-meta">
-              {row
-                ? `${row.minor ? "Minor " : ""}${row.kind} - aligned line ${index + 1} / ${count}`
-                : "No selection / comparison stale"}
-            </span>
-          </>
-        )}
       </div>
       {!layout.collapsed && (
-        <div
-          className="line-inspector-content"
-          style={{ height: layout.height }}
-        >
+        <div className="line-inspector-content">
           {!row ? (
             <p>
               Compare to inspect an aligned source line. Drafts are unchanged.

@@ -30,11 +30,10 @@ try {
     .getByRole("button", { name: "Recent left folders", exact: true })
     .click();
   await workspace().getByText("No recent folders.", { exact: true }).waitFor();
-  await workspace()
-    .getByRole("textbox", { name: "Filter recent left folders" })
-    .press("Escape");
   const input = (side) =>
     workspace().getByRole("combobox", { name: `${side} path`, exact: true });
+  await input("left").press("Escape");
+  assert.equal(await workspace().locator(".path-history").count(), 0);
   await input("left").fill(left);
   assert.equal(await workspace().locator(".folder-row").count(), 0);
   await input("left").press("Enter");
@@ -64,12 +63,47 @@ try {
   await workspace()
     .getByRole("button", { name: "Recent left folders", exact: true })
     .click();
-  await workspace()
-    .getByRole("textbox", { name: "Filter recent left folders" })
-    .fill("left");
-  await workspace()
-    .getByRole("textbox", { name: "Filter recent left folders" })
-    .press("Enter");
+  // The popup escapes the compact pane: every option must be hit-testable and
+  // laid out below the full-width field, not squeezed into the path row.
+  const geometry = await workspace().evaluate((ws) => {
+    const field = ws
+      .querySelector('[aria-label="left path"]')
+      .closest(".path-input-field")
+      .getBoundingClientRect();
+    const options = [
+      ...document.querySelectorAll(".path-history [role=option]"),
+    ];
+    return {
+      field: [field.left, field.bottom, field.width],
+      options: options.map((option) => {
+        const box = option.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.left + 4,
+          box.top + box.height / 2,
+        );
+        return {
+          top: box.top,
+          height: box.height,
+          hit: hit === option || option.contains(hit),
+          align: getComputedStyle(option).textAlign,
+        };
+      }),
+    };
+  });
+  assert.equal(geometry.options.length, 2);
+  for (const option of geometry.options) {
+    assert.ok(
+      option.hit,
+      `Recent folder option is clipped: ${JSON.stringify(geometry)}`,
+    );
+    assert.ok(option.top >= geometry.field[1], JSON.stringify(geometry));
+    assert.ok(option.height < 40, JSON.stringify(geometry));
+    assert.ok(["left", "start"].includes(option.align));
+  }
+  await input("left").fill("left");
+  assert.equal(await workspace().getByRole("option").count(), 1);
+  await input("left").press("ArrowDown");
+  await input("left").press("Enter");
   await idle();
   assert.ok((await input("left").inputValue()).endsWith("\\left"));
   stored = await session.call("read_settings");
@@ -120,8 +154,48 @@ try {
     "dark",
     "Automatic history/layout writes must preserve other persisted preferences",
   );
+  // File paths use the same dropdown of recently opened files, not a datalist.
+  const fileA = join(root, "a.txt"),
+    fileB = join(root, "b.txt");
+  await writeFile(fileA, "alpha\n");
+  await writeFile(fileB, "bravo\n");
+  await selectWorkspace(page, "text");
+  assert.equal(await page.locator("datalist").count(), 0);
+  for (const file of [fileA, fileB]) {
+    await input("left").fill(file);
+    await input("left").press("Enter");
+    await idle();
+  }
+  await workspace()
+    .getByRole("textbox", { name: "Left text", exact: true })
+    .getByText("bravo")
+    .waitFor();
+  await workspace()
+    .getByRole("button", { name: "Recent left files", exact: true })
+    .click();
+  const fileOptions = workspace()
+    .getByRole("listbox", { name: "Recent left files", exact: true })
+    .getByRole("option");
+  const recentFiles = (await fileOptions.allTextContents()).slice(0, 2);
+  assert.ok(
+    recentFiles[0].endsWith("\\b.txt") && recentFiles[1].endsWith("\\a.txt"),
+    JSON.stringify(recentFiles),
+  );
+  assert.equal(
+    await workspace()
+      .getByRole("button", { name: /^Remove recent file/ })
+      .count(),
+    0,
+  );
+  await fileOptions.filter({ hasText: "a.txt" }).click();
+  await idle();
+  await workspace()
+    .getByRole("textbox", { name: "Left text", exact: true })
+    .getByText("alpha")
+    .waitFor();
+  assert.equal(await input("left").inputValue(), recentFiles[1]);
   console.log(
-    "Native history regression passed: submission, one/two roots, keyboard picker, retained stale results, bounded persisted tuples, restart and failed persistence.",
+    "Native history regression passed: submission, one/two roots, keyboard picker, unclipped popup, recent-file dropdown, retained stale results, bounded persisted tuples, restart and failed persistence.",
   );
 } finally {
   if (session) await session.close();

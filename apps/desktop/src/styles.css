@@ -1876,7 +1876,8 @@ body,
   padding: 2px 5px;
 }
 .line-inspector-content {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   min-width: 0;
 }
 .line-inspector .panes {
@@ -2017,47 +2018,76 @@ body,
     font-size: 10px;
   }
 }
-.folder-path-input {
+.path-input {
   position: relative;
   min-width: 0;
 }
-.folder-path-field {
+.path-input-field {
   display: flex;
 }
-.folder-path-field input {
+.path-input-field input {
   flex: 1;
   min-width: 0;
 }
-.folder-history {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 30;
-  padding: 6px;
-  background: var(--panel, Canvas);
-  border: 1px solid GrayText;
-  box-shadow: 0 3px 10px #0004;
+.path-history {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  max-width: calc(100vw - 8px);
+  padding: 4px;
+  background: var(--surface);
+  color: var(--text);
 }
-.folder-history [role="listbox"] {
-  max-height: 220px;
-  overflow: auto;
+.path-history [role="listbox"] {
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
 }
-.folder-history-row {
+.path-history-row {
   display: flex;
+  align-items: center;
   min-width: 0;
+  border-radius: var(--radius);
 }
-.folder-history-row [role="option"] {
+.path-history-row [role="option"] {
   flex: 1;
   min-width: 0;
+  padding: 4px 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+  font-size: 12.5px;
+  cursor: pointer;
 }
-.folder-history-row [aria-selected="true"] {
-  outline: 2px solid Highlight;
+.path-history-row:hover {
+  background: var(--hover);
+}
+.path-history-row [aria-selected="true"] {
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
+  border-radius: var(--radius);
+}
+.path-history-empty {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.workbench-shell .path-history-row > button {
+  flex: 0 0 auto;
+  min-height: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+}
+.workbench-shell .path-history-clear {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  min-height: 24px;
+  height: 24px;
+  font-size: 12px;
 }
 .path-label {
   min-width: 0;
@@ -2437,8 +2467,10 @@ button[aria-pressed="true"] .tool-symbol,
   left: auto;
   transform: none;
 }
+/* Keyboard focus only: a mouse click must not pin the tooltip after leaving. */
 .tool-control:hover .tool-tooltip,
-.tool-control:focus-within .tool-tooltip {
+.tool-control > button:focus-visible + .tool-tooltip,
+.tool-control:focus-visible > .tool-tooltip {
   visibility: visible;
   opacity: 1;
   transition: opacity 0.12s 0.45s;
@@ -2623,6 +2655,14 @@ input::placeholder {
   border: 0;
   font-size: 13px;
 }
+/* Fill only the space left below the pane header rows; 100% heights overflow
+   the clipped pane and hide the editor's last lines and scrollbar end. */
+.comparison-workspace .editor > .editor-content,
+.comparison-workspace .editor-content > .code-editor {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
 .pane-divider {
   background: var(--border);
 }
@@ -2653,23 +2693,13 @@ input::placeholder {
   margin-right: 4px;
   font-size: 12px;
 }
-.inspector-meta {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 11.5px;
-}
-.inspector-height select {
-  height: 24px;
-  padding: 0 6px;
-  font-size: 11.5px;
-}
 .line-inspector-content {
-  padding: 10px 12px;
+  padding: 6px 12px;
 }
 .line-inspector .panes {
   grid-template-columns: max-content minmax(max-content, 1fr);
   align-items: center;
-  gap: 6px 10px;
+  gap: 4px 10px;
 }
 .inspector-source {
   padding: 0;
@@ -2677,7 +2707,8 @@ input::placeholder {
   font-weight: 600;
 }
 .line-inspector pre {
-  padding: 6px 10px;
+  min-height: 0;
+  padding: 2px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-alt);
@@ -2729,14 +2760,14 @@ input::placeholder {
 .folder-workspace .editor {
   background: var(--surface);
 }
-.folder-path-field {
+.path-input-field {
   align-items: stretch;
 }
-.folder-path-field input {
+.path-input-field input {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
-.workbench-shell .folder-path-field > button {
+.workbench-shell .path-input-field > button {
   min-height: 26px;
   height: 26px;
   padding: 0 6px;
@@ -2745,7 +2776,7 @@ input::placeholder {
   border-radius: 0 var(--radius) var(--radius) 0;
   background: var(--surface-alt);
 }
-.folder-history {
+.path-history {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);

@@ -36,7 +36,7 @@ Phase 1 already provides Home, independent tabs, named sessions, compact text/fo
 
 Do not rebuild these as new features. Inspect their current behavior and extend them. In particular:
 
-- Path fields have a basic datalist backed by mixed recent paths; Home opens an individual path into a chosen workflow/side. This is not a complete folder history picker or recent-comparison launcher.
+- Path fields have a recent-path dropdown (files or folders); Home opens an individual path into a chosen workflow/side. This is not a complete folder history picker or recent-comparison launcher.
 - Text comparison has a selected-region first-line summary, an expandable aligned view, and explicit intraline refinement. This is not the docked, selected-line inspector required below.
 - Folder navigation/history, progress/cancellation, sync plans, and intraline engine ranges exist. Improve their usability instead of duplicating engines.
 
