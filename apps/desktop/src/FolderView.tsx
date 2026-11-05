@@ -30,7 +30,7 @@ export function FolderView({
   openPair: (entry: FolderEntry) => void;
   preview: (
     entry: FolderEntry,
-    action: string,
+    action: "copy",
     destination: FolderSide,
   ) => void;
   onAction: (action: string, entries: FolderEntry[], side: FolderSide) => void;
@@ -548,8 +548,8 @@ export function FolderView({
                       {entry && (
                         <span className="row-hover-actions">
                           <button
-                            aria-label={`Copy ${node.path} to ${pane === "left" ? "right" : "left"}`}
-                            title="Preview copy to the other side; no immediate changes"
+                            aria-label={`Preview copy ${node.path} to ${pane === "left" ? "right" : "left"}`}
+                            title="Review the exact copy before applying; no immediate changes"
                             disabled={
                               busy ||
                               !canCopy(

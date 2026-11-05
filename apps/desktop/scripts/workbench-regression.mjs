@@ -278,50 +278,56 @@ try {
   await page.locator(`#${folderTabId}`).click();
   await row("right-only.txt").locator(".folder-side").last().hover();
   await row("right-only.txt")
-    .getByRole("button", { name: "Copy right-only.txt to left", exact: true })
+    .getByRole("button", {
+      name: "Preview copy right-only.txt to left",
+      exact: true,
+    })
     .click();
-  const preview = workspace.getByRole("region", {
-    name: "Sync preview",
+  const preview = page.getByRole("dialog", {
+    name: "Copy right to left",
     exact: true,
   });
-  await workspace
-    .getByRole("heading", { name: "Sync preview: 1 operations" })
-    .waitFor();
-  assert.match(await preview.innerText(), /RIGHT to LEFT/);
+  await preview.waitFor();
+  assert.match(await preview.innerText(), /RIGHT → LEFT/);
+  assert.match(await preview.innerText(), /Copy[\s\S]*right-only\.txt/);
   await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
-  await workspace
-    .getByRole("button", { name: "Confirm and execute preview" })
+  await preview
+    .getByRole("button", { name: "Copy file to left", exact: true })
     .click();
-  const reverseDialog = await session.respondToDialog("Confirm");
-  assert.match(reverseDialog, /RIGHT to LEFT/);
   await page.waitForFunction(
     () => !document.querySelector(".new-tab-button")?.disabled,
   );
   await idle();
+  assert.equal(await page.getByRole("dialog").count(), 0);
   assert.deepEqual(
     await readFile(join(left, "right-only.txt")),
     await readFile(join(right, "right-only.txt")),
   );
   await row("first.txt").locator(".folder-side").first().hover();
   await row("first.txt")
-    .getByRole("button", { name: "Copy first.txt to right", exact: true })
+    .getByRole("button", {
+      name: "Preview copy first.txt to right",
+      exact: true,
+    })
     .click();
-  await workspace
-    .getByRole("heading", { name: "Sync preview: 1 operations" })
-    .waitFor();
+  const overwritePreview = page.getByRole("dialog", {
+    name: "Copy left to right",
+    exact: true,
+  });
+  await overwritePreview.waitFor();
+  assert.match(await overwritePreview.innerText(), /Replace[\s\S]*first\.txt/);
   assert.equal(
     await readFile(join(right, "first.txt"), "utf8"),
     "right first\n",
   );
-  await workspace
-    .getByRole("button", { name: "Confirm and execute preview" })
+  await overwritePreview
+    .getByRole("button", { name: "Replace file on right", exact: true })
     .click();
-  const forwardDialog = await session.respondToDialog("Confirm");
-  assert.match(forwardDialog, /LEFT to RIGHT/);
   await page.waitForFunction(
     () => !document.querySelector(".new-tab-button")?.disabled,
   );
   await idle();
+  assert.equal(await page.getByRole("dialog").count(), 0);
   assert.equal(
     await readFile(join(right, "first.txt"), "utf8"),
     "left first\n",
@@ -394,18 +400,35 @@ try {
   await row("nested/second.txt").locator(".folder-side").first().hover();
   await row("nested/second.txt")
     .getByRole("button", {
-      name: "Copy nested/second.txt to right",
+      name: "Preview copy nested/second.txt to right",
       exact: true,
     })
     .click();
-  await workspace
-    .getByRole("heading", { name: "Sync preview: 1 operations" })
-    .waitFor();
-  await writeFile(join(left, "nested", "second.txt"), "externally changed\n");
-  await workspace
-    .getByRole("button", { name: "Confirm and execute preview" })
+  const stalePreview = page.getByRole("dialog", {
+    name: "Copy left to right",
+    exact: true,
+  });
+  await stalePreview.waitFor();
+  await stalePreview
+    .getByRole("button", { name: "Cancel", exact: true })
     .click();
-  await session.respondToDialog("Confirm");
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  assert.equal(
+    await readFile(join(right, "nested", "second.txt"), "utf8"),
+    "right second\n",
+  );
+  await row("nested/second.txt").locator(".folder-side").first().hover();
+  await row("nested/second.txt")
+    .getByRole("button", {
+      name: "Preview copy nested/second.txt to right",
+      exact: true,
+    })
+    .click();
+  await stalePreview.waitFor();
+  await writeFile(join(left, "nested", "second.txt"), "externally changed\n");
+  await stalePreview
+    .getByRole("button", { name: "Replace file on right", exact: true })
+    .click();
   await workspace.getByRole("alert").waitFor();
   assert.match(
     await workspace.getByRole("alert").innerText(),
@@ -422,13 +445,14 @@ try {
   await row("nested/second.txt").locator(".folder-side").first().hover();
   await row("nested/second.txt")
     .getByRole("button", {
-      name: "Copy nested/second.txt to right",
+      name: "Preview copy nested/second.txt to right",
       exact: true,
     })
     .click();
-  await workspace
-    .getByRole("heading", { name: "Sync preview: 1 operations" })
-    .waitFor();
+  await stalePreview.waitFor();
+  await stalePreview
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await openWorkspace(page, "folder");
   const secondFolderId = await page
     .getByRole("tab", { selected: true })
@@ -436,26 +460,12 @@ try {
   await workspace.getByLabel("left path", { exact: true }).fill(left);
   await workspace.getByLabel("right path", { exact: true }).fill(right);
   await previewUpdate(page);
-  assert.match(
-    await session.respondToDialog("Cancel"),
-    /Replace the pending sync preview/,
-  );
+  await page
+    .getByRole("dialog", { name: /Update left to right/ })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await idle();
-  await page.locator(`#${folderTabId}`).click();
-  assert.equal(await workspace.locator(".sync-preview").count(), 1);
   await page.locator(`#${secondFolderId}`).click();
-  await previewUpdate(page);
-  assert.match(
-    await session.respondToDialog("Confirm"),
-    /Replace the pending sync preview/,
-  );
-  await workspace
-    .getByRole("heading", { name: "Sync preview: 1 operations" })
-    .waitFor();
-  await page.locator(`#${folderTabId}`).click();
-  assert.equal(await workspace.locator(".sync-preview").count(), 0);
-  await page.locator(`#${secondFolderId}`).click();
-  await workspace.getByRole("button", { name: "Dismiss preview" }).click();
   await page.keyboard.press("Control+w");
   await idle();
   assert.equal(await page.locator(`#${secondFolderId}`).count(), 0);

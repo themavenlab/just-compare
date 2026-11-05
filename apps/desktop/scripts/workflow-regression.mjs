@@ -23,6 +23,10 @@ try {
     await writeFile(join(left, name), a);
     await writeFile(join(right, name), b);
   }
+  await writeFile(join(left, "left-only.txt"), "left-only\n");
+  await writeFile(join(right, "right-only.txt"), "right-only\n");
+  await writeFile(join(left, "replace.txt"), "new left version\n");
+  await writeFile(join(right, "replace.txt"), "old right version\n");
   await mkdir(join(root, "config"));
   session = await launchNative(join(root, "config"));
   const { page, call } = session;
@@ -97,12 +101,109 @@ try {
       .getByRole("button", { name: "Scan folders", exact: true })
       .click();
     await row("first.txt").waitFor();
+
+    await row("right-only.txt").locator(".folder-side").last().hover();
+    const copyAction = row("right-only.txt").getByRole("button", {
+      name: "Preview copy right-only.txt to left",
+      exact: true,
+    });
+    await copyAction.click();
+    let copyPreview = page.getByRole("dialog", {
+      name: "Copy right to left",
+      exact: true,
+    });
+    await copyPreview.waitFor();
+    assert.match(await copyPreview.innerText(), /RIGHT.*LEFT/);
+    assert.match(await copyPreview.innerText(), /Copy[\s\S]*right-only\.txt/);
+    await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
+    await page.keyboard.press("Escape");
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
+
+    await row("right-only.txt").locator(".folder-side").last().hover();
+    await copyAction.click();
+    copyPreview = page.getByRole("dialog", {
+      name: "Copy right to left",
+      exact: true,
+    });
+    await copyPreview
+      .getByRole("button", { name: "Copy file to left", exact: true })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector(".new-tab-button")?.disabled,
+    );
+    await page.waitForFunction(
+      () => !document.querySelector(".new-tab-button")?.disabled,
+    );
+    assert.equal(
+      await readFile(join(left, "right-only.txt"), "utf8"),
+      "right-only\n",
+    );
+    assert.equal(await page.getByRole("dialog").count(), 0);
+
+    await row("replace.txt").locator(".folder-side").first().hover();
+    await row("replace.txt")
+      .getByRole("button", {
+        name: "Preview copy replace.txt to right",
+        exact: true,
+      })
+      .click();
+    const overwritePreview = page.getByRole("dialog", {
+      name: "Copy left to right",
+      exact: true,
+    });
+    await overwritePreview.waitFor();
+    assert.match(
+      await overwritePreview.innerText(),
+      /Replace[\s\S]*replace\.txt/,
+    );
+    await overwritePreview
+      .getByRole("button", { name: "Replace file on right", exact: true })
+      .click();
+    await page.waitForFunction(
+      () => document.querySelector(".new-tab-button")?.disabled,
+    );
+    await page.waitForFunction(
+      () => !document.querySelector(".new-tab-button")?.disabled,
+    );
+    assert.equal(
+      await readFile(join(right, "replace.txt"), "utf8"),
+      "new left version\n",
+    );
+
+    await page
+      .getByRole("button", { name: "Copy options", exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", {
+        name: "Preview mirror right to left",
+        exact: true,
+      })
+      .click();
+    const mirrorPreview = page.getByRole("dialog", {
+      name: "Mirror right to left",
+      exact: true,
+    });
+    await mirrorPreview.waitFor();
+    assert.match(await mirrorPreview.innerText(), /Recycle Bin/);
+    assert.match(await mirrorPreview.innerText(), /left-only\.txt/);
+    await mirrorPreview
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    assert.equal(
+      await readFile(join(left, "left-only.txt"), "utf8"),
+      "left-only\n",
+    );
+
     await previewUpdate(page);
     await page
-      .getByRole("heading", { name: "Sync preview: 2 operations", exact: true })
+      .getByRole("dialog", { name: "Update left to right", exact: true })
       .waitFor();
     assert.equal(await page.getByRole("alert").count(), 0);
-    await page.getByRole("button", { name: "Dismiss preview" }).click();
+    await page
+      .getByRole("dialog", { name: "Update left to right", exact: true })
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
     await page.getByRole("button", { name: "Swap", exact: true }).click();
     assert.equal(
       await page

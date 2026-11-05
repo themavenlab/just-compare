@@ -334,6 +334,9 @@ export function ComparisonWorkspace({
   >([]);
   const [exclude, setExclude] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewKind, setPreviewKind] = useState<
+    "copy" | "selected-update" | "selected-mirror" | "update" | "mirror" | null
+  >(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [blocks, setBlocks] = useState<Block[] | null>(null);
   const [choices, setChoices] = useState<Record<number, string>>({});
@@ -1679,9 +1682,18 @@ export function ComparisonWorkspace({
     selected: string[] | null = null,
     destination: "left" | "right" = "right",
   ) {
+    if (syncMode !== "update" && syncMode !== "mirror")
+      throw new Error("Choose Update or Mirror before creating a preview.");
     const roots = await normalizeFolderRoots();
     if (!(await claimPreview(tab.id))) return;
     setPreview(null);
+    setPreviewKind(
+      selected !== null
+        ? syncMode === "mirror"
+          ? "selected-mirror"
+          : "selected-update"
+        : syncMode,
+    );
     setPreviewDirection(destination);
     const jobId = crypto.randomUUID();
     startJob(jobId);
@@ -1694,13 +1706,14 @@ export function ComparisonWorkspace({
       jobId,
     }).catch((failure: unknown) => {
       discardPreview(tab.id);
+      setPreviewKind(null);
       throw failure;
     });
     setPreview(result);
   }
   async function previewFile(
     relative: string,
-    action: string,
+    action: "copy",
     destination: "left" | "right" = "right",
   ) {
     if (folderStale)
@@ -1710,6 +1723,7 @@ export function ComparisonWorkspace({
     const roots = await normalizeFolderRoots();
     if (!(await claimPreview(tab.id))) return;
     setPreview(null);
+    setPreviewKind("copy");
     setPreviewDirection(destination);
     const jobId = crypto.randomUUID();
     startJob(jobId);
@@ -1722,23 +1736,25 @@ export function ComparisonWorkspace({
       jobId,
     }).catch((failure: unknown) => {
       discardPreview(tab.id);
+      setPreviewKind(null);
       throw failure;
     });
     setPreview(result);
   }
+  function dismissPreview() {
+    if (busy) return;
+    discardPreview(tab.id);
+    setPreview(null);
+    setPreviewKind(null);
+  }
   async function executePreview() {
-    if (
-      !preview ||
-      !(await confirmAction(
-        `Execute these ${preview.operations.length} operations from ${previewDirection === "right" ? "LEFT to RIGHT" : "RIGHT to LEFT"}?\nSource: ${previewDirection === "right" ? folderRoots.left : folderRoots.right}\nDestination: ${previewDirection === "right" ? folderRoots.right : folderRoots.left}\nOverwrites and recycle-bin deletions are included exactly as listed.`,
-      ))
-    )
-      return;
+    if (!preview || !preview.operations.length) return;
     const jobId = crypto.randomUUID();
     startJob(jobId);
     const id = preview.id;
     discardPreview(tab.id);
     setPreview(null);
+    setPreviewKind(null);
     const results = await native("execute_sync", { id, jobId });
     diskChanged([nativeFolderRoots.left, nativeFolderRoots.right]);
     const failures = results.filter((r) => r.error);
@@ -4761,60 +4777,143 @@ export function ComparisonWorkspace({
             </button>
           )}
           {preview && (
-            <section className="sync-preview" aria-label="Sync preview">
-              <h2>Sync preview: {preview.operations.length} operations</h2>
-              <p>
-                No changes have been made. Execution revalidates this preview;
-                no permanent deletion is used.
-              </p>
-              <p>
-                Direction:{" "}
-                {previewDirection === "right"
-                  ? "LEFT to RIGHT"
-                  : "RIGHT to LEFT"}
-              </p>
-              <p>
-                Source:{" "}
-                {previewDirection === "right"
-                  ? folderRoots.left
-                  : folderRoots.right}
-              </p>
-              <p>
-                Destination:{" "}
-                {previewDirection === "right"
-                  ? folderRoots.right
-                  : folderRoots.left}
-              </p>
-              <VirtualList
-                count={preview.operations.length}
-                label="Planned operations"
-                render={(index) => {
-                  const operation = preview.operations[index];
-                  return (
-                    operation && (
-                      <div>
-                        {operation.action}: {operation.relative}
-                      </div>
-                    )
-                  );
-                }}
-              />
-              <button
-                disabled={busy}
-                onClick={() => void attempt(executePreview)}
-              >
-                Confirm and execute preview
-              </button>
-              <button
-                disabled={busy}
-                onClick={() => {
-                  discardPreview(tab.id);
-                  setPreview(null);
-                }}
-              >
-                Dismiss preview
-              </button>
-            </section>
+            <WorkspaceDialog
+              title={
+                previewKind === "copy"
+                  ? `Copy ${previewDirection === "right" ? "left to right" : "right to left"}`
+                  : previewKind === "mirror" ||
+                      previewKind === "selected-mirror"
+                    ? `Mirror ${previewDirection === "right" ? "left to right" : "right to left"}`
+                    : previewKind === "selected-update"
+                      ? `Synchronize selected entries ${previewDirection === "right" ? "left to right" : "right to left"}`
+                      : `Update ${previewDirection === "right" ? "left to right" : "right to left"}`
+              }
+              onClose={dismissPreview}
+              className="sync-preview-dialog"
+            >
+              <div className="sync-preview-content">
+                <div className="sync-preview-summary">
+                  <strong>
+                    {preview.operations.length} planned{" "}
+                    {preview.operations.length === 1
+                      ? "operation"
+                      : "operations"}
+                  </strong>
+                  <span className="sync-preview-direction">
+                    {previewDirection === "right"
+                      ? "LEFT → RIGHT"
+                      : "RIGHT → LEFT"}
+                  </span>
+                </div>
+                <dl className="sync-preview-paths">
+                  <div>
+                    <dt>Source</dt>
+                    <dd>
+                      <code>
+                        {previewDirection === "right"
+                          ? folderRoots.left
+                          : folderRoots.right}
+                      </code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Destination</dt>
+                    <dd>
+                      <code>
+                        {previewDirection === "right"
+                          ? folderRoots.right
+                          : folderRoots.left}
+                      </code>
+                    </dd>
+                  </div>
+                </dl>
+                <p className="sync-preview-note">
+                  No files have been changed. Applying this preview revalidates
+                  the listed plan before making any changes.
+                </p>
+                {(previewKind === "mirror" ||
+                  previewKind === "selected-mirror") && (
+                  <p className="sync-preview-warning">
+                    Mirror can send destination-only files and folders to the
+                    Recycle Bin. Those operations are listed below; no permanent
+                    deletion is used.
+                  </p>
+                )}
+                {preview.operations.some(
+                  (operation) => operation.action === "overwrite",
+                ) && (
+                  <p className="sync-preview-warning">
+                    Operations marked “Replace” overwrite existing destination
+                    files.
+                  </p>
+                )}
+                <section
+                  className="sync-preview-operations"
+                  aria-label="Planned changes"
+                >
+                  <h3>Planned changes</h3>
+                  {preview.operations.length ? (
+                    <VirtualList
+                      count={preview.operations.length}
+                      height={240}
+                      rowHeight={38}
+                      label="Planned sync operations"
+                      render={(index) => {
+                        const operation = preview.operations[index];
+                        if (!operation) return null;
+                        const actionLabel =
+                          operation.action === "copy"
+                            ? "Copy"
+                            : operation.action === "overwrite"
+                              ? "Replace"
+                              : operation.action === "mkdir"
+                                ? "Create folder"
+                                : operation.action === "trash"
+                                  ? "Send file to Recycle Bin"
+                                  : operation.action === "trashDirectory"
+                                    ? "Send folder to Recycle Bin"
+                                    : operation.action;
+                        return (
+                          <div className="sync-preview-operation">
+                            <strong>{actionLabel}</strong>
+                            <span title={operation.relative}>
+                              {operation.relative}
+                            </span>
+                          </div>
+                        );
+                      }}
+                    />
+                  ) : (
+                    <p className="sync-preview-empty">
+                      No changes are needed for this direction.
+                    </p>
+                  )}
+                </section>
+                <div className="dialog-actions">
+                  <button disabled={busy} onClick={dismissPreview}>
+                    Cancel
+                  </button>
+                  <button
+                    className="primary"
+                    disabled={busy || !preview.operations.length}
+                    onClick={() => void attempt(executePreview)}
+                  >
+                    {previewKind === "copy"
+                      ? preview.operations.some(
+                          (operation) => operation.action === "overwrite",
+                        )
+                        ? `Replace file on ${previewDirection}`
+                        : `Copy file to ${previewDirection}`
+                      : previewKind === "mirror" ||
+                          previewKind === "selected-mirror"
+                        ? "Apply mirror"
+                        : previewKind === "selected-update"
+                          ? "Apply selected sync"
+                          : "Apply update"}
+                  </button>
+                </div>
+              </div>
+            </WorkspaceDialog>
           )}
         </>
       )}
