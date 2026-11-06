@@ -32,6 +32,7 @@ import { PathInput } from "./PathInput";
 import { ToolButton } from "./ToolButton";
 import {
   fileName,
+  plainPath,
   relatedPaths,
   type SavedSession,
   type WorkspaceController,
@@ -4877,8 +4878,8 @@ export function ComparisonWorkspace({
                     <dd>
                       <code>
                         {previewDirection === "right"
-                          ? folderRoots.left
-                          : folderRoots.right}
+                          ? plainPath(folderRoots.left)
+                          : plainPath(folderRoots.right)}
                       </code>
                     </dd>
                   </div>
@@ -4887,8 +4888,8 @@ export function ComparisonWorkspace({
                     <dd>
                       <code>
                         {previewDirection === "right"
-                          ? folderRoots.right
-                          : folderRoots.left}
+                          ? plainPath(folderRoots.right)
+                          : plainPath(folderRoots.left)}
                       </code>
                     </dd>
                   </div>
