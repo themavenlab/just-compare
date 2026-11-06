@@ -78,6 +78,7 @@ npm run test:workbench --workspace apps/desktop
 npm run test:compact --workspace apps/desktop
 npm run test:interactions --workspace apps/desktop
 npm run test:auto-compare --workspace apps/desktop
+npm run test:folder-save --workspace apps/desktop
 npm run test:sessions --workspace apps/desktop
 npm run test:history --workspace apps/desktop
 npm run test:inspector --workspace apps/desktop
@@ -165,6 +166,12 @@ Unix-specific symlink and backslash tests are configured but not run on Windows.
 - **Largest frontend chunk:** About 300 kB minified after editor and syntax code splitting; production build no longer emits the 500 kB chunk warning.
 
 These measurements are single-machine, warm/debug observations, not SLA claims, cold-disk benchmarks, or supported huge-file promises. CPU diff has a two-second budget and cooperative checks; a single library call cannot be interrupted immediately. Text is limited to 1 MiB / 20,000 lines; intraline to 64 KiB / 8,192 scalars; folder entries to 10,000 per root and 100 MiB per file. Regex uses at most 16 patterns, 4,096 bytes per pattern, and bounded compiled/DFA budgets.
+
+### Save Refresh and Folder-List Profiling (Windows)
+
+`npm run test:folder-save --workspace apps/desktop` passed on a synthetic 1,001-row pair. Saving one compared file dispatched one selected-row refresh and no full scan across two runs. Those runs measured 2,555-2,566 ms initial full scans, 22-24 ms path mapping calls and 371-437 ms selected-refresh round trips. The selected refresh hashes only requested rows, but currently transports the complete previous presentation to Rust; that makes refresh IPC cost grow with the full listing and is a candidate for a backend-owned snapshot/delta contract.
+
+A standalone Node measurement of `folderRows` over 10,000 synthetic rows took 45.9-58.8 ms across seven runs (51.8 ms median after the first run). This projects and sorts the full filtered tree even though `VirtualList` limits DOM row rendering to the viewport. It is a profiling candidate, not an end-to-end WebView latency measurement. Full content scans also hash every file; the existing 1,000-file-per-side benchmark measured about 1.42 s. These are single-run observations on one Windows machine, not performance guarantees. Safe snapshot reuse, incremental invalidation and reducing full-list IPC remain unimplemented follow-up candidates; no new caching or watcher behavior is claimed.
 
 ## Definition of Done
 

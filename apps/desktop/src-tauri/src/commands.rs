@@ -514,6 +514,19 @@ pub async fn normalize_folder_roots(left: String, right: String) -> Result<Folde
   .await
 }
 
+#[tauri::command]
+pub async fn relative_folder_path(
+  left: String,
+  right: String,
+  path: String,
+) -> Result<Option<String>, String> {
+  worker(move || {
+    compare_fs::relative_folder_path(Path::new(&left), Path::new(&right), Path::new(&path))
+      .map_err(|error| error.to_string())
+  })
+  .await
+}
+
 #[derive(Serialize)]
 pub struct FolderRoots {
   left: String,

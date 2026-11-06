@@ -103,6 +103,7 @@ fn main() {
       commands::scan_folders,
       commands::validate_folder_rules,
       commands::normalize_folder_roots,
+      commands::relative_folder_path,
       commands::disk_space,
       commands::path_metadata,
       commands::parent_folder,

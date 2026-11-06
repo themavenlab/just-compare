@@ -118,6 +118,41 @@ fn snapshot(path: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileError> 
   })
 }
 
+pub fn relative_folder_path(
+  left: &Path,
+  right: &Path,
+  path: &Path,
+) -> Result<Option<String>, FileError> {
+  let path = checked_path(path, false)?;
+  if !fs::metadata(&path)?.is_file() {
+    return Err(FileError("Only regular files can be refreshed.".into()));
+  }
+  for root in [left, right] {
+    let root = checked_path(root, false)?;
+    if !fs::metadata(&root)?.is_dir() {
+      return Err(FileError("Folder roots must be directories.".into()));
+    }
+    let Ok(relative) = path.strip_prefix(&root) else {
+      continue;
+    };
+    let mut parts = Vec::new();
+    for component in relative.components() {
+      match component {
+        std::path::Component::Normal(part) => parts.push(
+          part
+            .to_str()
+            .ok_or_else(|| FileError("Non-Unicode names are unsupported.".into()))?,
+        ),
+        _ => return Err(FileError("A relative file path is required.".into())),
+      }
+    }
+    if !parts.is_empty() {
+      return Ok(Some(parts.join("/")));
+    }
+  }
+  Ok(None)
+}
+
 type Scan = (BTreeMap<String, Snapshot>, BTreeMap<String, String>);
 
 fn exclusion_filters(options: &FolderOptions) -> Result<globset::GlobSet, FileError> {
@@ -637,6 +672,30 @@ impl Plan {
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[test]
+  fn relative_folder_path_maps_only_files_beneath_either_root() {
+    let root = tempfile::tempdir().unwrap();
+    let left = root.path().join("left");
+    let right = root.path().join("right");
+    fs::create_dir_all(left.join("nested")).unwrap();
+    fs::create_dir_all(&right).unwrap();
+    fs::write(left.join("nested/file.txt"), "left").unwrap();
+    fs::write(right.join("other.txt"), "right").unwrap();
+    let outside = root.path().join("outside.txt");
+    fs::write(&outside, "outside").unwrap();
+
+    assert_eq!(
+      relative_folder_path(&left, &right, &left.join("nested/file.txt")).unwrap(),
+      Some("nested/file.txt".into())
+    );
+    assert_eq!(
+      relative_folder_path(&left, &right, &right.join("other.txt")).unwrap(),
+      Some("other.txt".into())
+    );
+    assert_eq!(relative_folder_path(&left, &right, &outside).unwrap(), None);
+    assert!(relative_folder_path(&left, &right, &left).is_err());
+  }
+
   #[test]
   fn trash_unavailable_and_midflight_cancel_preserve_unexecuted_files() {
     let root = tempfile::tempdir().unwrap();

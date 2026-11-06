@@ -351,6 +351,10 @@ interface Commands {
     args: { left: string; right: string };
     result: { left: string; right: string };
   };
+  relative_folder_path: {
+    args: { left: string; right: string; path: string };
+    result: string | null;
+  };
   disk_space: {
     args: { path: string };
     result: { availableBytes: string; totalBytes: string };

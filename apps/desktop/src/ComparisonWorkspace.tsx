@@ -230,7 +230,10 @@ export function ComparisonWorkspace({
   const [folders, setFolders] = useState<FolderEntry[]>([]);
   const [hasScanned, setHasScanned] = useState(false);
   const [folderStale, setFolderStale] = useState(false);
-  const [pendingFolderRefresh, setPendingFolderRefresh] = useState(false);
+  const [pendingFolderRefresh, setPendingFolderRefresh] = useState<string[]>(
+    [],
+  );
+  const folderRefreshInFlight = useRef(false);
   const [staleSides, setStaleSides] = useState<Side[]>([]);
   const [staleOutput, setStaleOutput] = useState(false);
   const [diskChanges, setDiskChanges] = useState<Side[]>([]);
@@ -1609,25 +1612,73 @@ export function ComparisonWorkspace({
     setDiskChanges((prior) => [...new Set([...prior, side])]);
     setDiskComparison(null);
   }
-  const runPendingFolderRefresh = useEffectEvent(() => {
-    if (!pendingFolderRefresh || mode !== "folder" || globalBusy || !hasScanned)
-      return;
-    void attempt(async () => {
-      setPendingFolderRefresh(false);
-      await scan();
-    });
-  });
-  useEffect(() => {
-    if (!pendingFolderRefresh || globalBusy || !hasScanned) return;
-    const timer = window.setTimeout(() => runPendingFolderRefresh(), 0);
-    return () => window.clearTimeout(timer);
-  }, [pendingFolderRefresh, globalBusy, hasScanned]);
   function folderOptions() {
     return {
       criterion: "content",
       exclude: exclude.split("\n").filter(Boolean),
     };
   }
+  const runPendingFolderRefresh = useEffectEvent(() => {
+    if (
+      !pendingFolderRefresh.length ||
+      mode !== "folder" ||
+      globalBusy ||
+      !hasScanned
+    )
+      return;
+    void attempt(async () => {
+      const paths = pendingFolderRefresh;
+      setPendingFolderRefresh([]);
+      folderRefreshInFlight.current = true;
+      setFolderStale(true);
+      try {
+        const roots = nativeFolderRoots;
+        if (!roots.left || !roots.right)
+          throw new Error(
+            "Both folder roots must be scanned before a saved file can be refreshed.",
+          );
+        const mapped = await Promise.all(
+          paths.map((path) =>
+            native("relative_folder_path", { ...roots, path }),
+          ),
+        );
+        const selected = [
+          ...new Set(mapped.filter((path): path is string => path !== null)),
+        ];
+        if (selected.length) {
+          const jobId = crypto.randomUUID();
+          startJob(jobId);
+          const refreshed = await native("compare_folder_selection", {
+            ...roots,
+            options: folderOptions(),
+            rules: folderRules,
+            selected,
+            previous: folders,
+            jobId,
+          });
+          setFolders(refreshed);
+        }
+        const allMapped = mapped.every((path) => path !== null);
+        setFolderStale(!allMapped);
+        setNotice(
+          allMapped
+            ? `Refreshed ${selected.length} saved file${selected.length === 1 ? "" : "s"} and affected directory summaries.`
+            : "Some saved files could not be mapped to the scanned roots. Results remain stale; run a full refresh to update them.",
+        );
+      } catch (failure) {
+        setFolderStale(true);
+        setPendingFolderRefresh([]);
+        throw failure;
+      } finally {
+        folderRefreshInFlight.current = false;
+      }
+    });
+  });
+  useEffect(() => {
+    if (!pendingFolderRefresh.length || globalBusy || !hasScanned) return;
+    const timer = window.setTimeout(() => runPendingFolderRefresh(), 0);
+    return () => window.clearTimeout(timer);
+  }, [pendingFolderRefresh, globalBusy, hasScanned]);
   function rememberRoots(roots: Partial<{ left: string; right: string }>) {
     setRootHistory((prior) => {
       const next = { ...prior };
@@ -2124,8 +2175,23 @@ export function ComparisonWorkspace({
             affected(nativeFolderRoots.left) ||
             affected(nativeFolderRoots.right));
         if (affectedFolderRoots) {
-          setFolderStale(true);
-          if (refreshFolders && hasScanned) setPendingFolderRefresh(true);
+          const canRefreshSelection =
+            refreshFolders &&
+            hasScanned &&
+            Boolean(nativeFolderRoots.left && nativeFolderRoots.right) &&
+            (!folderStale || folderRefreshInFlight.current);
+          if (canRefreshSelection) {
+            const affectedPaths = paths.filter(
+              (path) =>
+                relatedPaths(nativeFolderRoots.left, path) ||
+                relatedPaths(nativeFolderRoots.right, path),
+            );
+            setPendingFolderRefresh((prior) => [
+              ...new Set([...prior, ...affectedPaths]),
+            ]);
+          } else {
+            setFolderStale(true);
+          }
         }
         if (
           affected(folderRoots.left) ||
