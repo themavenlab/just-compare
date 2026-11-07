@@ -43,10 +43,19 @@ impl Default for FolderOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum FolderEntryKind {
+  File,
+  Directory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FolderEntry {
   pub relative: String,
   pub left_relative: Option<String>,
   pub right_relative: Option<String>,
+  pub left_kind: Option<FolderEntryKind>,
+  pub right_kind: Option<FolderEntryKind>,
   pub status: String,
   pub left_size: Option<u64>,
   pub right_size: Option<u64>,
@@ -307,32 +316,18 @@ pub fn scan_pair(
           match (l, r) {
             (Some(l), Some(r)) => {
               if (l.hash == "directory") != (r.hash == "directory") {
-                return FolderEntry {
-                  relative: name.clone(),
-                  left_relative: Some(name.clone()),
-                  right_relative: Some(name.clone()),
-                  status: "error".into(),
-                  left_size: Some(l.size),
-                  right_size: Some(r.size),
-                  left_modified: folder_rules::modified_ms(l.modified),
-                  right_modified: folder_rules::modified_ms(r.modified),
-                  newer: None,
-                  newer_mixed: false,
-                  importance: ComparisonImportance::Unknown,
-                  error: Some("File/directory type collision.".into()),
-                  detail: Some("File/directory type collision.".into()),
-                  is_directory: false,
-                };
-              }
-              let equal = match options.criterion {
-                Criterion::Content => l.hash == r.hash,
-                Criterion::Size => l.size == r.size,
-                Criterion::Modified => l.size == r.size && l.modified == r.modified,
-              };
-              if equal {
-                "same"
+                "typeMismatch"
               } else {
-                "different"
+                let equal = match options.criterion {
+                  Criterion::Content => l.hash == r.hash,
+                  Criterion::Size => l.size == r.size,
+                  Criterion::Modified => l.size == r.size && l.modified == r.modified,
+                };
+                if equal {
+                  "same"
+                } else {
+                  "different"
+                }
               }
             }
             (Some(_), None) => "leftOnly",
@@ -344,15 +339,33 @@ pub fn scan_pair(
           relative: name.clone(),
           left_relative: (l.is_some() || ae.contains_key(name)).then(|| name.clone()),
           right_relative: (r.is_some() || be.contains_key(name)).then(|| name.clone()),
+          left_kind: l.map(|snapshot| {
+            if snapshot.hash == "directory" {
+              FolderEntryKind::Directory
+            } else {
+              FolderEntryKind::File
+            }
+          }),
+          right_kind: r.map(|snapshot| {
+            if snapshot.hash == "directory" {
+              FolderEntryKind::Directory
+            } else {
+              FolderEntryKind::File
+            }
+          }),
           status: status.into(),
           left_size: l.map(|s| s.size),
           right_size: r.map(|s| s.size),
           left_modified: l.and_then(|s| folder_rules::modified_ms(s.modified)),
           right_modified: r.and_then(|s| folder_rules::modified_ms(s.modified)),
-          newer: match (l, r) {
-            (Some(l), Some(r)) if l.modified > r.modified => Some(FolderSide::Left),
-            (Some(l), Some(r)) if l.modified < r.modified => Some(FolderSide::Right),
-            _ => None,
+          newer: if status == "typeMismatch" {
+            None
+          } else {
+            match (l, r) {
+              (Some(l), Some(r)) if l.modified > r.modified => Some(FolderSide::Left),
+              (Some(l), Some(r)) if l.modified < r.modified => Some(FolderSide::Right),
+              _ => None,
+            }
           },
           newer_mixed: false,
           importance: match status {
@@ -360,9 +373,14 @@ pub fn scan_pair(
             "error" => ComparisonImportance::Unknown,
             _ => ComparisonImportance::Important,
           },
-          error: detail.clone(),
-          detail,
-          is_directory: l.or(r).is_some_and(|s| s.hash == "directory"),
+          error: (status == "error").then(|| detail.clone()).flatten(),
+          detail: if status == "typeMismatch" {
+            Some("Not compared: one side is a file and the other is a folder.".into())
+          } else {
+            detail
+          },
+          is_directory: l.is_some_and(|s| s.hash == "directory")
+            || r.is_some_and(|s| s.hash == "directory"),
         }
       })
       .collect(),
@@ -806,11 +824,24 @@ mod tests {
     assert!(b.join("empty").is_dir());
     fs::write(b.join("collision"), "file").unwrap();
     fs::create_dir(a.join("collision")).unwrap();
+    fs::write(a.join("reverse"), "file").unwrap();
+    fs::create_dir(b.join("reverse")).unwrap();
+    fs::write(b.join("reverse").join("child"), "file").unwrap();
     assert!(Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).is_err());
-    assert!(scan_pair(&a, &b, &FolderOptions::default(), &flag, |_| {})
-      .unwrap()
+    let rows = scan_pair(&a, &b, &FolderOptions::default(), &flag, |_| {}).unwrap();
+    let collision = rows.iter().find(|row| row.relative == "collision").unwrap();
+    assert_eq!(collision.status, "typeMismatch");
+    assert_eq!(collision.left_kind, Some(FolderEntryKind::Directory));
+    assert_eq!(collision.right_kind, Some(FolderEntryKind::File));
+    assert!(collision.error.is_none());
+    let reverse = rows.iter().find(|row| row.relative == "reverse").unwrap();
+    assert_eq!(reverse.status, "typeMismatch");
+    assert_eq!(reverse.left_kind, Some(FolderEntryKind::File));
+    assert_eq!(reverse.right_kind, Some(FolderEntryKind::Directory));
+    assert!(reverse.error.is_none());
+    assert!(rows
       .iter()
-      .any(|e| e.status == "error"));
+      .any(|row| { row.relative == "reverse/child" && row.status == "rightOnly" }));
   }
 
   #[test]

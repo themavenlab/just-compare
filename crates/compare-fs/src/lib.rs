@@ -10,8 +10,8 @@ pub use document::{checked_path, display_path, Document, FileError};
 pub use folder::{
   refresh_selection, relative_folder_path, scan_pair, scan_pair_with_rules,
   scan_selected_with_rules, validate_folder_configuration, ComparisonImportance, ContentMethod,
-  Criterion, FolderEntry, FolderOptions, FolderRules, FolderSide, FolderTextRules, Plan, QuickTest,
-  QuickTestPolicy, SyncMode,
+  Criterion, FolderEntry, FolderEntryKind, FolderOptions, FolderRules, FolderSide, FolderTextRules,
+  Plan, QuickTest, QuickTestPolicy, SyncMode,
 };
 pub use recovery::{
   clear_recoveries, discard_recovery, load_recoveries, save_recoveries, DraftRecovery,

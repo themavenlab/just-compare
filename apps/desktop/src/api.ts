@@ -101,6 +101,8 @@ export interface FolderEntry {
   rightSize: number | null;
   detail: string | null;
   isDirectory: boolean;
+  leftKind: FolderEntryKind | null;
+  rightKind: FolderEntryKind | null;
   leftModified?: number | null;
   rightModified?: number | null;
   leftRelative?: string | null;
@@ -110,6 +112,7 @@ export interface FolderEntry {
   error?: string | null;
   importance?: string;
 }
+export type FolderEntryKind = "file" | "directory";
 export interface Preview {
   id: string;
   operations: { relative: string; action: string }[];

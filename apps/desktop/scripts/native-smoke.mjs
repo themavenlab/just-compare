@@ -581,17 +581,21 @@ try {
     jobId: "scan-test",
   });
   assert.equal(rows[0].status, "leftOnly");
+  assert.equal(rows[0].leftKind, "file");
+  assert.equal(rows[0].rightKind, null);
   assert.deepEqual(Object.keys(rows[0]).sort(), [
     "detail",
     "error",
     "importance",
     "isDirectory",
+    "leftKind",
     "leftModified",
     "leftRelative",
     "leftSize",
     "newer",
     "newerMixed",
     "relative",
+    "rightKind",
     "rightModified",
     "rightRelative",
     "rightSize",
@@ -664,6 +668,48 @@ try {
     null,
   );
   await assert.rejects(access(join(leftFolder, "delete.txt")));
+  const mismatchLeft = join(fixtures, "mismatch-left");
+  const mismatchRight = join(fixtures, "mismatch-right");
+  await mkdir(mismatchLeft);
+  await mkdir(mismatchRight);
+  await mkdir(join(mismatchLeft, "folder-left"));
+  await writeFile(join(mismatchRight, "folder-left"), "file");
+  await writeFile(join(mismatchLeft, "folder-right"), "file");
+  await mkdir(join(mismatchRight, "folder-right"));
+  await writeFile(join(mismatchRight, "folder-right", "child.txt"), "child");
+  const mismatchRows = await call("scan_folders", {
+    left: mismatchLeft,
+    right: mismatchRight,
+    options,
+    jobId: "type-mismatch-test",
+  });
+  const folderLeft = mismatchRows.find((row) => row.relative === "folder-left");
+  assert.equal(folderLeft.status, "typeMismatch");
+  assert.equal(folderLeft.leftKind, "directory");
+  assert.equal(folderLeft.rightKind, "file");
+  assert.equal(folderLeft.error, null);
+  const folderRight = mismatchRows.find(
+    (row) => row.relative === "folder-right",
+  );
+  assert.equal(folderRight.status, "typeMismatch");
+  assert.equal(folderRight.leftKind, "file");
+  assert.equal(folderRight.rightKind, "directory");
+  assert.equal(folderRight.error, null);
+  assert.equal(
+    mismatchRows.find((row) => row.relative === "folder-right/child.txt")
+      .status,
+    "rightOnly",
+  );
+  await assert.rejects(
+    call("preview_sync", {
+      left: mismatchLeft,
+      right: mismatchRight,
+      options,
+      mode: "update",
+    }),
+    /collision/,
+    "A display mismatch must not make unsafe synchronization executable.",
+  );
   await assert.rejects(
     call("execute_sync", { id: plan.id, jobId: "consumed-test" }),
     /missing or consumed/,
@@ -973,6 +1019,126 @@ try {
     await page.getByRole("tab").count(),
     tabCount,
     "Directories expand rather than open as text files.",
+  );
+  const errorsBeforeMismatchScan = await folderList
+    .locator('.folder-row[data-status="error"]')
+    .count();
+  await mkdir(join(leftFolder, "type-mismatch-folder"));
+  await writeFile(join(rightFolder, "type-mismatch-folder"), "file");
+  await writeFile(join(leftFolder, "type-mismatch-file"), "file");
+  await mkdir(join(rightFolder, "type-mismatch-file"));
+  await writeFile(
+    join(rightFolder, "type-mismatch-file", "child.txt"),
+    "child",
+  );
+  await page.getByRole("button", { name: "Scan folders", exact: true }).click();
+  const folderMismatchRow = folderList.locator(
+    '.folder-row[data-relative="type-mismatch-folder"]',
+  );
+  await folderMismatchRow.waitFor();
+  assert.equal(
+    await folderMismatchRow.getAttribute("data-status"),
+    "typeMismatch",
+  );
+  assert.match(
+    await folderMismatchRow
+      .locator(".folder-side")
+      .nth(0)
+      .locator(".entry-icon")
+      .getAttribute("class"),
+    /folder-icon/,
+  );
+  assert.match(
+    await folderMismatchRow
+      .locator(".folder-side")
+      .nth(1)
+      .locator(".entry-icon")
+      .getAttribute("class"),
+    /file-icon/,
+  );
+  assert.equal(
+    await folderMismatchRow.locator(".type-mismatch-note").count(),
+    2,
+  );
+  assert.equal(
+    await folderMismatchRow.locator(".row-hover-actions button").isDisabled(),
+    true,
+  );
+  assert.equal(
+    await folderList
+      .locator('.folder-row[data-relative="type-mismatch-file"]')
+      .getAttribute("data-status"),
+    "typeMismatch",
+  );
+  const reverseMismatch = folderList.locator(
+    '.folder-row[data-relative="type-mismatch-file"]',
+  );
+  await reverseMismatch
+    .locator(".folder-side")
+    .nth(1)
+    .locator(".tree-toggle")
+    .click();
+  assert.equal(
+    await folderList
+      .locator('.folder-row[data-relative="type-mismatch-file/child.txt"]')
+      .getAttribute("data-status"),
+    "rightOnly",
+  );
+  assert.equal(
+    await folderList.locator('.folder-row[data-status="error"]').count(),
+    errorsBeforeMismatchScan,
+    "A readable type mismatch does not create a comparison error.",
+  );
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Files only", exact: true }).click();
+  await folderMismatchRow.waitFor();
+  assert.equal(
+    await folderList.locator('.folder-row[data-relative="empty"]').count(),
+    0,
+    "Files-only filtering hides folder-only rows.",
+  );
+  assert.equal(
+    await folderList
+      .locator('.folder-row[data-relative="type-mismatch-folder"]')
+      .count(),
+    1,
+    "Files-only filtering retains mixed-kind rows with a file side.",
+  );
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Folders only", exact: true })
+    .click();
+  assert.equal(
+    await folderList.locator('.folder-row[data-relative="copy.txt"]').count(),
+    0,
+    "Folders-only filtering hides file-only rows.",
+  );
+  assert.equal(
+    await folderList
+      .locator('.folder-row[data-relative="type-mismatch-folder"]')
+      .count(),
+    1,
+    "Folders-only filtering retains mixed-kind rows with a folder side.",
+  );
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Files and folders", exact: true })
+    .click();
+  const visibleOrder = await folderList
+    .locator(".folder-row[data-relative]")
+    .evaluateAll((elements) =>
+      elements
+        .map((element) => ({
+          path: element.getAttribute("data-relative"),
+          folder: !!element.querySelector(".entry-icon.folder-icon"),
+        }))
+        .filter((row) => row.path && !row.path.includes("/")),
+    );
+  const firstFileIndex = visibleOrder.findIndex((row) => !row.folder);
+  assert.ok(firstFileIndex >= 0);
+  assert.ok(
+    visibleOrder.slice(0, firstFileIndex).every((row) => row.folder),
+    "Folders remain grouped before files in the paired tree.",
   );
   await session.close();
   session = null;

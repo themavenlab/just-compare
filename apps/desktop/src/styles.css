@@ -1374,6 +1374,9 @@ body,
 .folder-side.different {
   color: var(--file-different);
 }
+.folder-side.typeMismatch {
+  color: var(--file-different);
+}
 .folder-side.leftOnly {
   color: var(--file-left-only);
 }
@@ -1465,6 +1468,13 @@ body,
   padding-right: 5px;
   color: inherit;
   font-size: 11px;
+}
+.type-mismatch-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+  flex-shrink: 0;
 }
 .paired-folder-row.selected-folder-row {
   background: var(--selection-row);
@@ -3121,6 +3131,9 @@ input::placeholder {
 .paired-folder-row[data-status="different"] {
   background: color-mix(in srgb, var(--removed) 55%, transparent);
 }
+.paired-folder-row[data-status="typeMismatch"] {
+  background: color-mix(in srgb, var(--removed) 55%, transparent);
+}
 .paired-folder-row[data-status="leftOnly"] {
   background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
 }
@@ -3525,6 +3538,7 @@ input::placeholder {
     outline-offset: -2px;
   }
   .folder-side.different .file-name,
+  .folder-side.typeMismatch .file-name,
   .folder-file.different .file-name {
     text-decoration: underline;
   }

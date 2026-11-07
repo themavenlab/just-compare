@@ -7,6 +7,7 @@ import {
   formatFolderErrorsLabel,
   formatSize,
   matchesFilter,
+  matchesKindFilter,
   matchesName,
   toggleFolderErrorFilter,
 } from "./folderPresentation";
@@ -29,6 +30,8 @@ const entry = (
   rightSize,
   detail: null,
   isDirectory: false,
+  leftKind: leftSize === null ? null : "file",
+  rightKind: rightSize === null ? null : "file",
 });
 
 describe("folder presentation", () => {
@@ -188,6 +191,70 @@ describe("folder presentation", () => {
       "other/b.txt",
     ]);
   });
+  it("keeps folders before naturally sorted files in either sort direction", () => {
+    const rows = [
+      {
+        ...entry("file10.txt"),
+      },
+      {
+        ...entry("z-folder", "same", 0, 0),
+        isDirectory: true,
+        leftKind: "directory" as const,
+        rightKind: "directory" as const,
+      },
+      {
+        ...entry("file2.txt"),
+      },
+      {
+        ...entry("a-folder", "same", 0, 0),
+        isDirectory: true,
+        leftKind: "directory" as const,
+        rightKind: "directory" as const,
+      },
+    ];
+    expect(
+      folderRows(rows, "all", false, new Set(), "name", false).map(
+        (row) => row.path,
+      ),
+    ).toEqual(["a-folder", "z-folder", "file2.txt", "file10.txt"]);
+    expect(
+      folderRows(rows, "all", false, new Set(), "name", true).map(
+        (row) => row.path,
+      ),
+    ).toEqual(["z-folder", "a-folder", "file10.txt", "file2.txt"]);
+  });
+  it("keeps mismatch kinds side-specific and blocks counterpart copies", () => {
+    const mismatch: FolderEntry = {
+      ...entry("folder", "typeMismatch", 0, 4),
+      isDirectory: true,
+      leftKind: "directory",
+      rightKind: "file",
+      detail: "Not compared: one side is a file and the other is a folder.",
+    };
+    expect(canCopy(mismatch, "left")).toBe(false);
+    expect(canCopy(mismatch, "right")).toBe(false);
+    expect(matchesKindFilter(mismatch, "folders")).toBe(true);
+    expect(matchesKindFilter(mismatch, "files")).toBe(true);
+    const rows = folderRows(
+      [
+        mismatch,
+        {
+          ...entry("folder/child.txt", "leftOnly", 1, null),
+          leftRelative: "folder/child.txt",
+        },
+      ],
+      "differences",
+      true,
+      new Set(),
+      "name",
+      false,
+    );
+    expect(rows.map((row) => row.path)).toEqual(["folder", "folder/child.txt"]);
+    expect(rows[0]?.leftBranch).toBe(true);
+    expect(rows[0]?.rightBranch).toBe(false);
+    expect(rows[0]?.entry?.leftKind).toBe("directory");
+    expect(rows[0]?.entry?.rightKind).toBe("file");
+  });
   it("checks actual copy direction and rejects same/error sources", () => {
     expect(canCopy(entry("a", "rightOnly", null), "left")).toBe(true);
     expect(canCopy(entry("a", "rightOnly", null), "right")).toBe(false);
@@ -202,6 +269,8 @@ describe("folder presentation", () => {
       large.push({
         ...entry(`dir${directory}`, "same", null, null),
         isDirectory: true,
+        leftKind: "directory",
+        rightKind: "directory",
       });
       for (let file = 0; file < 99; file++)
         large.push(entry(`dir${directory}/file${file}.txt`));

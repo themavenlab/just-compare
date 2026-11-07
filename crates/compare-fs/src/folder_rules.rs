@@ -886,6 +886,20 @@ fn scan_with_selection(
       relative: ln.as_ref().or(rn.as_ref()).unwrap().clone(),
       left_relative: ln.clone(),
       right_relative: rn.clone(),
+      left_kind: lm.map(|metadata| {
+        if metadata.is_dir() {
+          FolderEntryKind::Directory
+        } else {
+          FolderEntryKind::File
+        }
+      }),
+      right_kind: rm.map(|metadata| {
+        if metadata.is_dir() {
+          FolderEntryKind::Directory
+        } else {
+          FolderEntryKind::File
+        }
+      }),
       status: "error".into(),
       left_size: lm.map(|m| m.len()),
       right_size: rm.map(|m| m.len()),
@@ -896,101 +910,118 @@ fn scan_with_selection(
       importance: ComparisonImportance::Unknown,
       error: None,
       detail: None,
-      is_directory: lm.or(rm).is_some_and(|m| m.is_dir()),
+      is_directory: lm.is_some_and(|metadata| metadata.is_dir())
+        || rm.is_some_and(|metadata| metadata.is_dir()),
     };
-    let result = (|| -> Result<ComparisonImportance, FileError> {
-      if !single_side
-        && rules.align_case
-        && ln != rn
-        && (ln.is_none() || rn.is_none())
-        && [ln.as_deref(), rn.as_deref()]
+    let type_mismatch = lm
+      .zip(rm)
+      .is_some_and(|(left, right)| left.is_dir() != right.is_dir());
+    let result = if type_mismatch {
+      row.status = "typeMismatch".into();
+      row.detail = Some("Not compared: one side is a file and the other is a folder.".into());
+      Ok(ComparisonImportance::Important)
+    } else {
+      (|| -> Result<ComparisonImportance, FileError> {
+        if !single_side
+          && rules.align_case
+          && ln != rn
+          && (ln.is_none() || rn.is_none())
+          && [ln.as_deref(), rn.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|name| !name.rsplit('/').next().unwrap_or(name).is_ascii())
+        {
+          return Err(FileError("Capability unavailable: non-ASCII case folding is not supported; Unicode normalization does not imply case folding.".into()));
+        }
+        let errors: Vec<_> = [("Left", l), ("Right", r)]
           .into_iter()
-          .flatten()
-          .any(|name| !name.rsplit('/').next().unwrap_or(name).is_ascii())
-      {
-        return Err(FileError("Capability unavailable: non-ASCII case folding is not supported; Unicode normalization does not imply case folding.".into()));
-      }
-      let errors: Vec<_> = [("Left", l), ("Right", r)]
-        .into_iter()
-        .filter_map(|(side, item)| {
-          item
-            .and_then(|item| item.error.as_ref())
-            .map(|error| format!("{side}: {error}"))
-        })
-        .collect();
-      if !errors.is_empty() {
-        return Err(FileError(errors.join("; ")));
-      }
-      let (Some(lm), Some(rm)) = (lm, rm) else {
-        row.status = if l.is_some() { "leftOnly" } else { "rightOnly" }.into();
-        if single_side {
-          row.detail = Some("Not compared: choose the other folder root.".into());
-          return Ok(ComparisonImportance::Unknown);
+          .filter_map(|(side, item)| {
+            item
+              .and_then(|item| item.error.as_ref())
+              .map(|error| format!("{side}: {error}"))
+          })
+          .collect();
+        if !errors.is_empty() {
+          return Err(FileError(errors.join("; ")));
         }
-        return Ok(ComparisonImportance::Important);
-      };
-      if lm.is_dir() != rm.is_dir() {
-        return Err(FileError("File/directory type collision.".into()));
-      }
-      let difference = time_difference(lm.modified()?, rm.modified()?, rules);
-      if !lm.is_dir() && difference.abs() > i128::from(rules.timestamp_tolerance_ms) {
-        row.newer = Some(if difference > 0 {
-          FolderSide::Left
+        let (Some(lm), Some(rm)) = (lm, rm) else {
+          row.status = if l.is_some() { "leftOnly" } else { "rightOnly" }.into();
+          if single_side {
+            row.detail = Some("Not compared: choose the other folder root.".into());
+            return Ok(ComparisonImportance::Unknown);
+          }
+          return Ok(ComparisonImportance::Important);
+        };
+        let difference = time_difference(lm.modified()?, rm.modified()?, rules);
+        if !lm.is_dir() && difference.abs() > i128::from(rules.timestamp_tolerance_ms) {
+          row.newer = Some(if difference > 0 {
+            FolderSide::Left
+          } else {
+            FolderSide::Right
+          });
+        }
+        // Directory timestamps/sizes are not meaningful file-content tests.
+        let mut metadata_different = (rules.compare_filename_case && ln != rn)
+          || (rules.compare_readonly && lm.permissions().readonly() != rm.permissions().readonly())
+          || (rules.compare_attributes && attributes(lm) != attributes(rm))
+          || ((attributes(lm) ^ attributes(rm)) & selected_attribute_mask(rules) != 0);
+        if rules.executable_version && !lm.is_dir() {
+          let left_path = left.join(ln.as_ref().unwrap());
+          let right_path = right.join(rn.as_ref().unwrap());
+          if executable(&left_path) || executable(&right_path) {
+            let left = version(&left_path, lm, cancelled)?;
+            let right = version(&right_path, rm, cancelled)?;
+            metadata_different |= left != right;
+            let display = |v: [u16; 4]| v.map(|part| part.to_string()).join(".");
+            row.detail = Some(format!(
+              "File versions: left {} / right {}; product versions: left {} / right {}",
+              display(left.file),
+              display(right.file),
+              display(left.product),
+              display(right.product),
+            ));
+          }
+        }
+        let content = if lm.is_dir() {
+          ComparisonImportance::Equal
         } else {
-          FolderSide::Right
-        });
-      }
-      // Directory timestamps/sizes are not meaningful file-content tests.
-      let mut metadata_different = (rules.compare_filename_case && ln != rn)
-        || (rules.compare_readonly && lm.permissions().readonly() != rm.permissions().readonly())
-        || (rules.compare_attributes && attributes(lm) != attributes(rm))
-        || ((attributes(lm) ^ attributes(rm)) & selected_attribute_mask(rules) != 0);
-      if rules.executable_version && !lm.is_dir() {
-        let left_path = left.join(ln.as_ref().unwrap());
-        let right_path = right.join(rn.as_ref().unwrap());
-        if executable(&left_path) || executable(&right_path) {
-          let left = version(&left_path, lm, cancelled)?;
-          let right = version(&right_path, rm, cancelled)?;
-          metadata_different |= left != right;
-          let display = |v: [u16; 4]| v.map(|part| part.to_string()).join(".");
-          row.detail = Some(format!(
-            "File versions: left {} / right {}; product versions: left {} / right {}",
-            display(left.file),
-            display(right.file),
-            display(left.product),
-            display(right.product),
-          ));
+          ContentComparison {
+            left: &left.join(ln.as_ref().unwrap()),
+            right: &right.join(rn.as_ref().unwrap()),
+            lm,
+            rm,
+            rules,
+            compiled: &compiled,
+            cancelled,
+          }
+          .compare()?
+        };
+        let importance = if metadata_different {
+          ComparisonImportance::Important
+        } else {
+          content
+        };
+        row.status = if importance == ComparisonImportance::Important {
+          "different"
+        } else {
+          "same"
         }
-      }
-      let content = if lm.is_dir() {
-        ComparisonImportance::Equal
-      } else {
-        ContentComparison {
-          left: &left.join(ln.as_ref().unwrap()),
-          right: &right.join(rn.as_ref().unwrap()),
-          lm,
-          rm,
-          rules,
-          compiled: &compiled,
-          cancelled,
-        }
-        .compare()?
-      };
-      let importance = if metadata_different {
-        ComparisonImportance::Important
-      } else {
-        content
-      };
-      row.status = if importance == ComparisonImportance::Important {
-        "different"
-      } else {
-        "same"
-      }
-      .into();
-      Ok(importance)
-    })();
+        .into();
+        Ok(importance)
+      })()
+    };
     match result {
-      Ok(importance) => row.importance = importance,
+      Ok(importance) => {
+        row.importance = importance;
+        if row.status == "error" {
+          row.status = if importance == ComparisonImportance::Important {
+            "different"
+          } else {
+            "same"
+          }
+          .into();
+        }
+      }
       Err(error) => {
         cancel(cancelled)?;
         row.status = "error".into();
@@ -1672,7 +1703,7 @@ mod tests {
   }
 
   #[test]
-  fn readonly_attributes_type_collisions_and_missing_sides_are_explicit() {
+  fn readonly_type_mismatches_and_missing_sides_are_explicit() {
     let fixture = Fixture::new();
     fixture.files(b"x", b"x");
     let path = fixture.right.join("file");
@@ -1696,11 +1727,45 @@ mod tests {
     assert_eq!(attributes_result[0].status, "different");
     fs::create_dir(fixture.left.join("collision")).unwrap();
     fs::write(fixture.right.join("collision"), b"x").unwrap();
+    fs::write(fixture.left.join("reverse"), b"x").unwrap();
+    fs::create_dir(fixture.right.join("reverse")).unwrap();
+    fs::write(fixture.right.join("reverse").join("child"), b"x").unwrap();
     fs::write(fixture.left.join("only"), b"x").unwrap();
     let rows = fixture.scan(&FolderRules::default());
-    assert!(rows
+    let collision = rows.iter().find(|row| row.relative == "collision").unwrap();
+    assert_eq!(collision.status, "typeMismatch");
+    assert_eq!(collision.left_kind, Some(FolderEntryKind::Directory));
+    assert_eq!(collision.right_kind, Some(FolderEntryKind::File));
+    assert!(collision.is_directory);
+    assert_eq!(collision.importance, ComparisonImportance::Important);
+    assert!(collision.error.is_none());
+    let reverse = rows.iter().find(|row| row.relative == "reverse").unwrap();
+    assert_eq!(reverse.status, "typeMismatch");
+    assert_eq!(reverse.left_kind, Some(FolderEntryKind::File));
+    assert_eq!(reverse.right_kind, Some(FolderEntryKind::Directory));
+    assert!(reverse.error.is_none());
+    let child = rows
       .iter()
-      .any(|r| r.relative == "collision" && r.error.as_ref().unwrap().contains("collision")));
+      .find(|row| row.relative == "reverse/child")
+      .unwrap();
+    assert_eq!(child.status, "rightOnly");
+    let refreshed = refresh_selection(
+      &fixture.left,
+      &fixture.right,
+      &FolderOptions::default(),
+      &FolderRules::default(),
+      &["collision".into()],
+      &rows,
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .unwrap();
+    let refreshed_collision = refreshed
+      .iter()
+      .find(|row| row.relative == "collision")
+      .unwrap();
+    assert_eq!(refreshed_collision.status, "typeMismatch");
+    assert!(refreshed_collision.error.is_none());
     let row = rows.iter().find(|r| r.relative == "only").unwrap();
     assert_eq!(row.status, "leftOnly");
     assert!(row.right_relative.is_none());

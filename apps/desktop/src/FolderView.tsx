@@ -1,6 +1,5 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { FolderEntry } from "./api";
-import { CommandMenu, type MenuCommand } from "./CommandMenu";
+import type { FolderEntry, FolderEntryKind } from "./api";
 import {
   canCopy,
   folderRows,
@@ -141,21 +140,29 @@ export function FolderView({
     return (
       !busy &&
       entry.status !== "error" &&
-      !entry.isDirectory &&
+      entry.status !== "typeMismatch" &&
+      entry.leftKind === "file" &&
+      entry.rightKind === "file" &&
       entry.leftSize !== null &&
       entry.rightSize !== null
     );
+  }
+  function entryKind(entry: FolderEntry, activeSide: FolderSide) {
+    return activeSide === "left" ? entry.leftKind : entry.rightKind;
   }
   function commands(entry: FolderEntry, activeSide: FolderSide): MenuCommand[] {
     const targets = selected.includes(entry.relative)
       ? entries.filter((item) => selected.includes(item.relative))
       : [entry];
+    const hasTypeMismatch = targets.some(
+      (item) => item.status === "typeMismatch",
+    );
     const invoke = (name: string) => onAction(name, targets, activeSide);
     return [
       {
         label: "Open With",
         run: () => invoke("openWith"),
-        disabled: busy || entry.isDirectory,
+        disabled: busy || entryKind(entry, activeSide) !== "file",
       },
       {
         label: "Open pair",
@@ -170,12 +177,12 @@ export function FolderView({
       {
         label: "Copy to Side...",
         run: () => invoke("copySide"),
-        disabled: busy,
+        disabled: busy || hasTypeMismatch,
       },
       {
         label: "Move to Side...",
         run: () => invoke("moveSide"),
-        disabled: busy,
+        disabled: busy || hasTypeMismatch,
       },
       {
         label: "Copy to Folder...",
@@ -215,7 +222,7 @@ export function FolderView({
       {
         label: "Synchronize...",
         run: () => invoke("synchronize"),
-        disabled: busy,
+        disabled: busy || hasTypeMismatch,
       },
       { label: "Explorer", run: () => invoke("reveal"), disabled: busy },
     ];
@@ -329,7 +336,7 @@ export function FolderView({
               }
             } else if (row && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
               event.preventDefault();
-              if (row.branch) {
+              if (side === "left" ? row.leftBranch : row.rightBranch) {
                 if ((event.key === "ArrowLeft") !== collapsed.has(row.path))
                   toggle(row.path);
               } else setSide(event.key === "ArrowLeft" ? "left" : "right");
@@ -393,6 +400,13 @@ export function FolderView({
                 aria-selected={tree ? selected.includes(node.path) : undefined}
               >
                 {(["left", "right"] as const).map((pane) => {
+                  const kind: FolderEntryKind | null = entry
+                    ? entryKind(entry, pane)
+                    : null;
+                  const sideBranch =
+                    pane === "left" ? node.leftBranch : node.rightBranch;
+                  const sideIsDirectory =
+                    kind === "directory" || (kind === null && sideBranch);
                   const missing =
                     !!entry &&
                     entry.status !== "error" &&
@@ -406,7 +420,7 @@ export function FolderView({
                     <div
                       className={`folder-side-columns folder-side ${entry?.status ?? ""} ${missing ? "missing" : ""}`}
                       key={pane}
-                      aria-label={`${pane === "left" ? "Left" : "Right"}: ${node.path}`}
+                      aria-label={`${pane === "left" ? "Left" : "Right"}: ${node.path}${kind ? ` (${kind})` : ""}${entry?.status === "typeMismatch" ? "; not compared because the entry kinds differ" : ""}`}
                       onClick={(event) => {
                         if (
                           (event.target as HTMLElement).closest("button,input")
@@ -440,7 +454,7 @@ export function FolderView({
                           (event.target as HTMLElement).closest("button,input")
                         )
                           return;
-                        if (node.branch) toggle(node.path);
+                        if (tree && sideBranch) toggle(node.path);
                         else if (entry && openable(entry)) openPair(entry);
                       }}
                       onContextMenu={(event) => {
@@ -477,7 +491,7 @@ export function FolderView({
                             />
                           </span>
                         )}
-                        {tree && node.branch ? (
+                        {tree && sideBranch ? (
                           <button
                             className="tree-toggle"
                             disabled={missing}
@@ -505,11 +519,11 @@ export function FolderView({
                         ) : null}
                         {!missing && (
                           <Icon
-                            className={`entry-icon ${entry?.status === "error" ? "error-icon" : node.branch || entry?.isDirectory ? "folder-icon" : "file-icon"}`}
+                            className={`entry-icon ${entry?.status === "error" ? "error-icon" : sideIsDirectory ? "folder-icon" : "file-icon"}`}
                             name={
                               entry?.status === "error"
                                 ? "error"
-                                : node.branch || entry?.isDirectory
+                                : sideIsDirectory
                                   ? tree && !collapsed.has(node.path)
                                     ? "openFolder"
                                     : "folder"
@@ -524,9 +538,17 @@ export function FolderView({
                               ? relative.split("/").at(-1)
                               : relative}
                         </span>
+                        {entry?.status === "typeMismatch" && (
+                          <span
+                            className="type-mismatch-note"
+                            title={entry.detail ?? "The entry kinds differ."}
+                          >
+                            Not compared
+                          </span>
+                        )}
                       </span>
                       <span className="file-size">
-                        {missing || node.branch || entry?.isDirectory
+                        {missing || sideIsDirectory
                           ? ""
                           : (() => {
                               const size =
@@ -558,7 +580,7 @@ export function FolderView({
                               )
                             }
                             onClick={() =>
-                              entry.isDirectory
+                              entryKind(entry, pane) === "directory"
                                 ? onAction("copySide", [entry], pane)
                                 : preview(
                                     entry,

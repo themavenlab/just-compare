@@ -32,6 +32,7 @@ import {
   formatFolderErrorsLabel,
   formatSize,
   matchesFilter,
+  matchesKindFilter,
   matchesName,
   toggleFolderErrorFilter,
 } from "./folderPresentation";
@@ -2653,8 +2654,7 @@ export function ComparisonWorkspace({
     (row) =>
       peek ||
       (matchesName(row.relative, quickFilter || "*") &&
-        (filesVisible === "all" ||
-          row.isDirectory === (filesVisible === "folders")) &&
+        matchesKindFilter(row, filesVisible) &&
         (showMinor || row.importance !== "unimportant") &&
         !ignored.has(row.relative)),
   );
@@ -2666,6 +2666,8 @@ export function ComparisonWorkspace({
       throw new Error(
         "Folder results are stale. Refresh the current roots before opening a listed pair.",
       );
+    if (row.leftKind !== "file" || row.rightKind !== "file")
+      throw new Error("Only file-to-file pairs can be opened in Text Compare.");
     const left = await join(
       folderRoots.left,
       ...(row.leftRelative ?? row.relative).split("/"),
@@ -2689,6 +2691,25 @@ export function ComparisonWorkspace({
     }
     if (busy) {
       setError("Wait for the active operation to finish.");
+      return;
+    }
+    if (
+      ["copySide", "moveSide", "synchronize"].includes(action) &&
+      entries.some((entry) => entry.status === "typeMismatch")
+    ) {
+      setError(
+        "File/folder type mismatches cannot be copied, moved or synchronized as counterparts.",
+      );
+      return;
+    }
+    if (
+      action === "openWith" &&
+      entries.some(
+        (entry) =>
+          (side === "left" ? entry.leftKind : entry.rightKind) !== "file",
+      )
+    ) {
+      setError("Open With requires a file on the selected side.");
       return;
     }
     setOverwriteAction(false);
@@ -2883,7 +2904,7 @@ export function ComparisonWorkspace({
     if (showResults) setContentResults(selectedResults);
     setFolderDialog(null);
     setNotice(
-      `Compared ${selectedResults.length} selected entries. ${selectedResults.filter((entry) => entry.status === "error").length} errors.`,
+      `Compared ${selectedResults.length} selected entries. ${selectedResults.filter((entry) => entry.status === "error").length} errors; ${selectedResults.filter((entry) => entry.status === "typeMismatch").length} not compared because the entry kinds differ.`,
     );
   }
   async function prepareFolderAction() {
