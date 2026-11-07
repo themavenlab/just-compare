@@ -1,195 +1,222 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  access,
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
   executableName,
   productName,
   productSlug,
   tauriConfig,
 } from "./app-config.mjs";
+import {
+  collectWindowsNotices,
+  copyWindowsRuntime,
+} from "./windows-distribution.mjs";
 
-if (process.platform !== "win32") {
-  throw new Error("MSIX packaging requires Windows.");
-}
+export const storeIdentity = Object.freeze({
+  name: "TheMavenLab.JustCompare",
+  publisher: "CN=A266218B-395C-4CD1-A1EF-AE4605D7113C",
+  publisherDisplayName: "The Maven Lab",
+  storeId: "9MXXWGZP2CR5",
+});
 
-const root = fileURLToPath(new URL("../../../", import.meta.url));
-const desktopRoot = join(root, "apps", "desktop");
-// Read and normalize version for Windows MSIX (must be 4-part: major.minor.build.revision)
-const rawVersion = tauriConfig.version ?? "0.1.0";
-const versionParts = rawVersion.split(".");
-while (versionParts.length < 4) versionParts.push("0");
-const packageVersion = versionParts.slice(0, 4).join(".");
-
-// Identity details from Microsoft Partner Center
-const PACKAGE_NAME = "TheMavenLab.JustCompare";
-const PUBLISHER_ID = "CN=A266218B-395C-4CD1-A1EF-AE4605D7113C";
-const PUBLISHER_DISPLAY_NAME = "The Maven Lab";
-const DISPLAY_NAME = productName;
-const EXECUTABLE_NAME = executableName;
-
-console.log(`Packaging ${DISPLAY_NAME} v${packageVersion} (MSIX)...`);
-
-// Locate makeappx.exe
-function findMakeAppx() {
-  const candidateDirs = [
-    "C:\\Program Files (x86)\\Windows Kits\\10\\bin",
-    "C:\\Program Files (x86)\\Windows Kits\\10\\App Certification Kit",
-  ];
-  for (const base of candidateDirs) {
-    try {
-      const output = execFileSync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-Command",
-          `Get-ChildItem -Path '${base}' -Recurse -Filter 'makeappx.exe' -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*x64*' } | Select-Object -First 1 -ExpandProperty FullName`,
-        ],
-        { encoding: "utf8" },
-      ).trim();
-      if (output) return output;
-    } catch {}
-  }
-  // Fallback to checking PATH
-  try {
-    return execFileSync("where.exe", ["makeappx.exe"], { encoding: "utf8" })
-      .trim()
-      .split(/\r?\n/)[0];
-  } catch {
+export function msixVersion(version) {
+  if (
+    typeof version !== "string" ||
+    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.0)?$/.test(version)
+  )
     throw new Error(
-      "makeappx.exe not found. Install the Windows SDK or Desktop C++ tools.",
+      "Store version must be major.minor.build, optionally followed by .0; prereleases and nonzero revisions are not supported.",
     );
-  }
+  const parts = version.split(".").map(Number);
+  if (parts.some((part) => part > 65535) || parts[0] === 0)
+    throw new Error(
+      "MSIX version components must fit 0..65535 and major must be greater than zero.",
+    );
+  return [...parts.slice(0, 3), 0].join(".");
 }
 
-const makeappx = findMakeAppx();
-console.log(`Found makeappx: ${makeappx}`);
+const xml = (value) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("'", "&apos;");
 
-// Ensure build output is ready
-const releaseDesktop = join(
-  desktopRoot,
-  "src-tauri",
-  "target",
-  "release",
-  "just-compare.exe",
-);
-try {
-  await access(releaseDesktop);
-} catch {
-  console.log("Release binary not found. Compiling release build...");
-  execFileSync(
-    "cargo",
-    [
-      "build",
-      "--release",
-      "--manifest-path",
-      join(desktopRoot, "src-tauri", "Cargo.toml"),
-    ],
-    { stdio: "inherit", cwd: root },
-  );
-}
-
-// Prepare staging layout
-const stagingDir = join(root, "artifacts", "msix-staging");
-await rm(stagingDir, { recursive: true, force: true });
-await mkdir(join(stagingDir, "Assets"), { recursive: true });
-
-// Copy App Icons
-const iconsDir = join(desktopRoot, "src-tauri", "icons");
-const requiredAssets = [
-  "StoreLogo.png",
-  "Square44x44Logo.png",
-  "Square150x150Logo.png",
-];
-
-for (const asset of requiredAssets) {
-  const src = join(iconsDir, asset);
-  const dest = join(stagingDir, "Assets", asset);
-  await cp(src, dest);
-}
-
-// Generate AppxManifest.xml
-const appxManifest = `<?xml version="1.0" encoding="utf-8"?>
-<Package
-  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+export function msixManifest(version) {
+  const checkedVersion = msixVersion(version);
+  return `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap uap10 rescap">
-
-  <Identity
-    Name="${PACKAGE_NAME}"
-    Publisher="${PUBLISHER_ID}"
-    Version="${packageVersion}"
-    ProcessorArchitecture="x64" />
-
+  <Identity Name="${storeIdentity.name}" Publisher="${storeIdentity.publisher}" Version="${checkedVersion}" ProcessorArchitecture="x64" />
   <Properties>
-    <DisplayName>${DISPLAY_NAME}</DisplayName>
-    <PublisherDisplayName>${PUBLISHER_DISPLAY_NAME}</PublisherDisplayName>
+    <DisplayName>${xml(productName)}</DisplayName>
+    <PublisherDisplayName>${xml(storeIdentity.publisherDisplayName)}</PublisherDisplayName>
     <Logo>Assets\\StoreLogo.png</Logo>
-    <Description>Fast, dependable local file and folder compare, 3-way merge, and diff utility.</Description>
+    <Description>Local text and folder comparison and three-way merge.</Description>
   </Properties>
-
-  <Resources>
-    <Resource Language="en-us" />
-  </Resources>
-
-  <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
-  </Dependencies>
-
-  <Capabilities>
-    <rescap:Capability Name="runFullTrust" />
-  </Capabilities>
-
+  <Resources><Resource Language="en-us" /></Resources>
+  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
+  <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>
   <Applications>
-    <Application Id="App"
-      Executable="${EXECUTABLE_NAME}"
-      uap10:RuntimeBehavior="packagedClassicApp"
-      uap10:TrustLevel="mediumIL">
-      <uap:VisualElements
-        DisplayName="${DISPLAY_NAME}"
-        Description="Fast, dependable local file and folder compare, 3-way merge, and diff utility."
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\\Square150x150Logo.png"
-        Square44x44Logo="Assets\\Square44x44Logo.png">
-      </uap:VisualElements>
+    <Application Id="App" Executable="${xml(executableName)}" uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
+      <uap:VisualElements DisplayName="${xml(productName)}" Description="Local compare and merge."
+        BackgroundColor="transparent" Square150x150Logo="Assets\\Square150x150Logo.png" Square44x44Logo="Assets\\Square44x44Logo.png" />
     </Application>
   </Applications>
 </Package>
 `;
+}
 
-await writeFile(join(stagingDir, "AppxManifest.xml"), appxManifest, "utf8");
+async function findMakeAppx() {
+  const sdkRoot = "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
+  const versions = (await readdir(sdkRoot, { withFileTypes: true }))
+    .filter(
+      (entry) => entry.isDirectory() && /^\d+\.\d+\.\d+\.\d+$/.test(entry.name),
+    )
+    .map((entry) => entry.name)
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  for (const version of versions) {
+    const candidate = join(sdkRoot, version, "x64", "makeappx.exe");
+    try {
+      await access(candidate);
+      return candidate;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error(
+    "makeappx.exe not found in the Windows SDK. Install the Windows SDK packaging tools.",
+  );
+}
 
-// Copy Executable and loader
-await cp(releaseDesktop, join(stagingDir, EXECUTABLE_NAME));
-const loader = join(dirname(releaseDesktop), "WebView2Loader.dll");
-try {
-  await access(loader);
-  await cp(loader, join(stagingDir, "WebView2Loader.dll"));
-} catch {}
+export async function packageMsix() {
+  if (process.platform !== "win32")
+    throw new Error("MSIX packaging requires Windows.");
+  const version = msixVersion(tauriConfig.version);
+  const root = fileURLToPath(new URL("../../../", import.meta.url));
+  const host = /^host: (.+)$/m.exec(
+    execFileSync("rustc", ["-vV"], { encoding: "utf8" }),
+  )?.[1];
+  if (host !== "x86_64-pc-windows-msvc")
+    throw new Error(
+      "Store candidate packaging requires the reviewed x64 Windows MSVC toolchain.",
+    );
+  const makeappx = await findMakeAppx();
+  execFileSync(
+    process.env.ComSpec ?? "cmd.exe",
+    ["/d", "/s", "/c", "npm run build"],
+    { cwd: root, stdio: "inherit" },
+  );
+  execFileSync("cargo", ["build", "--workspace", "--release", "--locked"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  execFileSync(
+    "cargo",
+    [
+      "build",
+      "--manifest-path",
+      join("apps", "desktop", "src-tauri", "Cargo.toml"),
+      "--release",
+      "--locked",
+      "--features",
+      "tauri/custom-protocol",
+    ],
+    { cwd: root, stdio: "inherit" },
+  );
+  const artifacts = join(root, "artifacts");
+  await mkdir(artifacts, { recursive: true });
+  const staging = await mkdtemp(join(artifacts, "msix-staging-"));
+  const loaderAvailable = await copyWindowsRuntime({
+    root,
+    destination: staging,
+    host,
+    executableName,
+    desktop: join(
+      root,
+      "apps",
+      "desktop",
+      "src-tauri",
+      "target",
+      "release",
+      "just-compare.exe",
+    ),
+    cli: join(root, "target", "release", "compare.exe"),
+  });
+  const notices = await collectWindowsNotices(root, staging, host);
+  await mkdir(join(staging, "Assets"));
+  for (const asset of [
+    "StoreLogo.png",
+    "Square44x44Logo.png",
+    "Square150x150Logo.png",
+  ])
+    await cp(
+      join(root, "apps", "desktop", "src-tauri", "icons", asset),
+      join(staging, "Assets", asset),
+    );
+  await writeFile(join(staging, "AppxManifest.xml"), msixManifest(version));
+  await writeFile(
+    join(staging, "CLI-README.txt"),
+    [
+      "CLI/Git installation integration is not yet release-validated.",
+      `compare.exe requires COMPARE_DESKTOP set to the absolute installed ${executableName} path.`,
+      "Do not use package-version-specific installation paths as a permanent Git configuration.",
+      "Microsoft WebView2 Evergreen Runtime is required.",
+      "THIRD-PARTY.json over-includes build dependencies; distribution review is still required.",
+    ].join("\r\n"),
+  );
+  const output = join(
+    artifacts,
+    `${productSlug}-${version}-windows-x64-${Date.now()}.msix`,
+  );
+  execFileSync(makeappx, ["pack", "/v", "/d", staging, "/p", output], {
+    stdio: "inherit",
+  });
+  const sha256 = createHash("sha256")
+    .update(await readFile(output))
+    .digest("hex");
+  const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  const dirty =
+    execFileSync("git", ["status", "--porcelain"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim().length > 0;
+  const evidence = {
+    output,
+    staging,
+    version,
+    sha256,
+    revision,
+    dirty,
+    host,
+    loaderAvailable,
+    thirdPartyPackages: notices.length,
+    verification:
+      "Package creation only; installation, certification and Store delivery remain unverified.",
+  };
+  await writeFile(`${output}.json`, JSON.stringify(evidence, null, 2));
+  console.log(JSON.stringify(evidence, null, 2));
+}
 
-// Output package file
-const artifactsDir = join(root, "artifacts");
-await mkdir(artifactsDir, { recursive: true });
-const outputMsix = join(
-  artifactsDir,
-  `${productSlug}-${packageVersion}-windows-x64.msix`,
-);
-
-console.log(`Running makeappx pack -> ${outputMsix}`);
-execFileSync(
-  makeappx,
-  ["pack", "/o", "/v", "/d", stagingDir, "/p", outputMsix],
-  { stdio: "inherit" },
-);
-
-// Calculate SHA256 checksum
-const hash = createHash("sha256")
-  .update(await readFile(outputMsix))
-  .digest("hex");
-
-console.log("\n===========================================");
-console.log(`SUCCESS: Package created at:`);
-console.log(`  ${outputMsix}`);
-console.log(`Package Version: ${packageVersion}`);
-console.log(`SHA-256: ${hash}`);
-console.log("===========================================\n");
+if (
+  process.argv[1] &&
+  pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+)
+  await packageMsix();

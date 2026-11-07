@@ -4,6 +4,8 @@ This document provides the durable implementation direction for developers and A
 
 Phase 1's local Windows acceptance is recorded in the [Validation Guide](../engineering/validation.md). This is a bounded MVP, with a verified unsigned portable package and configured but unexecuted macOS/Linux CI. Public release, signing, broader OS certification, and specialized formats remain later work, not implied by MVP completion.
 
+The immediate distribution objective is now a free Windows Store release, with en-US content and Windows 10 build 19041+/Windows 11 x64 as validation targets. Follow the [release guide](../engineering/release.md) before publication. MIT OR Apache-2.0 remains unchanged; public source publication is separate.
+
 | Milestone | Deliverables | Exit evidence |
 | --- | --- | --- |
 | Engineering foundation | Agent rules, architecture, safety, commit and contribution guides | Consistent guidance, usable templates, no assumed build tooling |

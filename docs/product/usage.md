@@ -4,6 +4,16 @@ This guide covers everyday usage of Just Compare, including text comparison, fol
 
 ---
 
+## Before you begin
+
+- Public distribution is not yet verified. See the [release guide](../engineering/release.md) for Windows support targets and gates.
+- Compare is read-only; copying into an editor changes its draft, not the source. Saving, synchronization and local file actions require explicit intent.
+- Try file operations on disposable copies first. Read the [data-safety limitations](../engineering/data-safety.md#implemented-local-backend).
+- Text inputs are bounded to 1 MiB/20,000 lines per side; folder scans to 10,000 entries per root and 100 MiB per file. Specialized binary/image/document comparison, archives and remote providers are not part of this release.
+- Settings, history and optional recovery drafts stay on the device; see the [privacy policy](../../PRIVACY.md).
+
+---
+
 ## 1. Workbench Navigation & Tabs
 
 Normal startup opens Home, which presents the three supported workflows as cards (Folder Compare, Text Compare, and 3-Way Merge), with recent complete comparisons, searchable saved sessions, draft recovery, and preferences beside them. Use Home, the **+** button at the end of the tab strip (`Ctrl+T`), or the File menu to open independent Text Compare, Folder Compare, or 3-Way Merge tabs. Each tab independently retains its drafts, comparison rules, selections, diff results, Undo history, and scroll viewports. A dot marks unsaved edits; closing a dirty tab or the window requests confirmation before discarding them. Use `Ctrl+Tab` / `Cmd+Tab` to switch between tabs and `Ctrl+W` / `Cmd+W` to close the active tab. In menus, Enter opens a menu, arrow keys or Home/End move among commands, Escape closes and restores focus, and Tab exits to the next or previous control. Drag the central splitter to adjust pane widths. Secondary commands and panels (rules, aligned view, legend, preferences) are available through the View and Edit menus without permanently cluttering editor space.

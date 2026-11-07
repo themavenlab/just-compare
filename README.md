@@ -46,13 +46,16 @@ Run each command sequentially after the previous succeeds. The repository pins R
 
 If `cargo` or `rustup` are not found after installation, restart VS Code or add `$env:USERPROFILE\.cargo\bin` to PATH as described in [Windows local development](docs/engineering/validation.md#windows-local-development). Always use disposable files and folders for save, mirror, move, and recycle tests.
 
-For an optimized local Windows package, build the frontend and native binaries, then run `npm run package:windows --workspace apps/desktop`. The packager produces an unsigned relocatable ZIP including executables, the GNU WebView2 loader, licenses, and SHA-256 digests.
+For an optimized local Windows package, build the frontend and native binaries, then run `npm run package:windows --workspace apps/desktop`. The packager produces an unsigned relocatable ZIP including executables, the toolchain-required WebView2 loader, licenses, and SHA-256 digests. The `npm run package:msix` script is a separate Store packaging path; see the [Release Guide](docs/engineering/release.md).
 
 ## Documentation
 
+- **[Documentation Index](docs/README.md)** - Documentation catalog organized by audience and workflow.
 - **[Usage Guide](docs/product/usage.md)** - Everyday workflows for text diff, folder sync, 3-way merge, and Git integration.
 - **[Product Roadmap & Scope](docs/product/roadmap.md)** - MVP feature set, core requirements, and future milestones.
 - **[Architecture Overview](docs/architecture/overview.md)** - System design, component boundaries, and IPC conventions.
+- **[Store Release Preparation](docs/engineering/release.md)** - Requirements, validation gates, and packaging workflow for the Windows Store.
+- **[Future Source Publication](docs/engineering/source-publication.md)** - Gates and obligations for changing repository visibility.
 - **[Data Safety Contract](docs/engineering/data-safety.md)** - Non-negotiable guarantees for file handling, sync, and deletion.
 - **[Validation & Definition of Done](docs/engineering/validation.md)** - Testing commands, Windows setup, verified evidence, and performance measurements.
 - **[Dependency Review](docs/engineering/dependencies.md)** - Direct dependencies, licensing terms, and distribution obligations.

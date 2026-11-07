@@ -24,6 +24,7 @@
     "test:folder-save": "node scripts/folder-save-regression.mjs",
     "package:windows": "node scripts/package-windows.mjs",
     "package:msix": "node scripts/package-msix.mjs",
+    "test:packaging": "node --test scripts/packaging-regression.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

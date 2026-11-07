@@ -35,7 +35,7 @@ This document tracks approved direct dependencies, licensing terms, and transiti
 ## Transitive Obligations
 
 - **Mozilla Public License (MPL-2.0):** Certain transitive build dependencies (e.g. `lightningcss` in npm) and Rust crates (`cssparser`, `selectors`, `dtoa-short`, `option-ext`) are licensed under MPL-2.0. MPL obligations apply at the file level and do not relicense unrelated application code. When redistributing binaries, applicable source availability requirements are respected.
-- **WebView2 Loader:** When distributing on Windows under the GNU toolchain, `WebView2Loader.dll` is bundled alongside its required [redistribution notice](licenses/webview2-loader.txt). The system-installed WebView2 Evergreen Runtime itself retains Microsoft's standard terms.
+- **WebView2 Loader:** When distributing on Windows under the GNU toolchain, `WebView2Loader.dll` is bundled alongside its required [redistribution notice](licenses/webview2-loader.txt). The system-installed WebView2 Evergreen Runtime itself retains Microsoft's standard terms. MSVC may use static loading. Release-preparation validation exercised shared runtime/notice staging and real MakeAppx pack/unpack with MSVC debug binaries; that is not a production release, installation test or legal certification. The ZIP and MSIX scripts share `windows-distribution.mjs` for runtime and notice/source collection. Missing GNU loader or unexpected IO failures are errors; an absent loader is allowed for MSVC. The MSIX includes the CLI, but installed CLI/Git discoverability and Explorer behavior remain release gates.
 - **Lockfile Auditing:** Every dependency addition or version bump requires inspecting transitive licenses in `Cargo.lock` and `package-lock.json`.
 
 ---

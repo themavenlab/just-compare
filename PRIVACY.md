@@ -26,7 +26,7 @@ Just Compare saves user configuration and temporary state solely on your local d
 Just Compare offers optional, per-user context menu shortcuts in Windows File Explorer (e.g., *"Select as left file for compare"* and *"Compare to..."*). 
 * When enabled, the path of the selected left item is recorded locally on your disk in your local configuration directory.
 * Explorer integration does not grant elevated privileges, alter system-wide file associations, or track file operations.
-* Integration can be completely enabled or disabled at any time from within the application's **Integration** menu, and is fully removed upon app uninstallation.
+* Integration can be enabled or removed from the application's **Integration** menu. Remove it before moving or deleting a portable executable. Cleanup on uninstall of a Store package must be verified before that distribution is released; it is not promised by the current portable workflow.
 
 ---
 
@@ -43,4 +43,9 @@ If we update this Privacy Policy, the revised version will be posted in this rep
 ### 6. Contact
 If you have any questions about this Privacy Policy, you can reach out via:
 * **Website:** [themavenlab.org](https://themavenlab.org)
-* **GitHub Repository:** Issues and discussions on GitHub.
+* A direct public support contact will be added before release. The source repository is currently private; its issues and discussions are not a public support channel.
+
+---
+
+### 7. Website and Distribution Services
+This policy describes the application. The product website is hosted separately and hosting providers may process connection information and access logs. Microsoft Store delivery, updates and platform diagnostics are governed by Microsoft's policies and user settings. The app's local processing statements do not promise that those independent services collect no data.

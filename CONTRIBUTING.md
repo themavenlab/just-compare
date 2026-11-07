@@ -1,6 +1,6 @@
 # Contributing to Just Compare
 
-Thank you for your interest in contributing! We welcome contributions to improve diffing performance, platform support, usability, and documentation.
+Thank you for your interest in contributing! We welcome contributions to improve diffing performance, platform support, usability, and documentation. The source repository is currently private. This guide is for authorized contributors until [source publication](docs/engineering/source-publication.md) is separately approved; it does not announce public contribution availability. Start with the [documentation index](docs/README.md).
 
 ## Getting Started
 
