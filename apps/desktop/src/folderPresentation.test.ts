@@ -4,9 +4,11 @@ import {
   canCopy,
   differenceFilters,
   folderRows,
+  formatFolderErrorsLabel,
   formatSize,
   matchesFilter,
   matchesName,
+  toggleFolderErrorFilter,
 } from "./folderPresentation";
 import {
   plainPath,
@@ -268,5 +270,20 @@ describe("folder presentation", () => {
     expect(plainPath("\\\\?\\UNC\\server\\share")).toBe("\\\\server\\share");
     expect(plainPath("\\\\?\\Volume{1}\\a")).toBe("\\\\?\\Volume{1}\\a");
     expect(plainPath("/tmp/a")).toBe("/tmp/a");
+  });
+  it("formats singular and plural comparison error labels for inactive and active states", () => {
+    expect(formatFolderErrorsLabel(1, false)).toBe("Show 1 comparison error");
+    expect(formatFolderErrorsLabel(1, true)).toBe("Showing 1 comparison error");
+    expect(formatFolderErrorsLabel(3, false)).toBe("Show 3 comparison errors");
+    expect(formatFolderErrorsLabel(3, true)).toBe(
+      "Showing 3 comparison errors",
+    );
+  });
+  it("toggles comparison error filter and restores the previous active filter", () => {
+    expect(toggleFolderErrorFilter("all", "all")).toBe("error");
+    expect(toggleFolderErrorFilter("differences", "differences")).toBe("error");
+    expect(toggleFolderErrorFilter("error", "differences")).toBe("differences");
+    expect(toggleFolderErrorFilter("error", "all")).toBe("all");
+    expect(toggleFolderErrorFilter("error", "error")).toBe("all");
   });
 });

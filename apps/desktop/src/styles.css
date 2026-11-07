@@ -1522,9 +1522,69 @@ body,
     monospace;
   flex: 1;
 }
-.folder-errors {
+.folder-errors-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   align-self: flex-start;
+  padding: 3px 8px;
+  margin: 3px 0;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+.folder-errors-banner.active {
+  background: var(--removed);
+  border-color: var(--danger);
+}
+.folder-errors {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--danger);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  min-height: 22px;
+  height: 22px;
+  cursor: pointer;
+}
+.folder-errors:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border);
+}
+.workbench-shell .folder-errors[aria-pressed="true"],
+.folder-errors.active {
+  color: var(--danger);
+  background: var(--surface);
+  border-color: var(--danger);
+  font-weight: 600;
+}
+.folder-errors .tool-symbol {
+  width: 13px;
+  height: 13px;
+  color: var(--danger);
+  flex-shrink: 0;
+}
+.folder-errors-clear {
+  font-size: 11px;
+  padding: 1px 8px;
+  height: 22px;
+  min-height: 22px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.folder-errors-clear:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
 }
 .workspace-dialog {
   width: min(620px, calc(100vw - 32px));

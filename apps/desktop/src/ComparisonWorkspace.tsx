@@ -27,8 +27,18 @@ import {
   type Settings,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
+import {
+  differenceFilters,
+  formatFolderErrorsLabel,
+  formatSize,
+  matchesFilter,
+  matchesName,
+  toggleFolderErrorFilter,
+} from "./folderPresentation";
+import { FolderRulesDialog } from "./FolderRulesDialog";
 import { LineInspector } from "./LineInspector";
 import { PathInput } from "./PathInput";
+import { TextSearchPanel } from "./TextSearchPanel";
 import { ToolButton } from "./ToolButton";
 import {
   fileName,
@@ -255,6 +265,25 @@ export function ComparisonWorkspace({
     right: "",
   });
   const [filter, setFilter] = useState("all");
+  const [previousFilter, setPreviousFilter] = useState("all");
+  const [prevFolders, setPrevFolders] = useState(folders);
+  if (folders !== prevFolders) {
+    setPrevFolders(folders);
+    if (
+      filter === "error" &&
+      folders.length > 0 &&
+      !folders.some((entry) => entry.status === "error")
+    ) {
+      setFilter("all");
+      setPreviousFilter("all");
+    }
+  }
+  const selectFilter = (nextFilter: string) => {
+    setFilter(nextFilter);
+    if (nextFilter !== "error") {
+      setPreviousFilter(nextFilter);
+    }
+  };
   const [quickFilter, setQuickFilter] = useState("*.*");
   const [peek, setPeek] = useState(false);
   const [showMinor, setShowMinor] = useState(true);
@@ -1457,6 +1486,9 @@ export function ComparisonWorkspace({
       jobId,
     });
     setFolders(result);
+    if (filter === "error") {
+      selectFilter("all");
+    }
     setFolderRoots(roots);
     setNativeFolderRoots(roots);
     rememberRoots(roots);
@@ -4559,15 +4591,15 @@ export function ComparisonWorkspace({
                 icon="all"
                 description="Show all scanned entries."
                 aria-pressed={filter === "all"}
-                onClick={() => setFilter("all")}
+                onClick={() => selectFilter("all")}
               />
               <CommandMenu
                 label="Diffs"
                 icon="differences"
-                description={`Current filter: ${differenceFilters.find(([value]) => value === filter)?.[1] ?? filter}. Comparison and refresh preserve this choice.`}
+                description={`Current filter: ${differenceFilters.find(([value]) => value === filter)?.[1] ?? (filter === "error" ? "Comparison Errors" : filter)}. Comparison and refresh preserve this choice.`}
                 commands={differenceFilters.map(([value, label]) => ({
                   label,
-                  run: () => setFilter(value),
+                  run: () => selectFilter(value),
                 }))}
               />
               <ToolButton
@@ -4575,7 +4607,7 @@ export function ComparisonWorkspace({
                 icon="same"
                 description="Show entries equal under the active rules."
                 aria-pressed={filter === "same"}
-                onClick={() => setFilter("same")}
+                onClick={() => selectFilter("same")}
               />
               <CommandMenu
                 label="Structure"
@@ -4767,15 +4799,53 @@ export function ComparisonWorkspace({
                 ? `${visibleFolders.length} matching entries / ${selectedFiles.length} selected.`
                 : "Scan folders to list their contents. Row arrows preview either copy direction; Update and Mirror run left to right."}
           </p>
-          {folders.some((entry) => entry.status === "error") && (
-            <button
-              className="folder-errors"
-              onClick={() => setFilter("error")}
-            >
-              Show {folders.filter((entry) => entry.status === "error").length}{" "}
-              comparison errors
-            </button>
-          )}
+          {folders.some((entry) => entry.status === "error") &&
+            (() => {
+              const errorCount = folders.filter(
+                (entry) => entry.status === "error",
+              ).length;
+              const isFilteringErrors = filter === "error";
+              return (
+                <div
+                  className={`folder-errors-banner${isFilteringErrors ? " active" : ""}`}
+                  role="status"
+                >
+                  <button
+                    type="button"
+                    className={`folder-errors${isFilteringErrors ? " active" : ""}`}
+                    aria-pressed={isFilteringErrors}
+                    onClick={() => {
+                      if (filter !== "error") {
+                        setPreviousFilter(filter);
+                      }
+                      setFilter(
+                        toggleFolderErrorFilter(filter, previousFilter),
+                      );
+                    }}
+                    title={
+                      isFilteringErrors
+                        ? "Clear comparison error filter and restore previous view"
+                        : `Filter view to show only ${errorCount} comparison ${errorCount === 1 ? "error" : "errors"}`
+                    }
+                  >
+                    <Icon name="error" className="tool-symbol" />
+                    <span>
+                      {formatFolderErrorsLabel(errorCount, isFilteringErrors)}
+                    </span>
+                  </button>
+                  {isFilteringErrors && (
+                    <button
+                      type="button"
+                      className="folder-errors-clear"
+                      onClick={() => selectFilter("all")}
+                      title="Clear error filter and show all entries"
+                    >
+                      Show all entries
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
           <FolderView
             key={`${nativeFolderRoots.left}\0${nativeFolderRoots.right}`}
             entries={filteredFolders}

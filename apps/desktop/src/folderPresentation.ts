@@ -19,6 +19,22 @@ export const differenceFilters = [
   ["leftOnly", "Show Left Orphans"],
   ["rightOnly", "Show Right Orphans"],
 ] as const;
+
+export function formatFolderErrorsLabel(count: number, active = false) {
+  const noun = count === 1 ? "comparison error" : "comparison errors";
+  return active ? `Showing ${count} ${noun}` : `Show ${count} ${noun}`;
+}
+
+export function toggleFolderErrorFilter(
+  currentFilter: string,
+  previousFilter = "all",
+) {
+  if (currentFilter === "error") {
+    return previousFilter === "error" ? "all" : previousFilter;
+  }
+  return "error";
+}
+
 export function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];
