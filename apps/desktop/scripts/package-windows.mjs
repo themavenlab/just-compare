@@ -12,12 +12,19 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  executableName,
+  productName,
+  productSlug,
+  tauriConfig,
+} from "./app-config.mjs";
 import { launchNative } from "./native-harness.mjs";
 
 if (process.platform !== "win32")
   throw new Error("This portable packaging target requires Windows.");
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const label = `just-compare-0.1.0-windows-x64-${Date.now()}`;
+const version = tauriConfig.version ?? "0.1.0";
+const label = `${productSlug}-${version}-windows-x64-${Date.now()}`;
 const destination = join(root, "artifacts", label);
 const host = /^host: (.+)$/m.exec(
   execFileSync("rustc", ["-vV"], { encoding: "utf8" }),
@@ -55,13 +62,13 @@ const desktop = join(
   "src-tauri",
   "target",
   "release",
-  "compare-desktop.exe",
+  "just-compare.exe",
 );
 const cli = join(root, "target", "release", "compare.exe");
 await access(desktop);
 await access(cli);
 await mkdir(destination, { recursive: true });
-await cp(desktop, join(destination, "compare-desktop.exe"));
+await cp(desktop, join(destination, executableName));
 await cp(cli, join(destination, "compare.exe"));
 const loader = join(dirname(desktop), "WebView2Loader.dll");
 let loaderAvailable = true;
@@ -189,11 +196,11 @@ await writeFile(
 await writeFile(
   join(destination, "README.txt"),
   [
-    "Just Compare 0.1.0 - local unsigned Windows x64 preview.",
-    "Run compare-desktop.exe. Requires the installed Microsoft WebView2 Evergreen Runtime.",
-    "This is not a signed installer, or a public release.",
+    `${productName} ${version} - local unsigned Windows x64 preview.`,
+    `Run ${executableName}. Requires the installed Microsoft WebView2 Evergreen Runtime.`,
+    "This is not a signed installer, public release, or full Beyond Compare parity.",
     "Text: 1 MiB / 20,000 lines per input. Folder: 10,000 entries per side, 100 MiB per file.",
-    "Set COMPARE_DESKTOP to the absolute compare-desktop.exe path when using compare.exe.",
+    `Set COMPARE_DESKTOP to the absolute ${executableName} path when using compare.exe.`,
     "Settings use the OS application-config directory, not this portable folder.",
     "Third-party license/attribution files and MPL package source are included.",
     "THIRD-PARTY.json includes the full resolved build graph, not only linked runtime dependencies.",
@@ -203,7 +210,7 @@ await writeFile(
 const hashes = {};
 for (const name of [
   "compare.exe",
-  "compare-desktop.exe",
+  executableName,
   ...(loaderAvailable ? ["WebView2Loader.dll"] : []),
 ])
   hashes[name] = createHash("sha256")
@@ -248,7 +255,7 @@ execFileSync(
 );
 const extracted = join(unpacked, label);
 const session = await launchNative(extracted, [], {
-  desktop: join(extracted, "compare-desktop.exe"),
+  desktop: join(extracted, executableName),
 });
 try {
   const spans = await session.call("compare_text", {

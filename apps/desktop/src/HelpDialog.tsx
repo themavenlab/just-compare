@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { WorkspaceDialog } from "./WorkspaceDialog";
+import { APP_NAME } from "./appName";
 
 export type HelpSection = "getting-started" | "shortcuts" | "about";
 
 const sections: { id: HelpSection; label: string }[] = [
   { id: "getting-started", label: "Getting Started" },
   { id: "shortcuts", label: "Keyboard shortcuts" },
-  { id: "about", label: "About Just Compare" },
+  { id: "about", label: `About ${APP_NAME}` },
 ];
 
 const shortcutGroups = [
@@ -136,7 +137,7 @@ export function HelpDialog({
           {section === "about" && (
             <div className="help-about">
               <p>
-                Just Compare is an original, local-first compare and merge
+                {APP_NAME} is an original, local-first compare and merge
                 workbench. This Phase 1 MVP supports text comparison, folder
                 comparison, and three-way merge workflows.
               </p>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { productName } from "./app-config.mjs";
 import { launchNative } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-keyboard-"));
@@ -267,11 +268,11 @@ try {
 
   await page.getByRole("button", { name: "Help", exact: true }).click();
   await page
-    .getByRole("menuitem", { name: "About Just Compare", exact: true })
+    .getByRole("menuitem", { name: `About ${productName}`, exact: true })
     .click();
   const about = page.getByRole("dialog", { name: "Help & About" });
   await about
-    .getByRole("heading", { name: "About Just Compare", exact: true })
+    .getByRole("heading", { name: `About ${productName}`, exact: true })
     .waitFor();
   assert.match(await about.innerText(), /does not upload your files/);
   assert.match(

@@ -23,6 +23,8 @@ Operational limits are enforced at the engine boundary: text inputs are bounded 
 
 ## Development
 
+The desktop display name is configured once as `productName` in [`apps/desktop/src-tauri/tauri.conf.json`](apps/desktop/src-tauri/tauri.conf.json). The UI, window title, and package labels use that value. Cargo and npm package names remain stable internal build identifiers.
+
 Install Node 22.17.0, npm 11.7.0, Rust 1.99.0, and [Tauri's native prerequisites](https://v2.tauri.app/start/prerequisites/). On Windows, install Visual Studio's **Desktop development with C++** workload (MSVC x64/x86 tools and Windows SDK) and the WebView2 Evergreen Runtime. Visual Studio Community or standalone Build Tools is sufficient; the full IDE is not required. Restart VS Code after installation so terminal sessions inherit the updated PATH.
 
 From the repository root in PowerShell:

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { productName } from "./app-config.mjs";
 import { launchNative, openWorkspace } from "./native-harness.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "compare-git-"));
@@ -60,7 +61,7 @@ try {
   assert.equal(await readFile(unrelated, "utf8"), "unrelated saved\n");
   assert.equal(
     await session.page
-      .getByRole("heading", { name: "Just Compare", exact: true })
+      .getByRole("heading", { name: productName, exact: true })
       .count(),
     1,
     "Saving an unrelated tab must not accept or terminate the Git merge.",

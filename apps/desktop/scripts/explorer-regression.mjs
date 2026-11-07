@@ -19,9 +19,9 @@ const config = join(root, "config");
 const originalExecutable =
   process.env.COMPARE_TEST_DESKTOP ??
   fileURLToPath(
-    new URL("../src-tauri/target/debug/compare-desktop.exe", import.meta.url),
+    new URL("../src-tauri/target/debug/just-compare.exe", import.meta.url),
   );
-const executable = join(root, "program files café", "compare-desktop.exe");
+const executable = join(root, "program files café", "just-compare.exe");
 let registeredExecutable = executable;
 let session;
 const launch = async (args, raw = false) => {

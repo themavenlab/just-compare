@@ -13,7 +13,7 @@ import {
 
 // Expected paths must not use 8.3 short names, which canonicalization expands.
 const root = await mkdtemp(
-  join(realpathSync.native(tmpdir()), "compare-workbench-"),
+  join(realpathSync.native(tmpdir()), "just-compare-"),
 );
 let session;
 try {

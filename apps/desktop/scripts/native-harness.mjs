@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { productName } from "./app-config.mjs";
 
 const workflowLabels = {
   text: "Text Compare",
@@ -107,7 +108,7 @@ export async function launchNative(config, args = [], options = {}) {
     options.desktop ??
     process.env.COMPARE_TEST_DESKTOP ??
     fileURLToPath(
-      new URL("../src-tauri/target/debug/compare-desktop.exe", import.meta.url),
+      new URL("../src-tauri/target/debug/just-compare.exe", import.meta.url),
     );
   await access(executable);
   const server = createServer();
@@ -193,7 +194,7 @@ export async function launchNative(config, args = [], options = {}) {
       console.error("Native renderer error:", error.message),
     );
     await page
-      .getByRole("heading", { name: "Just Compare", exact: true })
+      .getByRole("heading", { name: productName, exact: true })
       .waitFor({ state: "attached" });
     const call = (command, args = {}) =>
       page.evaluate(

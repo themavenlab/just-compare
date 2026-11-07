@@ -90,7 +90,7 @@ compare git-merge BASE_FILE LEFT_FILE RIGHT_FILE OUTPUT_FILE
 Configure Just Compare as your local Git difftool and mergetool. In PowerShell on Windows:
 
 ```powershell
-$env:COMPARE_DESKTOP = "C:\path\to\just-compare\compare-desktop.exe"
+$env:COMPARE_DESKTOP = "C:\path\to\just-compare\Just Compare.exe"
 git config --local diff.tool justcompare
 git config --local difftool.justcompare.cmd '"C:/path/to/just-compare/compare.exe" git-diff "$LOCAL" "$REMOTE"'
 

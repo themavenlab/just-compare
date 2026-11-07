@@ -388,7 +388,7 @@ mod windows {
     fn scoped_registration_is_quoted_owned_and_removable() {
       let root = RegKey::predef(HKEY_CURRENT_USER);
       let base = format!(r"Software\JustCompare\Tests\unit-{}", std::process::id());
-      let exe = r"\\?\C:\Synthetic Folder\Unicode-é\compare-desktop.exe";
+      let exe = r"\\?\C:\Synthetic Folder\Unicode-é\just-compare.exe";
       assert!(!registration_at(&root, &base, exe, None, None).unwrap());
       assert!(registration_at(&root, &base, exe, Some(true), None).unwrap());
       assert!(registration_at(&root, &base, exe, None, None).unwrap());
@@ -397,7 +397,7 @@ mod windows {
         .unwrap();
       assert_eq!(
         key.get_value::<String, _>("").unwrap(),
-        "\"C:\\Synthetic Folder\\Unicode-é\\compare-desktop.exe\" shell-compare \"%1\""
+        "\"C:\\Synthetic Folder\\Unicode-é\\just-compare.exe\" shell-compare \"%1\""
       );
       let menu = |class: &str, action: &str| {
         root
@@ -457,7 +457,7 @@ mod windows {
           .unwrap()
           .get_value::<String, _>("")
           .unwrap(),
-        "\"C:\\Synthetic Folder\\Unicode-é\\compare-desktop.exe\" shell-compare \"%V\""
+        "\"C:\\Synthetic Folder\\Unicode-é\\just-compare.exe\" shell-compare \"%V\""
       );
       assert!(background("compare")
         .get_value::<String, _>("LegacyDisable")

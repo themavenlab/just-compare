@@ -1,8 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  executableName,
+  productName,
+  productSlug,
+  tauriConfig,
+} from "./app-config.mjs";
 
 if (process.platform !== "win32") {
   throw new Error("MSIX packaging requires Windows.");
@@ -10,9 +13,6 @@ if (process.platform !== "win32") {
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const desktopRoot = join(root, "apps", "desktop");
-const tauriConfigPath = join(desktopRoot, "src-tauri", "tauri.conf.json");
-const tauriConfig = JSON.parse(await readFile(tauriConfigPath, "utf8"));
-
 // Read and normalize version for Windows MSIX (must be 4-part: major.minor.build.revision)
 const rawVersion = tauriConfig.version ?? "0.1.0";
 const versionParts = rawVersion.split(".");
@@ -23,8 +23,8 @@ const packageVersion = versionParts.slice(0, 4).join(".");
 const PACKAGE_NAME = "TheMavenLab.JustCompare";
 const PUBLISHER_ID = "CN=A266218B-395C-4CD1-A1EF-AE4605D7113C";
 const PUBLISHER_DISPLAY_NAME = "The Maven Lab";
-const DISPLAY_NAME = tauriConfig.productName ?? "Just Compare";
-const EXECUTABLE_NAME = "Just Compare.exe";
+const DISPLAY_NAME = productName;
+const EXECUTABLE_NAME = executableName;
 
 console.log(`Packaging ${DISPLAY_NAME} v${packageVersion} (MSIX)...`);
 
@@ -69,7 +69,7 @@ const releaseDesktop = join(
   "src-tauri",
   "target",
   "release",
-  "compare-desktop.exe",
+  "just-compare.exe",
 );
 try {
   await access(releaseDesktop);
@@ -172,7 +172,7 @@ const artifactsDir = join(root, "artifacts");
 await mkdir(artifactsDir, { recursive: true });
 const outputMsix = join(
   artifactsDir,
-  `JustCompare-${packageVersion}-windows-x64.msix`,
+  `${productSlug}-${packageVersion}-windows-x64.msix`,
 );
 
 console.log(`Running makeappx pack -> ${outputMsix}`);

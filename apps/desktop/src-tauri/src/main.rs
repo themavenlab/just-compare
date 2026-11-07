@@ -87,6 +87,16 @@ fn main() {
     }
   }
   let result = builder
+    .setup(|app| {
+      let product_name = app.config().product_name.as_deref().ok_or_else(|| {
+        std::io::Error::other("Tauri productName must be set to name the main window.")
+      })?;
+      let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| std::io::Error::other("The configured main window is missing."))?;
+      window.set_title(product_name)?;
+      Ok(())
+    })
     .plugin(tauri_plugin_dialog::init())
     .manage(std::sync::Arc::new(commands::Resources::default()))
     .invoke_handler(tauri::generate_handler![
