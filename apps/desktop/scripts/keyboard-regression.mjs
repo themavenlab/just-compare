@@ -275,14 +275,100 @@ try {
     .getByRole("heading", { name: `About ${productName}`, exact: true })
     .waitFor();
   assert.match(await about.innerText(), /does not upload your files/);
-  assert.match(
-    await about.innerText(),
-    /not a claim of complete feature parity/,
-  );
+  assert.match(await about.innerText(), /workbench from The Maven Lab/);
   await page.keyboard.press("Escape");
+  for (const [label, expected] of [
+    ["Report a bug", "Steps to reproduce with a synthetic example:"],
+    ["Request a feature", "Current workaround:"],
+  ]) {
+    await page.getByRole("button", { name: "Help", exact: true }).click();
+    await page.getByRole("menuitem", { name: label, exact: true }).click();
+    const feedback = page.getByRole("dialog", { name: "Help & About" });
+    await feedback.getByRole("heading", { name: label, exact: true }).waitFor();
+    assert.match(await feedback.innerText(), /compare@themavenlab\.org/);
+    assert.match(await feedback.innerText(), /Nothing is sent automatically/);
+    assert.match(
+      await feedback.innerText(),
+      /Send security concerns privately/,
+    );
+    assert.ok((await feedback.locator("pre").innerText()).includes(expected));
+    await feedback.getByRole("button", { name: "Copy email address" }).click();
+    await feedback
+      .getByRole("status")
+      .filter({
+        hasText: "Email address copied. Nothing was sent.",
+      })
+      .waitFor();
+    async function verifyClipboard(expected) {
+      await feedback.evaluate((dialog) => {
+        const target = document.createElement("textarea");
+        target.setAttribute("aria-label", "Synthetic clipboard verification");
+        dialog.append(target);
+        target.focus();
+      });
+      try {
+        await page.keyboard.press("Control+v");
+        await page.waitForFunction(
+          (value) =>
+            document.querySelector(
+              '[aria-label="Synthetic clipboard verification"]',
+            )?.value === value,
+          expected,
+        );
+      } finally {
+        await feedback
+          .getByRole("textbox", { name: "Synthetic clipboard verification" })
+          .evaluate((target) => target.remove());
+      }
+    }
+    await verifyClipboard("compare@themavenlab.org");
+    await feedback
+      .getByRole("button", { name: "Copy report template" })
+      .click();
+    await feedback
+      .getByRole("status")
+      .filter({
+        hasText: "Report template copied. Nothing was sent.",
+      })
+      .waitFor();
+    await verifyClipboard(await feedback.locator("pre").innerText());
+    await page.evaluate(() => {
+      window.__originalClipboardWrite = navigator.clipboard.writeText;
+      navigator.clipboard.writeText = () =>
+        Promise.reject(new Error("Synthetic clipboard denial"));
+    });
+    try {
+      for (const name of ["Copy email address", "Copy report template"]) {
+        await feedback.getByRole("button", { name }).click();
+        await feedback
+          .getByRole("alert")
+          .filter({ hasText: "Synthetic clipboard denial" })
+          .waitFor();
+        assert.equal(await feedback.getByRole("status").count(), 0);
+        assert.match(await feedback.getByRole("alert").innerText(), /manually/);
+      }
+    } finally {
+      await page.evaluate(() => {
+        navigator.clipboard.writeText = window.__originalClipboardWrite;
+        delete window.__originalClipboardWrite;
+      });
+    }
+    if (label === "Report a bug") await page.keyboard.press("Escape");
+    else
+      await feedback
+        .getByRole("button", { name: "Close Help & About" })
+        .click();
+    await feedback.waitFor({ state: "hidden" });
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Help", exact: true })
+        .evaluate((button) => button === document.activeElement),
+      true,
+    );
+  }
   assert.equal(await page.locator(".shell-message[role='alert']").count(), 0);
   console.log(
-    "PASS: new-tab chooser, difference navigation, whole-side and line copy, F3 search navigation, F5 compare, F6 pane focus and Help dialog sections.",
+    "PASS: new-tab chooser, difference navigation, whole-side and line copy, F3 search navigation, F5 compare, F6 pane focus, Help sections and feedback copy success/failure.",
   );
 } finally {
   if (session) await session.close();

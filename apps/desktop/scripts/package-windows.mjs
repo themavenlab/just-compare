@@ -48,7 +48,7 @@ await writeFile(
   [
     `${productName} ${version} - local unsigned Windows x64 preview.`,
     `Run ${executableName}. Requires the installed Microsoft WebView2 Evergreen Runtime.`,
-    "This is not a signed installer, public release, or full Beyond Compare parity.",
+    "This is not a signed installer or public release.",
     "Text: 1 MiB / 20,000 lines per input. Folder: 10,000 entries per side, 100 MiB per file.",
     `Set COMPARE_DESKTOP to the absolute ${executableName} path when using compare.exe.`,
     "Settings use the OS application-config directory, not this portable folder.",

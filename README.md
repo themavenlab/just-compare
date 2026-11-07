@@ -9,6 +9,7 @@ A modern, fast, local-first file and folder comparison and merge utility for Win
 - **Local-First & Private:** All comparison logic runs locally on your machine. No cloud dependencies, no analytics, no telemetry.
 - **Data Integrity Above All:** Diffing is strictly read-only. File synchronizations, replacements, and deletions require preview confirmation and atomic writes.
 - **Native Performance:** Built with [Tauri v2](https://v2.tauri.app/), a headless [Rust](https://www.rust-lang.org/) comparison engine (`compare-text`, `compare-folder`, `compare-merge`), [CodeMirror 6](https://codemirror.net/), and a modern [React](https://react.dev/) / TypeScript UI.
+- **Original Implementation:** Built with original code and artwork; it does not promise exact feature parity with other comparison tools.
 
 ## Phase 1 Features
 
@@ -19,7 +20,7 @@ The headless Rust engine preserves UTF-8 line contents, LF/CRLF/CR line endings,
 - **Merge:** Three-way merge (base, left, right), conservative automatic conflict resolution, explicit conflict choice buttons, editable output editor, stale-input invalidation, and safe atomic saving.
 - **Integration:** Headless CLI, waiting Git difftool and mergetool modes, directory comparison mode, dark/light themes, recent session history, saved sessions, and per-file-type comparison profiles.
 
-Operational limits are enforced at the engine boundary: text inputs are bounded to 1 MiB and 20,000 lines per side; folder scans to 10,000 entries per root and 100 MiB per file. These are enforced protective limits, not huge-file performance promises. See the [Usage Guide](docs/product/usage.md), [Validation Evidence](docs/engineering/validation.md), and [Data Safety Contract](docs/engineering/data-safety.md#implemented-local-backend) for full details.
+Operational limits are enforced at the engine boundary: text inputs are bounded to 1 MiB and 20,000 lines per side; folder scans to 10,000 entries per root and 100 MiB per file. These are enforced protective limits, not complete feature parity or a huge-file performance promise. See the [Usage Guide](docs/product/usage.md), [Validation Evidence](docs/engineering/validation.md), and [Data Safety Contract](docs/engineering/data-safety.md#implemented-local-backend) for full details.
 
 ## Development
 

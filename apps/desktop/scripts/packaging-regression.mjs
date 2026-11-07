@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { executableName } from "./app-config.mjs";
 import { msixManifest, msixVersion, storeIdentity } from "./package-msix.mjs";
 import { copyWindowsRuntime } from "./windows-distribution.mjs";
@@ -87,4 +96,58 @@ test("payload includes CLI, permits absent MSVC loader, and rejects missing inpu
   } finally {
     await rm(root, { recursive: true });
   }
+});
+
+test("marketing captures reject absent or public evidence destinations before launching", () => {
+  const script = fileURLToPath(
+    new URL("./capture-marketing.mjs", import.meta.url),
+  );
+  const output = join(
+    tmpdir(),
+    "compare-capture-guard",
+    "website",
+    "public",
+    "screenshots",
+  );
+  for (const args of [[], [join(output, "manifest.json")]]) {
+    const result = spawnSync(process.execPath, [script, output, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, PUBLIC: process.env.PUBLIC ?? tmpdir() },
+    });
+
+    assert.equal(result.error, undefined);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      process.platform === "win32"
+        ? /evidence must not be public/
+        : /Marketing captures require Windows/,
+    );
+  }
+});
+
+test("authored app and portable copy contain no competitor references", async () => {
+  const source = fileURLToPath(new URL("../src/", import.meta.url));
+  const forbidden = new RegExp(
+    [
+      ["beyond", "compare"].join("[\\s_-]*"),
+      ["scooter", "software"].join("[\\s_-]*"),
+    ].join("|"),
+    "i",
+  );
+  for (const entry of await readdir(source, {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name)) continue;
+    assert.doesNotMatch(
+      await readFile(join(entry.parentPath, entry.name), "utf8"),
+      forbidden,
+      entry.name,
+    );
+  }
+  assert.doesNotMatch(
+    await readFile(new URL("./package-windows.mjs", import.meta.url), "utf8"),
+    forbidden,
+  );
 });

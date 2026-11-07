@@ -2,13 +2,43 @@ import { useState } from "react";
 import { WorkspaceDialog } from "./WorkspaceDialog";
 import { APP_NAME } from "./appName";
 
-export type HelpSection = "getting-started" | "shortcuts" | "about";
+export type HelpSection =
+  "getting-started" | "shortcuts" | "bug-report" | "feature-request" | "about";
 
 const sections: { id: HelpSection; label: string }[] = [
   { id: "getting-started", label: "Getting Started" },
   { id: "shortcuts", label: "Keyboard shortcuts" },
+  { id: "bug-report", label: "Report a bug" },
+  { id: "feature-request", label: "Request a feature" },
   { id: "about", label: `About ${APP_NAME}` },
 ];
+
+const supportEmail = "compare@themavenlab.org";
+const reportTemplates = {
+  "bug-report": [
+    `Subject: ${APP_NAME}: Bug report`,
+    "",
+    "App version: [fill in]",
+    "Windows version: [fill in]",
+    "Workflow: [text compare / folder compare / three-way merge]",
+    "Steps to reproduce with a synthetic example:",
+    "1. ",
+    "Expected result:",
+    "Actual result / error message (redacted):",
+    "",
+    "Do not include private files, paths, credentials or recovery drafts.",
+  ].join("\n"),
+  "feature-request": [
+    `Subject: ${APP_NAME}: Feature request`,
+    "",
+    "Problem or use case:",
+    "Current workaround:",
+    "Suggested improvement:",
+    "How it would help:",
+    "",
+    "Use synthetic examples. Do not include sensitive information.",
+  ].join("\n"),
+};
 
 const shortcutGroups = [
   {
@@ -57,7 +87,29 @@ export function HelpDialog({
   onClose: () => void;
 }) {
   const [section, setSection] = useState(initialSection);
+  const [copying, setCopying] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
   const heading = sections.find((item) => item.id === section)?.label;
+  const reportTemplate =
+    section === "bug-report" || section === "feature-request"
+      ? reportTemplates[section]
+      : null;
+  async function copy(text: string, label: string) {
+    setNotice("");
+    setError("");
+    setCopying(true);
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice(`${label} copied. Nothing was sent.`);
+    } catch (failure) {
+      setError(
+        `Could not copy ${label.toLowerCase()}: ${String(failure)}. Select and copy the displayed text manually.`,
+      );
+    } finally {
+      setCopying(false);
+    }
+  }
 
   return (
     <WorkspaceDialog
@@ -72,7 +124,12 @@ export function HelpDialog({
               key={item.id}
               type="button"
               aria-pressed={section === item.id}
-              onClick={() => setSection(item.id)}
+              disabled={copying}
+              onClick={() => {
+                setSection(item.id);
+                setNotice("");
+                setError("");
+              }}
             >
               {item.label}
             </button>
@@ -134,12 +191,57 @@ export function HelpDialog({
               </div>
             </>
           )}
+          {reportTemplate && (
+            <div className="help-feedback">
+              <p>
+                Email The Maven Lab at <strong>{supportEmail}</strong>. Copy the
+                address or template into your email service. Nothing is sent
+                automatically and no file contents or diagnostics are collected.
+              </p>
+              <p className="help-support-address">
+                Support: https://just-compare.themavenlab.org/support/
+              </p>
+              {section === "feature-request" && (
+                <p>
+                  Describe the problem and how the change would help. Requests
+                  do not guarantee delivery.
+                </p>
+              )}
+              <p>
+                Use synthetic examples. Omit private paths, documents,
+                credentials and recovery drafts; redact screenshots before
+                sharing. Send security concerns privately to the email above,
+                not to a public discussion.
+              </p>
+              <div className="help-feedback-actions">
+                <button
+                  type="button"
+                  disabled={copying}
+                  onClick={() => void copy(supportEmail, "Email address")}
+                >
+                  Copy email address
+                </button>
+                <button
+                  type="button"
+                  disabled={copying}
+                  onClick={() => void copy(reportTemplate, "Report template")}
+                >
+                  Copy report template
+                </button>
+              </div>
+              {notice && <p role="status">{notice}</p>}
+              {error && <p role="alert">{error}</p>}
+              <pre className="help-report-template" tabIndex={0}>
+                {reportTemplate}
+              </pre>
+            </div>
+          )}
           {section === "about" && (
             <div className="help-about">
               <p>
                 {APP_NAME} is an original, local-first compare and merge
-                workbench. This Phase 1 MVP supports text comparison, folder
-                comparison, and three-way merge workflows.
+                workbench from The Maven Lab. It supports text comparison,
+                folder comparison, and three-way merge workflows.
               </p>
               <p>
                 Comparison contents stay on your device; the app does not upload
@@ -147,9 +249,8 @@ export function HelpDialog({
                 local files.
               </p>
               <p>
-                The project is actively evolving and is not a claim of complete
-                feature parity with other comparison tools. Platform support and
-                validation are documented in the project README.
+                For support, use Report a bug or Request a feature in this Help
+                dialog. No account is required for comparison.
               </p>
             </div>
           )}

@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   launchNative,
@@ -18,6 +17,15 @@ const output = process.argv[2];
 if (!output || !resolve(output).endsWith(join("public", "screenshots")))
   throw new Error(
     "Supply the branding website public\\screenshots output directory.",
+  );
+const evidence = process.argv[3];
+if (
+  !evidence ||
+  resolve(evidence) !==
+    join(dirname(dirname(resolve(output))), "evidence", "screenshots.json")
+)
+  throw new Error(
+    "Supply the separate website\\evidence\\screenshots.json provenance destination; evidence must not be public.",
   );
 const root = await mkdtemp(
   join(process.env.PUBLIC, "Documents", "Just Compare demo-"),
@@ -49,6 +57,7 @@ try {
   const config = join(root, "configuration");
   await mkdir(config);
   await mkdir(output, { recursive: true });
+  await mkdir(dirname(resolve(evidence)), { recursive: true });
   session = await launchNative(config);
   const { page } = session;
   await page.setViewportSize({ width: 1920, height: 1080 });
@@ -110,7 +119,7 @@ try {
   await capture("04-merge.png");
   const repo = fileURLToPath(new URL("../../../", import.meta.url));
   await writeFile(
-    join(output, "manifest.json"),
+    evidence,
     JSON.stringify(
       {
         kind: "development-preview",

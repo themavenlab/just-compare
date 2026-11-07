@@ -71,12 +71,11 @@ try {
   await page
     .getByRole("menuitem", { name: "Keyboard shortcuts", exact: true })
     .click();
-  assert.match(
-    await page.locator(".shell-message[role='status']").innerText(),
-    /Ctrl\+Tab/,
-  );
+  const help = page.getByRole("dialog", { name: "Help & About" });
+  await help.getByRole("heading", { name: "Keyboard shortcuts" }).waitFor();
+  assert.match(await help.innerText(), /Ctrl\+Tab/);
   assert.equal(await page.locator(".shell-message[role='alert']").count(), 0);
-  await page.getByRole("button", { name: "Dismiss help", exact: true }).click();
+  await help.getByRole("button", { name: "Close Help & About" }).click();
   const secondId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");

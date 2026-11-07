@@ -16,8 +16,13 @@ export function WorkspaceDialog({
   const id = useId();
   useEffect(() => {
     const dialog = element.current;
+    const priorFocus = document.activeElement;
     dialog?.showModal();
-    return () => dialog?.close();
+    return () => {
+      dialog?.close();
+      if (priorFocus instanceof HTMLElement && priorFocus.isConnected)
+        priorFocus.focus();
+    };
   }, []);
   return (
     <dialog

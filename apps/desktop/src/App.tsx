@@ -1153,6 +1153,14 @@ export function App() {
               run: () => setHelpSection("shortcuts"),
             },
             {
+              label: "Report a bug",
+              run: () => setHelpSection("bug-report"),
+            },
+            {
+              label: "Request a feature",
+              run: () => setHelpSection("feature-request"),
+            },
+            {
               label: `About ${APP_NAME}`,
               run: () => setHelpSection("about"),
             },

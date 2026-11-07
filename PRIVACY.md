@@ -26,24 +26,26 @@ Just Compare saves user configuration and temporary state solely on your local d
 Just Compare offers optional, per-user context menu shortcuts in Windows File Explorer (e.g., *"Select as left file for compare"* and *"Compare to..."*). 
 * When enabled, the path of the selected left item is recorded locally on your disk in your local configuration directory.
 * Explorer integration does not grant elevated privileges, alter system-wide file associations, or track file operations.
-* Integration can be enabled or removed from the application's **Integration** menu. Remove it before moving or deleting a portable executable. Cleanup on uninstall of a Store package must be verified before that distribution is released; it is not promised by the current portable workflow.
+* Integration can be enabled or removed from the application's **Integration** menu. Remove it before moving or deleting a portable executable. Do not assume uninstalling an app removes every locally stored setting or integration.
 
 ---
 
 ### 4. Children's Privacy
-Just Compare is a general-purpose productivity utility that does not collect any personal information from any user, including children under 13.
+Just Compare is a general-purpose productivity utility and does not intentionally collect personal information from children. Voluntary support correspondence is described separately below.
 
 ---
 
 ### 5. Changes to This Policy
-If we update this Privacy Policy, the revised version will be posted in this repository with an updated revision date.
+If we update this Privacy Policy, the revised version will be posted on the [product website](https://just-compare.themavenlab.org/privacy/) with an updated revision date.
 
 ---
 
 ### 6. Contact
 If you have any questions about this Privacy Policy, you can reach out via:
-* **Website:** [themavenlab.org](https://themavenlab.org)
-* A direct public support contact will be added before release. The source repository is currently private; its issues and discussions are not a public support channel.
+* **Email:** [compare@themavenlab.org](mailto:compare@themavenlab.org)
+* **Support:** [Just Compare support](https://just-compare.themavenlab.org/support/)
+
+If you email The Maven Lab for support, a feature request or a security report, your email provider and ours process the message. We receive your email address and the information you choose to include and use it to respond and investigate your report. This is voluntary correspondence, not automatic app telemetry. Do not send private file contents, credentials or recovery drafts. Copying a report template in the app does not send a message or collect diagnostics.
 
 ---
 

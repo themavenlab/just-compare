@@ -6,6 +6,8 @@ This guide covers everyday usage of Just Compare, including text comparison, fol
 
 ## Before you begin
 
+For bugs, feature requests or private security reports, use **Help > Report a bug** or **Help > Request a feature**, or email [compare@themavenlab.org](mailto:compare@themavenlab.org). The Help dialog can copy the address or a reporting template; it never sends a report or includes open files automatically. Use synthetic examples and omit sensitive paths, credentials, documents and recovery drafts.
+
 - Public distribution is not yet verified. See the [release guide](../engineering/release.md) for Windows support targets and gates.
 - Compare is read-only; copying into an editor changes its draft, not the source. Saving, synchronization and local file actions require explicit intent.
 - Try file operations on disposable copies first. Read the [data-safety limitations](../engineering/data-safety.md#implemented-local-backend).

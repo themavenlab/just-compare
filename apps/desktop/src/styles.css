@@ -2554,6 +2554,7 @@ button[aria-pressed="true"] .tool-symbol,
 }
 .help-workflows,
 .help-shortcut-groups,
+.help-feedback,
 .help-about {
   display: grid;
   gap: 12px;
@@ -2565,11 +2566,36 @@ button[aria-pressed="true"] .tool-symbol,
   background: var(--surface-alt);
 }
 .help-workflows p,
+.help-feedback p,
 .help-about p,
 .help-platform-note {
   margin: 0;
   color: var(--muted);
   line-height: 1.5;
+}
+.help-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.help-feedback .help-support-address {
+  overflow-wrap: anywhere;
+}
+.help-report-template {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.help-feedback [role="alert"] {
+  color: var(--danger);
 }
 .help-shortcut-group dl {
   display: grid;

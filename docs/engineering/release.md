@@ -62,12 +62,10 @@ not register unapproved execution aliases or solve installed Explorer cleanup.
 For draft marketing captures after an embedded-assets debug build:
 
 ```powershell
-node apps\desktop\scripts\capture-marketing.mjs C:\parag_data\GitHub\just-compare-branding\website\public\screenshots
+node apps\desktop\scripts\capture-marketing.mjs C:\parag_data\GitHub\just-compare-branding\website\public\screenshots C:\parag_data\GitHub\just-compare-branding\website\evidence\screenshots.json
 ```
 
-The script owns disposable synthetic fixtures under Public Documents and
-records development-preview provenance. These are genuine app captures, but
-must be refreshed after a release candidate passes installed-app validation.
+The script owns disposable synthetic fixtures under Public Documents and records development-preview provenance outside published assets in `website/evidence/screenshots.json`. Keep that directory private; only PNGs belong in `website/public/screenshots`. These are genuine app captures, but must be refreshed after a release candidate passes installed-app validation.
 
 Microsoft re-signs accepted Store MSIX packages; a purchased CA certificate is
 not an assumed submission prerequisite. Local install tests can need trusted
@@ -134,10 +132,9 @@ changing DNS, uploading packages and publishing each require explicit approval.
 
 ## Inputs that cannot be inferred
 
-Owner support/security contacts, release version, markets, rating answers,
-optional additional terms, brand asset rights, test environments, installed-app
-results, Store certification and publication approval must be supplied/verified.
-No public release readiness is asserted while these remain unresolved.
+The owner supplied `compare@themavenlab.org` for public support, feature requests and private security reports. The website and app route feedback there; mailbox delivery is owner-confirmed, not verified by an automated email. A source-free GitHub tracker kit is prepared locally in the branding repository's `support/github-tracker`; creating it and enabling public links require separate approval. Keep the application and branding repositories private.
+
+Release version, markets, rating answers, optional additional terms, brand asset rights, test environments, installed-app results, Store certification and publication approval must be supplied/verified. No public release readiness is asserted while these remain unresolved.
 
 ## References
 
