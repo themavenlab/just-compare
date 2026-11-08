@@ -315,6 +315,62 @@ describe("folder presentation", () => {
     expect(countFolderEntries([mismatch], "all", "all")).toBe(2);
     expect(countFolderEntries([mismatch], "leftOnly", "all")).toBe(1);
   });
+  it("excludes folder subtrees without hiding a same-name file", () => {
+    const mismatch: FolderEntry = {
+      ...entry("hello", "typeMismatch", 1, 0),
+      isDirectory: true,
+      leftKind: "file",
+      rightKind: "directory",
+    };
+    const child: FolderEntry = {
+      ...entry("hello/child.txt", "rightOnly", null, 1),
+      rightKind: "file",
+    };
+    const sibling = entry("hello-world.txt", "leftOnly", 1, null);
+    const excludedDirectories = new Set(["hello"]);
+    const rows = folderRows(
+      [mismatch, child, sibling],
+      "all",
+      true,
+      new Set(),
+      "name",
+      false,
+      "all",
+      new Set(),
+      excludedDirectories,
+    );
+    expect(
+      rows.map((row) => [
+        row.path,
+        row.displaySide,
+        row.displayEntry?.isDirectory,
+      ]),
+    ).toEqual([
+      ["hello", "left", false],
+      ["hello-world.txt", null, false],
+    ]);
+    expect(
+      countFolderEntries(
+        [mismatch, child, sibling],
+        "all",
+        "all",
+        new Set(),
+        excludedDirectories,
+      ),
+    ).toBe(2);
+    expect(
+      folderRows(
+        [mismatch],
+        "all",
+        true,
+        new Set(),
+        "name",
+        false,
+        "all",
+        new Set(["hello"]),
+      ).map((row) => row.displaySide),
+    ).toEqual(["right"]);
+  });
   it("checks actual copy direction and rejects same/error sources", () => {
     expect(canCopy(entry("a", "rightOnly", null), "left")).toBe(true);
     expect(canCopy(entry("a", "rightOnly", null), "right")).toBe(false);

@@ -245,15 +245,36 @@ fn collect(
         })
         .collect::<Result<Vec<_>, _>>()?
         .join("/");
-      if filters.is_match(&relative) {
+      if filters.patterns.is_match(&relative) {
         continue;
+      }
+      let glob_excludes_directory =
+        !options.exclude.is_empty() && filters.matches_directory_pattern(&relative);
+      let metadata = if glob_excludes_directory
+        || filters.files.contains(&relative)
+        || filters.directories.contains(&relative)
+      {
+        Some(checked_path(&path, false).and_then(|_| Ok(fs::symlink_metadata(&path)?)))
+      } else {
+        None
+      };
+      if let Some(Ok(metadata)) = &metadata {
+        if (glob_excludes_directory && metadata.is_dir())
+          || (filters.files.contains(&relative) && metadata.is_file())
+          || (filters.directories.contains(&relative) && metadata.is_dir())
+        {
+          continue;
+        }
       }
       if items.len() == MAX_ENTRIES {
         return Err(FileError(
           "Folder exceeds the 10,000-entry prototype limit.".into(),
         ));
       }
-      let metadata = checked_path(&path, false).and_then(|_| Ok(fs::symlink_metadata(&path)?));
+      let metadata = match metadata {
+        Some(metadata) => metadata,
+        None => checked_path(&path, false).and_then(|_| Ok(fs::symlink_metadata(&path)?)),
+      };
       let item = match metadata {
         Ok(metadata) if metadata.is_file() || metadata.is_dir() => {
           if metadata.is_dir() {
@@ -1160,6 +1181,7 @@ mod tests {
       &FolderOptions {
         criterion: Criterion::Size,
         exclude: vec![],
+        ..Default::default()
       },
       &FolderRules::default(),
       &AtomicBool::new(false),
@@ -1173,7 +1195,8 @@ mod tests {
         &fixture.right,
         &FolderOptions {
           criterion: Criterion::Size,
-          exclude: vec![]
+          exclude: vec![],
+          ..Default::default()
         },
         &AtomicBool::new(false),
         |_| {},
@@ -1887,6 +1910,88 @@ mod tests {
   }
 
   #[test]
+  fn directory_exclusions_prune_both_sides_but_preserve_same_name_files() {
+    let fixture = Fixture::new();
+    fs::write(fixture.left.join("hello"), b"file").unwrap();
+    fs::create_dir(fixture.right.join("hello")).unwrap();
+    fs::write(fixture.right.join("hello").join("child.txt"), b"child").unwrap();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir(root.join("paired")).unwrap();
+      fs::write(root.join("paired").join("child.txt"), b"content").unwrap();
+    }
+    let options = FolderOptions {
+      exclude_directories: vec!["hello".into(), "paired".into()],
+      ..Default::default()
+    };
+    let rows = scan_pair_with_rules(
+      &fixture.left,
+      &fixture.right,
+      &options,
+      &FolderRules::default(),
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].relative, "hello");
+    assert_eq!(rows[0].status, "leftOnly");
+    assert_eq!(rows[0].left_kind, Some(FolderEntryKind::File));
+    assert_eq!(rows[0].right_kind, None);
+  }
+
+  #[test]
+  fn descendant_globs_prune_directory_roots_and_keep_same_name_files() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      for relative in ["node_modules/package", "packages/app/node_modules/package"] {
+        fs::create_dir_all(root.join(relative)).unwrap();
+        fs::write(root.join(relative).join("index.js"), b"excluded").unwrap();
+      }
+      fs::write(root.join("visible.txt"), b"visible").unwrap();
+    }
+    let options = FolderOptions {
+      exclude: vec!["**/node_modules/**".into()],
+      ..Default::default()
+    };
+    let rows = scan_pair_with_rules(
+      &fixture.left,
+      &fixture.right,
+      &options,
+      &FolderRules::default(),
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .unwrap();
+    assert!(rows
+      .iter()
+      .all(|row| !row.relative.split('/').any(|part| part == "node_modules")));
+    assert!(rows.iter().any(|row| row.relative == "visible.txt"));
+
+    let fixture = Fixture::new();
+    fs::write(fixture.left.join("node_modules"), b"file").unwrap();
+    fs::create_dir(fixture.right.join("node_modules")).unwrap();
+    fs::write(
+      fixture.right.join("node_modules").join("package.json"),
+      b"excluded",
+    )
+    .unwrap();
+    let rows = scan_pair_with_rules(
+      &fixture.left,
+      &fixture.right,
+      &options,
+      &FolderRules::default(),
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].relative, "node_modules");
+    assert_eq!(rows[0].status, "leftOnly");
+    assert_eq!(rows[0].left_kind, Some(FolderEntryKind::File));
+    assert_eq!(rows[0].right_kind, None);
+  }
+
+  #[test]
   fn display_rules_do_not_weaken_plan_content_hash_revalidation() {
     let fixture = Fixture::new();
     fixture.files(b"one", b"two");
@@ -2165,6 +2270,17 @@ mod tests {
       },
     )
     .is_ok());
+    assert!(validate_folder_configuration(
+      &FolderRules::default(),
+      &FolderOptions {
+        exclude_directories: vec!["../outside".into()],
+        ..Default::default()
+      },
+    )
+    .is_err());
+    assert!(
+      serde_json::from_str::<FolderOptions>(r#"{"criterion":"content","exclude":[]}"#).is_ok()
+    );
     assert!(serde_json::from_str::<FolderRules>(r#"{"timestampToleranceMs":1.5}"#).is_err());
     assert!(serde_json::from_str::<FolderRules>(r#"{"timezoneOffsetMinutes":"bad"}"#).is_err());
     assert!(serde_json::from_str::<FolderRules>(r#"{"timestampToleranceMs":-1}"#).is_err());

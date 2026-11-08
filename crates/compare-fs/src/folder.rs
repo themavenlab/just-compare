@@ -1,5 +1,5 @@
 use crate::{checked_path, FileError};
-use globset::{Glob, GlobSetBuilder};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -31,12 +31,20 @@ pub enum Criterion {
 pub struct FolderOptions {
   pub criterion: Criterion,
   pub exclude: Vec<String>,
+  /// Exact normalized relative file paths excluded from comparison.
+  #[serde(default)]
+  pub exclude_files: Vec<String>,
+  /// Exact normalized relative directory paths excluded with their subtrees.
+  #[serde(default)]
+  pub exclude_directories: Vec<String>,
 }
 impl Default for FolderOptions {
   fn default() -> Self {
     Self {
       criterion: Criterion::Content,
       exclude: Vec::new(),
+      exclude_files: Vec::new(),
+      exclude_directories: Vec::new(),
     }
   }
 }
@@ -74,6 +82,10 @@ struct Snapshot {
   size: u64,
   modified: std::time::SystemTime,
   hash: String,
+}
+
+fn is_directory_hash(hash: &str) -> bool {
+  matches!(hash, "directory" | "excludedDirectory")
 }
 
 fn cancel(cancelled: &AtomicBool) -> Result<(), FileError> {
@@ -164,10 +176,51 @@ pub fn relative_folder_path(
 
 type Scan = (BTreeMap<String, Snapshot>, BTreeMap<String, String>);
 
-fn exclusion_filters(options: &FolderOptions) -> Result<globset::GlobSet, FileError> {
+pub(super) struct ExclusionFilters {
+  pub patterns: GlobSet,
+  pub files: BTreeSet<String>,
+  pub directories: BTreeSet<String>,
+}
+
+impl ExclusionFilters {
+  pub fn matches_directory_pattern(&self, relative: &str) -> bool {
+    self.patterns.is_match(format!("{relative}/"))
+  }
+}
+
+fn exact_exclusions(paths: &[String]) -> Result<BTreeSet<String>, FileError> {
+  paths
+    .iter()
+    .map(|path| {
+      if path.is_empty()
+        || path.len() > 4096
+        || path
+          .split('/')
+          .any(|part| part.is_empty() || part == "." || part == "..")
+      {
+        return Err(FileError(
+          "Excluded paths must be normalized relative paths.".into(),
+        ));
+      }
+      Ok(path.clone())
+    })
+    .collect()
+}
+
+pub(super) fn exclusion_filters(options: &FolderOptions) -> Result<ExclusionFilters, FileError> {
   if options.exclude.len() > 32 {
     return Err(FileError(
       "At most 32 exclusion patterns are supported.".into(),
+    ));
+  }
+  if options
+    .exclude_files
+    .len()
+    .saturating_add(options.exclude_directories.len())
+    > MAX_ENTRIES
+  {
+    return Err(FileError(
+      "At most 10,000 exact exclusions are supported.".into(),
     ));
   }
   let mut builder = GlobSetBuilder::new();
@@ -177,7 +230,13 @@ fn exclusion_filters(options: &FolderOptions) -> Result<globset::GlobSet, FileEr
     }
     builder.add(Glob::new(pattern).map_err(|e| FileError(e.to_string()))?);
   }
-  builder.build().map_err(|e| FileError(e.to_string()))
+  let files = exact_exclusions(&options.exclude_files)?;
+  let directories = exact_exclusions(&options.exclude_directories)?;
+  Ok(ExclusionFilters {
+    patterns: builder.build().map_err(|e| FileError(e.to_string()))?,
+    files,
+    directories,
+  })
 }
 
 fn scan(
@@ -185,6 +244,25 @@ fn scan(
   options: &FolderOptions,
   cancelled: &AtomicBool,
   progress: &mut impl FnMut(usize),
+) -> Result<Scan, FileError> {
+  scan_internal(root, options, cancelled, progress, false)
+}
+
+fn scan_for_plan(
+  root: &Path,
+  options: &FolderOptions,
+  cancelled: &AtomicBool,
+  progress: &mut impl FnMut(usize),
+) -> Result<Scan, FileError> {
+  scan_internal(root, options, cancelled, progress, true)
+}
+
+fn scan_internal(
+  root: &Path,
+  options: &FolderOptions,
+  cancelled: &AtomicBool,
+  progress: &mut impl FnMut(usize),
+  retain_excluded_markers: bool,
 ) -> Result<Scan, FileError> {
   let root = checked_path(root, false)?;
   if !root.is_dir() {
@@ -215,7 +293,28 @@ fn scan(
         })
         .collect::<Result<Vec<_>, _>>()?
         .join("/");
-      if filters.is_match(&relative) {
+      if filters.patterns.is_match(&relative) {
+        continue;
+      }
+      let glob_excludes_directory =
+        !options.exclude.is_empty() && filters.matches_directory_pattern(&relative);
+      let metadata = if glob_excludes_directory
+        || filters.files.contains(&relative)
+        || filters.directories.contains(&relative)
+      {
+        if let Err(error) = checked_path(&path, false) {
+          errors.insert(relative, error.to_string());
+          continue;
+        }
+        Some(fs::symlink_metadata(&path)?)
+      } else {
+        None
+      };
+      let excluded_file =
+        filters.files.contains(&relative) && metadata.as_ref().is_some_and(|value| value.is_file());
+      let excluded_directory = metadata.as_ref().is_some_and(|value| value.is_dir())
+        && (filters.directories.contains(&relative) || glob_excludes_directory);
+      if (excluded_file || excluded_directory) && !retain_excluded_markers {
         continue;
       }
       count += 1;
@@ -227,11 +326,31 @@ fn scan(
       if count % 100 == 0 {
         progress(count);
       }
+      if excluded_file || excluded_directory {
+        let metadata = metadata.expect("excluded entry has metadata");
+        let (size, hash) = if excluded_directory {
+          (0, "excludedDirectory")
+        } else {
+          (metadata.len(), "excludedFile")
+        };
+        files.insert(
+          relative,
+          Snapshot {
+            size,
+            modified: metadata.modified()?,
+            hash: hash.into(),
+          },
+        );
+        continue;
+      }
       if let Err(error) = checked_path(&path, false) {
         errors.insert(relative, error.to_string());
         continue;
       }
-      let metadata = fs::symlink_metadata(&path)?;
+      let metadata = match metadata {
+        Some(metadata) => metadata,
+        None => fs::symlink_metadata(&path)?,
+      };
       if metadata.is_dir() {
         files.insert(relative, snapshot(&path, cancelled)?);
         stack.push(path);
@@ -315,7 +434,7 @@ pub fn scan_pair(
         } else {
           match (l, r) {
             (Some(l), Some(r)) => {
-              if (l.hash == "directory") != (r.hash == "directory") {
+              if is_directory_hash(&l.hash) != is_directory_hash(&r.hash) {
                 "typeMismatch"
               } else {
                 let equal = match options.criterion {
@@ -450,7 +569,12 @@ impl Plan {
         "Selected source is not in the scanned folder.".into(),
       ));
     }
-    if plan.left_snapshot[relative].hash == "directory" && action != "copy" {
+    if plan.left_snapshot[relative].hash == "excludedFile" {
+      return Err(FileError(
+        "Selected source is excluded from folder operations.".into(),
+      ));
+    }
+    if is_directory_hash(&plan.left_snapshot[relative].hash) && action != "copy" {
       return Err(FileError("Directory move/delete must use a complete sync preview; direct recursive operations are disabled.".into()));
     }
     if action == "copy" {
@@ -471,8 +595,8 @@ impl Plan {
     cancelled: &AtomicBool,
   ) -> Result<Self, FileError> {
     let (left, right) = roots(left, right)?;
-    let (a, ae) = scan(&left, &options, cancelled, &mut |_| {})?;
-    let (b, be) = scan(&right, &options, cancelled, &mut |_| {})?;
+    let (a, ae) = scan_for_plan(&left, &options, cancelled, &mut |_| {})?;
+    let (b, be) = scan_for_plan(&right, &options, cancelled, &mut |_| {})?;
     if !ae.is_empty() || !be.is_empty() {
       return Err(FileError("Sync is blocked by inaccessible, linked, or unsupported entries. Resolve scan errors first.".into()));
     }
@@ -480,11 +604,14 @@ impl Plan {
     for (name, value) in &a {
       if b
         .get(name)
-        .is_some_and(|other| (value.hash == "directory") != (other.hash == "directory"))
+        .is_some_and(|other| is_directory_hash(&value.hash) != is_directory_hash(&other.hash))
       {
         return Err(FileError(format!(
           "File/directory collision at {name}; no sync was planned."
         )));
+      }
+      if excluded_from_plan(name, &a, &b, &options) {
+        continue;
       }
       if b.get(name).is_none_or(|other| other.hash != value.hash) {
         operations.push(PlannedOperation {
@@ -505,11 +632,11 @@ impl Plan {
       orphaned.sort_by_key(|name| {
         (
           std::cmp::Reverse(name.matches('/').count()),
-          b[*name].hash == "directory",
+          is_directory_hash(&b[*name].hash),
         )
       });
       for name in orphaned {
-        if !a.contains_key(name) {
+        if !a.contains_key(name) && !excluded_from_plan(name, &a, &b, &options) {
           operations.push(PlannedOperation {
             relative: name.clone(),
             action: if b[name].hash == "directory" {
@@ -553,8 +680,8 @@ impl Plan {
     mut progress: impl FnMut(usize),
     mut recycle: impl FnMut(&Path) -> Result<(), FileError>,
   ) -> Result<OperationResults, FileError> {
-    let (a, ae) = scan(&self.left, &self.options, cancelled, &mut |_| {})?;
-    let (b, be) = scan(&self.right, &self.options, cancelled, &mut |_| {})?;
+    let (a, ae) = scan_for_plan(&self.left, &self.options, cancelled, &mut |_| {})?;
+    let (b, be) = scan_for_plan(&self.right, &self.options, cancelled, &mut |_| {})?;
     if a != self.left_snapshot || b != self.right_snapshot || !ae.is_empty() || !be.is_empty() {
       return Err(FileError(
         "Sync preview is stale. Create a new preview.".into(),
@@ -687,6 +814,49 @@ impl Plan {
   }
 }
 
+fn excluded_from_plan(
+  name: &str,
+  left: &BTreeMap<String, Snapshot>,
+  right: &BTreeMap<String, Snapshot>,
+  options: &FolderOptions,
+) -> bool {
+  if left
+    .get(name)
+    .is_some_and(|entry| entry.hash == "excludedDirectory")
+    || right
+      .get(name)
+      .is_some_and(|entry| entry.hash == "excludedDirectory")
+  {
+    return true;
+  }
+  let is_directory = |path: &str| {
+    left
+      .get(path)
+      .is_some_and(|entry| is_directory_hash(&entry.hash))
+      || right
+        .get(path)
+        .is_some_and(|entry| is_directory_hash(&entry.hash))
+  };
+  if options.exclude_directories.iter().any(|excluded| {
+    (name == excluded
+      || name
+        .strip_prefix(excluded)
+        .is_some_and(|suffix| suffix.starts_with('/')))
+      && is_directory(excluded)
+  }) {
+    return true;
+  }
+  options.exclude_files.iter().any(|excluded| {
+    name == excluded
+      && (left
+        .get(name)
+        .is_some_and(|entry| entry.hash == "excludedFile")
+        || right
+          .get(name)
+          .is_some_and(|entry| entry.hash == "excludedFile"))
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -807,6 +977,90 @@ mod tests {
       .unwrap()
       .is_empty());
     assert!(scan_pair(&a, &b, &options, &AtomicBool::new(true), |_| {}).is_err());
+  }
+
+  #[test]
+  fn directory_exclusions_preserve_same_name_files_and_sync_collision_checks() {
+    let root = tempfile::tempdir().unwrap();
+    let left = root.path().join("left");
+    let right = root.path().join("right");
+    fs::create_dir(&left).unwrap();
+    fs::create_dir(&right).unwrap();
+    fs::write(left.join("hello"), b"file").unwrap();
+    fs::create_dir(right.join("hello")).unwrap();
+    fs::write(right.join("hello").join("child.txt"), b"child").unwrap();
+    fs::create_dir(left.join("paired")).unwrap();
+    fs::create_dir(right.join("paired")).unwrap();
+    fs::write(left.join("paired").join("left.txt"), b"left").unwrap();
+    fs::write(right.join("paired").join("right.txt"), b"right").unwrap();
+    let options = FolderOptions {
+      exclude_directories: vec!["hello".into(), "paired".into()],
+      ..FolderOptions::default()
+    };
+    let flag = AtomicBool::new(false);
+    let rows = scan_pair(&left, &right, &options, &flag, |_| {}).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].relative, "hello");
+    assert_eq!(rows[0].status, "leftOnly");
+    assert_eq!(rows[0].left_kind, Some(FolderEntryKind::File));
+    assert_eq!(rows[0].right_kind, None);
+    let error = match Plan::preview(&left, &right, options, SyncMode::Update, &flag) {
+      Ok(_) => panic!("directory exclusion must not hide a file/directory collision"),
+      Err(error) => error,
+    };
+    assert!(error.0.contains("File/directory collision at hello"));
+
+    fs::remove_file(left.join("hello")).unwrap();
+    fs::remove_dir_all(right.join("hello")).unwrap();
+    let options = FolderOptions {
+      exclude_directories: vec!["paired".into()],
+      ..FolderOptions::default()
+    };
+    let plan = Plan::preview(&left, &right, options, SyncMode::Update, &flag).unwrap();
+    assert!(plan.operations.is_empty());
+
+    fs::write(left.join("excluded.txt"), b"left").unwrap();
+    fs::write(right.join("excluded.txt"), b"right").unwrap();
+    let options = FolderOptions {
+      exclude_files: vec!["excluded.txt".into()],
+      ..FolderOptions::default()
+    };
+    assert!(
+      Plan::file_action(&left, &right, options, "excluded.txt", "trashLeft", &flag,).is_err()
+    );
+  }
+
+  #[test]
+  fn descendant_glob_exclusions_prune_directories_and_keep_sync_collisions_visible() {
+    let root = tempfile::tempdir().unwrap();
+    let left = root.path().join("left");
+    let right = root.path().join("right");
+    fs::create_dir_all(left.join("node_modules/package")).unwrap();
+    fs::create_dir_all(right.join("node_modules/package")).unwrap();
+    fs::write(left.join("node_modules/package/index.js"), b"left").unwrap();
+    fs::write(right.join("node_modules/package/index.js"), b"right").unwrap();
+    let options = FolderOptions {
+      exclude: vec!["**/node_modules/**".into()],
+      ..FolderOptions::default()
+    };
+    let flag = AtomicBool::new(false);
+    assert!(scan_pair(&left, &right, &options, &flag, |_| {})
+      .unwrap()
+      .is_empty());
+    assert!(
+      Plan::preview(&left, &right, options.clone(), SyncMode::Update, &flag)
+        .unwrap()
+        .operations
+        .is_empty()
+    );
+
+    fs::remove_dir_all(right.join("node_modules")).unwrap();
+    fs::write(right.join("node_modules"), b"file").unwrap();
+    let error = match Plan::preview(&left, &right, options, SyncMode::Update, &flag) {
+      Ok(_) => panic!("excluded directory markers must not hide type collisions"),
+      Err(error) => error,
+    };
+    assert!(error.0.contains("File/directory collision at node_modules"));
   }
 
   #[test]

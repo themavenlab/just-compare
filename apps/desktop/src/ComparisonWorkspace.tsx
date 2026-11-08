@@ -367,6 +367,10 @@ export function ComparisonWorkspace({
     }[]
   >([]);
   const [exclude, setExclude] = useState("");
+  const [excludedFiles, setExcludedFiles] = useState<Set<string>>(new Set());
+  const [excludedDirectories, setExcludedDirectories] = useState<Set<string>>(
+    new Set(),
+  );
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewKind, setPreviewKind] = useState<
     "copy" | "selected-update" | "selected-mirror" | "update" | "mirror" | null
@@ -1466,7 +1470,11 @@ export function ComparisonWorkspace({
     updateSettings((prior) => ({ ...prior, lineDetail }));
   }
 
-  async function scan(requestedRoots = folderRoots) {
+  async function scan(
+    requestedRoots = folderRoots,
+    options = folderOptions(),
+    rules = folderRules,
+  ) {
     discardPreview(tab.id);
     setPreview(null);
     setLocalPreview(null);
@@ -1482,8 +1490,8 @@ export function ComparisonWorkspace({
     const result = await native("scan_folders", {
       left: roots.left,
       right: roots.right,
-      options: folderOptions(),
-      rules: folderRules,
+      options,
+      rules,
       jobId,
     });
     setFolders(result);
@@ -1646,10 +1654,20 @@ export function ComparisonWorkspace({
     setDiskChanges((prior) => [...new Set([...prior, side])]);
     setDiskComparison(null);
   }
-  function folderOptions() {
+  function folderOptions(
+    overrides: {
+      exclude?: string[];
+      excludeFiles?: string[];
+      excludeDirectories?: string[];
+    } = {},
+  ) {
     return {
       criterion: "content",
-      exclude: exclude.split("\n").filter(Boolean),
+      exclude: overrides.exclude ?? exclude.split("\n").filter(Boolean),
+      excludeFiles: overrides.excludeFiles ?? [...excludedFiles],
+      excludeDirectories: overrides.excludeDirectories ?? [
+        ...excludedDirectories,
+      ],
     };
   }
   const runPendingFolderRefresh = useEffectEvent(() => {
@@ -2661,6 +2679,8 @@ export function ComparisonWorkspace({
     filteredFolders,
     peek ? "all" : filter,
     peek ? "all" : filesVisible,
+    excludedFiles,
+    excludedDirectories,
   );
   async function openPair(row: FolderEntry) {
     if (folderStale)
@@ -2805,17 +2825,32 @@ export function ComparisonWorkspace({
       return;
     }
     if (action === "exclude") {
-      setExclude((prior) =>
-        [
-          prior,
-          ...entries.map((entry) =>
-            entry.relative.replace(/([*?[\]{}\\])/g, "[$1]"),
-          ),
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
+      const nextFiles = new Set(excludedFiles);
+      const nextDirectories = new Set(excludedDirectories);
+      for (const entry of entries) {
+        const kind = side === "left" ? entry.leftKind : entry.rightKind;
+        if (kind === "file") nextFiles.add(entry.relative);
+        else if (kind === "directory") nextDirectories.add(entry.relative);
+      }
+      if (
+        nextFiles.size === excludedFiles.size &&
+        nextDirectories.size === excludedDirectories.size
+      ) {
+        setError(`The ${side} side has no file or folder entry to exclude.`);
+        return;
+      }
+      setExcludedFiles(nextFiles);
+      setExcludedDirectories(nextDirectories);
       invalidateFolders();
+      void attempt(() =>
+        scan(
+          folderRoots,
+          folderOptions({
+            excludeFiles: [...nextFiles],
+            excludeDirectories: [...nextDirectories],
+          }),
+        ),
+      );
       return;
     }
     if (action === "openWith" || action === "reveal") {
@@ -3282,12 +3317,29 @@ export function ComparisonWorkspace({
         <FolderRulesDialog
           rules={folderRules}
           exclusions={exclude}
+          excludedFiles={[...excludedFiles]}
+          excludedDirectories={[...excludedDirectories]}
           onClose={() => setRulesOpen(false)}
-          onApply={(next, exclusions, makeDefault) => {
+          onApply={(
+            next,
+            exclusions,
+            filePaths,
+            directoryPaths,
+            makeDefault,
+          ) => {
+            const options = folderOptions({
+              exclude: exclusions.split("\n").filter(Boolean),
+              excludeFiles: filePaths,
+              excludeDirectories: directoryPaths,
+            });
             setFolderRules(next);
             setExclude(exclusions);
+            setExcludedFiles(new Set(filePaths));
+            setExcludedDirectories(new Set(directoryPaths));
             invalidateFolders();
             setRulesOpen(false);
+            if (folderRoots.left || folderRoots.right)
+              void attempt(() => scan(folderRoots, options, next));
             if (makeDefault) {
               updateSettings((prior) => ({ ...prior, folderRules: next }));
               setNotice(
@@ -4719,7 +4771,7 @@ export function ComparisonWorkspace({
               <ToolButton
                 label="Rules"
                 icon="settings"
-                description="Edit folder comparison rules and scan exclusions; applying invalidates the current results."
+                description="Edit folder comparison rules and scan exclusions; applying scans chosen roots."
                 disabled={busy}
                 onClick={() => setRulesOpen(true)}
               />
@@ -4872,6 +4924,8 @@ export function ComparisonWorkspace({
             entries={filteredFolders}
             filter={peek ? "all" : filter}
             kindFilter={peek ? "all" : filesVisible}
+            excludedFiles={excludedFiles}
+            excludedDirectories={excludedDirectories}
             busy={busy}
             selected={selectedFiles}
             onSelect={(relative, checked) =>

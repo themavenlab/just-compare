@@ -14,6 +14,8 @@ export function FolderView({
   entries,
   filter,
   kindFilter,
+  excludedFiles,
+  excludedDirectories,
   busy,
   selected,
   onSelect,
@@ -25,6 +27,8 @@ export function FolderView({
   entries: FolderEntry[];
   filter: string;
   kindFilter: "all" | "files" | "folders";
+  excludedFiles: ReadonlySet<string>;
+  excludedDirectories: ReadonlySet<string>;
   busy: boolean;
   selected: string[];
   onSelect: (relative: string, checked: boolean) => void;
@@ -77,8 +81,20 @@ export function FolderView({
         sort,
         descending,
         kindFilter,
+        excludedFiles,
+        excludedDirectories,
       ),
-    [entries, filter, tree, collapsed, sort, descending, kindFilter],
+    [
+      entries,
+      filter,
+      tree,
+      collapsed,
+      sort,
+      descending,
+      kindFilter,
+      excludedFiles,
+      excludedDirectories,
+    ],
   );
   const latest = useRef({
     rows,

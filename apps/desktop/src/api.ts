@@ -222,6 +222,8 @@ interface CompareOptions {
 interface FolderOptions {
   criterion: string;
   exclude: string[];
+  excludeFiles: string[];
+  excludeDirectories: string[];
 }
 interface Commands {
   take_shell_requests: { args: Record<string, never>; result: string[][] };
@@ -332,7 +334,7 @@ interface Commands {
     args: {
       left: string;
       right: string;
-      options: { criterion: string; exclude: string[] };
+      options: FolderOptions;
       rules: FolderRules;
       selected: string[];
       previous?: FolderEntry[];

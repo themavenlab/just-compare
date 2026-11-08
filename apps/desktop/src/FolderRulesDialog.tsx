@@ -6,16 +6,30 @@ import { WorkspaceDialog } from "./WorkspaceDialog";
 export function FolderRulesDialog({
   rules,
   exclusions,
+  excludedFiles,
+  excludedDirectories,
   onApply,
   onClose,
 }: {
   rules: FolderRules;
   exclusions: string;
-  onApply: (rules: FolderRules, exclusions: string, defaults: boolean) => void;
+  excludedFiles: string[];
+  excludedDirectories: string[];
+  onApply: (
+    rules: FolderRules,
+    exclusions: string,
+    excludedFiles: string[],
+    excludedDirectories: string[],
+    defaults: boolean,
+  ) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState<FolderRules>(structuredClone(rules));
   const [exclude, setExclude] = useState(exclusions);
+  const [files, setFiles] = useState(excludedFiles.join("\n"));
+  const [directories, setDirectories] = useState(
+    excludedDirectories.join("\n"),
+  );
   const [scope, setScope] = useState("view");
   const [help, setHelp] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -29,9 +43,17 @@ export function FolderRulesDialog({
         options: {
           criterion: "content",
           exclude: exclude.split("\n").filter(Boolean),
+          excludeFiles: files.split("\n").filter(Boolean),
+          excludeDirectories: directories.split("\n").filter(Boolean),
         },
       });
-      onApply(draft, exclude, scope === "defaults");
+      onApply(
+        draft,
+        exclude,
+        files.split("\n").filter(Boolean),
+        directories.split("\n").filter(Boolean),
+        scope === "defaults",
+      );
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -316,15 +338,38 @@ export function FolderRulesDialog({
             />
           </label>
         </fieldset>
+        <fieldset>
+          <legend>Excluded exact paths</legend>
+          <label>
+            Files (one relative path per line)
+            <textarea
+              aria-label="Excluded file paths"
+              value={files}
+              onChange={(event) => setFiles(event.target.value)}
+            />
+          </label>
+          <label>
+            Folders and their contents (one relative path per line)
+            <textarea
+              aria-label="Excluded folder paths"
+              value={directories}
+              onChange={(event) => setDirectories(event.target.value)}
+            />
+          </label>
+          <p className="metadata">
+            Exact path exclusions are kind-specific, so excluding a folder does
+            not hide a file with the same relative name.
+          </p>
+        </fieldset>
         {help && (
           <p className="metadata">
             Quick tests do not prove byte equality. Skip marks content
             unchecked. Override uses content equality instead of size/time
             equality. Matching rules never rename files; ambiguous names stay
-            unpaired. Scan exclusions prevent reads, while toolbar filters only
-            hide already-scanned results. Unsupported capabilities report
-            errors. Executable versions compare the four-part fixed file and
-            product versions of EXE, DLL, OCX, SYS, SCR and CPL files on
+            unpaired. Scan exclusions prevent file-content reads, while toolbar
+            filters only hide already-scanned results. Unsupported capabilities
+            report errors. Executable versions compare the four-part fixed file
+            and product versions of EXE, DLL, OCX, SYS, SCR and CPL files on
             Windows; missing or invalid version resources are errors. Other
             files use the remaining tests. Saving preferences persists defaults.
           </p>

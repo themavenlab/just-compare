@@ -128,14 +128,36 @@ export function folderSelectionKeys(entries: FolderEntry[]) {
   return displayEntries(entries).map(({ selectionKey }) => selectionKey);
 }
 
+function excludedByKind(
+  entry: FolderEntry,
+  excludedFiles: ReadonlySet<string>,
+  excludedDirectories: ReadonlySet<string>,
+) {
+  if (!entry.isDirectory && excludedFiles.has(entry.relative)) return true;
+  const parts = entry.relative.split("/");
+  for (let index = 1; index <= parts.length; index++) {
+    const path = parts.slice(0, index).join("/");
+    if (
+      excludedDirectories.has(path) &&
+      (path !== entry.relative || entry.isDirectory)
+    )
+      return true;
+  }
+  return false;
+}
+
 export function countFolderEntries(
   entries: FolderEntry[],
   filter: string,
   kindFilter: "all" | "files" | "folders",
+  excludedFiles: ReadonlySet<string> = new Set(),
+  excludedDirectories: ReadonlySet<string> = new Set(),
 ) {
   return displayEntries(entries).filter(
     ({ entry }) =>
-      matchesFilter(entry, filter) && matchesKindFilter(entry, kindFilter),
+      !excludedByKind(entry, excludedFiles, excludedDirectories) &&
+      matchesFilter(entry, filter) &&
+      matchesKindFilter(entry, kindFilter),
   ).length;
 }
 
@@ -220,6 +242,8 @@ export function folderRows(
   sort: FolderSort,
   descending: boolean,
   kindFilter: "all" | "files" | "folders" = "all",
+  excludedFiles: ReadonlySet<string> = new Set(),
+  excludedDirectories: ReadonlySet<string> = new Set(),
 ): FolderNode[] {
   const compare = (a: FolderNode, b: FolderNode) => {
     const aFolder = a.branch || a.displayEntry?.isDirectory === true;
@@ -239,7 +263,9 @@ export function folderRows(
     }
     return (descending ? -order : order) || a.key.localeCompare(b.key);
   };
-  const records = displayEntries(entries);
+  const records = displayEntries(entries).filter(
+    ({ entry }) => !excludedByKind(entry, excludedFiles, excludedDirectories),
+  );
   const filtered = records.filter(
     ({ entry }) =>
       matchesFilter(entry, filter) && matchesKindFilter(entry, kindFilter),
