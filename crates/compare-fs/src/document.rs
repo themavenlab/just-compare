@@ -50,6 +50,13 @@ pub fn checked_path(path: &Path, allow_missing_leaf: bool) -> Result<PathBuf, Fi
         if allow_missing_leaf
           && ancestor == path
           && error.kind() == std::io::ErrorKind::NotFound => {}
+      // On Windows, fs::canonicalize returns verbatim paths (\\?\C:\…).
+      // path.ancestors() then yields the bare \\?\ prefix itself, which
+      // has no parent and cannot be stat'd (os error 2 / NotFound).
+      // Once there are no more real ancestors to validate, stop iterating.
+      Err(error) if ancestor.parent().is_none() && error.kind() == std::io::ErrorKind::NotFound => {
+        break
+      }
       Err(error) => return Err(error.into()),
     }
   }
@@ -397,6 +404,17 @@ mod tests {
     assert!(Document::open(&junction.join("file.txt"), None).is_err());
     assert!(checked_path(&junction.join("new.txt"), true).is_err());
     assert_eq!(fs::read_to_string(target.join("file.txt")).unwrap(), "safe");
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn verbatim_windows_path_ancestor_traversal_succeeds() {
+    let root = tempfile::tempdir().unwrap();
+    let canonical_path = root.path().canonicalize().unwrap();
+    assert!(
+      checked_path(&canonical_path, false).is_ok(),
+      "checked_path must succeed for Windows verbatim paths returned by canonicalize"
+    );
   }
 
   #[cfg(unix)]
