@@ -3,6 +3,7 @@ import type { FolderEntry } from "./api";
 import {
   canCopy,
   countFolderEntries,
+  differenceFilters,
   folderRows,
   folderSelectionKeys,
   formatFolderErrorsLabel,
@@ -10,6 +11,7 @@ import {
   matchesFilter,
   matchesKindFilter,
   matchesName,
+  targetRelativeFor,
   toggleFolderErrorFilter,
 } from "./folderPresentation";
 import {
@@ -470,5 +472,33 @@ describe("folder presentation", () => {
     expect(toggleFolderErrorFilter("error", "differences")).toBe("differences");
     expect(toggleFolderErrorFilter("error", "all")).toBe("all");
     expect(toggleFolderErrorFilter("error", "error")).toBe("all");
+  });
+  it("builds targets under existing and case-aligned directory ancestors", () => {
+    expect(targetRelativeFor([], "support/github-tracker", "right")).toBe(
+      "support/github-tracker",
+    );
+    const support: FolderEntry = {
+      ...entry("support", "same", null, null),
+      isDirectory: true,
+      leftKind: "directory",
+      rightKind: "directory",
+      leftRelative: "Support",
+      rightRelative: "support",
+    };
+    expect(
+      targetRelativeFor([support], "support/github-tracker", "right"),
+    ).toBe("Support/github-tracker");
+  });
+  it("does not use a same-name target ancestor when it is a file", () => {
+    const supportFile: FolderEntry = {
+      ...entry("support"),
+      leftKind: "file",
+      rightKind: "directory",
+      leftRelative: "support",
+      rightRelative: "support",
+    };
+    expect(
+      targetRelativeFor([supportFile], "support/github-tracker", "left"),
+    ).toBe("support/github-tracker");
   });
 });

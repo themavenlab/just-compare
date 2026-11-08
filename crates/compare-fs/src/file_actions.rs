@@ -5,7 +5,9 @@
 //! timestamp changes affect selected entries only. Checks are bounded and reject
 //! links, but are not a race-free boundary against concurrent filesystem changes.
 //! Basic permissions are preserved on copy; timestamps, ACLs and extended metadata
-//! are not. Moves copy first, then recycle, and are not transactional.
+//! are not. Direct-target copy/move previews include missing parent directories,
+//! which are created individually and retained if a later effect fails. Moves
+//! copy first, then recycle, and are not transactional.
 //! Rename checks for collisions before calling the portable rename API; concurrent
 //! namespace changes can still race that check on platforms without no-replace
 //! directory rename. Read-only/touch change an inode, including its hard-link aliases.
@@ -17,7 +19,7 @@
 //! independent operation outcomes, reject overlapping operation footprints, and
 //! share the same entry budget; they do not promise transactional execution.
 
-use crate::{checked_path, FileError};
+use crate::{checked_path, display_path, FileError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, FileTimes, Metadata};
@@ -123,8 +125,8 @@ pub struct FileActionOperation {
 #[serde(rename_all = "camelCase")]
 pub struct FileActionEntry {
   pub action: FileAction,
-  pub source: PathBuf,
-  pub destination: PathBuf,
+  pub source: Option<PathBuf>,
+  pub destination: Option<PathBuf>,
   pub directory: bool,
   pub replaces_existing: bool,
 }
@@ -162,6 +164,7 @@ struct ApprovedOperation {
   source: Tree,
   destination: Tree,
   destination_parent: Option<(PathBuf, ParentSnapshot)>,
+  missing_ancestors: Vec<PathBuf>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -212,10 +215,75 @@ fn check_cancel(cancelled: &AtomicBool) -> Result<(), FileError> {
 }
 
 fn safe_path(path: &Path, missing: bool) -> Result<PathBuf, FileError> {
+  validate_path_syntax(path)?;
+  checked_path(path, missing)
+}
+
+fn validate_path_syntax(path: &Path) -> Result<(), FileError> {
   if path.to_str().is_none() || path.components().any(|c| matches!(c, Component::CurDir)) {
     return Err(failure("Unicode paths without traversal are required."));
   }
-  checked_path(path, missing)
+  if !path.is_absolute()
+    || path
+      .components()
+      .any(|component| matches!(component, Component::ParentDir))
+  {
+    return Err(failure(
+      "An absolute path without parent traversal is required.",
+    ));
+  }
+  Ok(())
+}
+
+/// Returns the nearest existing directory ancestor and missing ancestors,
+/// ordered shallowest-first and rooted at the canonical ancestor path.
+fn missing_ancestors(target: &Path) -> Result<(PathBuf, Vec<PathBuf>), FileError> {
+  validate_path_syntax(target)?;
+  let mut cursor = target
+    .parent()
+    .ok_or_else(|| failure("Destination has no parent directory."))?;
+  let mut missing = Vec::new();
+  loop {
+    match fs::symlink_metadata(cursor) {
+      Ok(metadata) => {
+        if !metadata.is_dir() {
+          return Err(failure(&format!(
+            "Cannot create a folder because \"{}\" is not a directory.",
+            display_path(cursor)
+          )));
+        }
+        let canonical = checked_path(cursor, false)?;
+        let missing = missing
+          .iter()
+          .rev()
+          .map(|path: &PathBuf| {
+            path
+              .strip_prefix(cursor)
+              .map(|relative| canonical.join(relative))
+              .map_err(|_| failure("Invalid missing destination ancestor."))
+          })
+          .collect::<Result<Vec<_>, _>>()?;
+        return Ok((canonical, missing));
+      }
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        if missing.len() == 64 {
+          return Err(failure(
+            "Destination has more than 64 missing parent folders.",
+          ));
+        }
+        missing.push(cursor.to_path_buf());
+        cursor = cursor
+          .parent()
+          .ok_or_else(|| failure("Destination has no existing ancestor."))?;
+      }
+      Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+        cursor = cursor
+          .parent()
+          .ok_or_else(|| FileError(error.to_string()))?;
+      }
+      Err(error) => return Err(error.into()),
+    }
+  }
 }
 
 fn leaf_name(name: &str) -> Result<&Path, FileError> {
@@ -391,7 +459,8 @@ impl FileActionPlan {
           }
           let plan = Self::preview(request, cancelled)?;
           for next in plan.approved {
-            count += next.source.len().max(1) + next.destination.len();
+            count +=
+              next.source.len().max(1) + next.destination.len() + next.missing_ancestors.len();
             if count > MAX_ENTRIES {
               return Err(failure("Batch exceeds the 10000-entry action limit."));
             }
@@ -459,12 +528,9 @@ impl FileActionPlan {
       } => {
         overwrite = allow;
         direct_target = true;
+        validate_path_syntax(&destination)?;
         let sources = selected_paths(vec![source])?;
-        (
-          FileAction::Copy,
-          sources,
-          Some(safe_path(&destination, true)?),
-        )
+        (FileAction::Copy, sources, Some(destination))
       }
       FileActionRequest::MoveTo {
         source,
@@ -473,10 +539,11 @@ impl FileActionPlan {
       } => {
         overwrite = allow;
         direct_target = true;
+        validate_path_syntax(&destination)?;
         (
           FileAction::Move,
           selected_paths(vec![source])?,
-          Some(safe_path(&destination, true)?),
+          Some(destination),
         )
       }
       FileActionRequest::Batch { .. } => unreachable!(),
@@ -538,11 +605,13 @@ impl FileActionPlan {
     };
     for source in items {
       check_cancel(cancelled)?;
+      let mut missing_directories = Vec::new();
+      let mut existing_destination_parent = None;
       let target = match &action {
         FileAction::Copy | FileAction::Move => {
           let parent = destination.as_ref().unwrap();
           let source = source.unwrap();
-          if parent.starts_with(source) {
+          if !direct_target && parent.starts_with(source) {
             return Err(failure(
               "Destination directory cannot be within the source.",
             ));
@@ -552,17 +621,45 @@ impl FileActionPlan {
           } else {
             parent.join(source.file_name().unwrap())
           };
-          Some(if overwrite {
-            safe_path(&target, true)?
+          if direct_target {
+            let (existing_parent, missing) = missing_ancestors(&target)?;
+            if missing.is_empty() {
+              Some(if overwrite {
+                safe_path(&target, true)?
+              } else {
+                absent_destination(&target)?
+              })
+            } else {
+              let leaf = target
+                .file_name()
+                .ok_or_else(|| failure("Destination has no filename."))?;
+              let target = missing.last().unwrap().join(leaf);
+              existing_destination_parent = Some(existing_parent);
+              missing_directories = missing;
+              Some(target)
+            }
           } else {
-            absent_destination(&target)?
-          })
+            Some(if overwrite {
+              safe_path(&target, true)?
+            } else {
+              absent_destination(&target)?
+            })
+          }
         }
         FileAction::Rename | FileAction::CreateDirectory => {
           Some(absent_destination(destination.as_ref().unwrap())?)
         }
         _ => None,
       };
+      if direct_target
+        && target
+          .as_ref()
+          .is_some_and(|target| target.starts_with(source.unwrap()))
+      {
+        return Err(failure(
+          "Destination directory cannot be within the source.",
+        ));
+      }
       if let Some(target) = &target {
         if sources.iter().any(|s| overlaps(s, target))
           || approved.iter().any(|a: &ApprovedOperation| {
@@ -600,13 +697,13 @@ impl FileActionPlan {
           }
         }
       }
-      let entries: Vec<_> = match &action {
+      let mut entries: Vec<_> = match &action {
         FileAction::Copy | FileAction::Move | FileAction::Rename => tree
           .iter()
           .map(|(relative, snapshot)| FileActionEntry {
             action: action.clone(),
-            source: tree_path(source.unwrap(), relative),
-            destination: tree_path(target.as_ref().unwrap(), relative),
+            source: Some(tree_path(source.unwrap(), relative)),
+            destination: Some(tree_path(target.as_ref().unwrap(), relative)),
             directory: snapshot.directory,
             replaces_existing: destination_tree.contains_key(relative),
           })
@@ -617,8 +714,8 @@ impl FileActionPlan {
             let path = tree_path(source.unwrap(), relative);
             FileActionEntry {
               action: action.clone(),
-              source: path.clone(),
-              destination: path,
+              source: Some(path.clone()),
+              destination: Some(path),
               directory: snapshot.directory,
               replaces_existing: false,
             }
@@ -628,8 +725,8 @@ impl FileActionPlan {
           let path = target.as_ref().unwrap();
           vec![FileActionEntry {
             action: action.clone(),
-            source: path.clone(),
-            destination: path.clone(),
+            source: Some(path.clone()),
+            destination: Some(path.clone()),
             directory: true,
             replaces_existing: false,
           }]
@@ -638,13 +735,25 @@ impl FileActionPlan {
           let path = source.unwrap();
           vec![FileActionEntry {
             action: action.clone(),
-            source: path.clone(),
-            destination: path.clone(),
+            source: Some(path.clone()),
+            destination: Some(path.clone()),
             directory: tree[Path::new("")].directory,
             replaces_existing: false,
           }]
         }
       };
+      for ancestor in missing_directories.iter().rev() {
+        entries.insert(
+          0,
+          FileActionEntry {
+            action: FileAction::CreateDirectory,
+            source: None,
+            destination: Some(ancestor.clone()),
+            directory: true,
+            replaces_existing: false,
+          },
+        );
+      }
       if matches!(action, FileAction::Touch { .. })
         && tree.get(Path::new("")).is_some_and(|s| s.directory)
       {
@@ -653,11 +762,17 @@ impl FileActionPlan {
       let destination_parent = target
         .as_ref()
         .map(|p| {
-          let parent = p.parent().unwrap().to_path_buf();
+          let parent = existing_destination_parent
+            .clone()
+            .unwrap_or_else(|| p.parent().unwrap().to_path_buf());
           let snapshot = parent_snapshot(&parent)?;
           Ok::<_, FileError>((parent, snapshot))
         })
         .transpose()?;
+      count += missing_directories.len();
+      if count > MAX_ENTRIES {
+        return Err(failure("File action exceeds the 10000-entry limit."));
+      }
       approved.push(ApprovedOperation {
         operation: FileActionOperation {
           action: action.clone(),
@@ -669,6 +784,7 @@ impl FileActionPlan {
         source: tree,
         destination: destination_tree,
         destination_parent,
+        missing_ancestors: missing_directories,
       });
     }
     Ok(Self {
@@ -733,7 +849,31 @@ fn revalidate(approved: &ApprovedOperation, cancelled: &AtomicBool) -> Result<()
   }
   if let Some(destination) = &approved.operation.destination {
     let (parent, snapshot) = approved.destination_parent.as_ref().unwrap();
-    let target_matches = if approved.destination.is_empty() {
+    let target_matches = if !approved.missing_ancestors.is_empty() {
+      for ancestor in &approved.missing_ancestors {
+        match fs::symlink_metadata(ancestor) {
+          Ok(metadata) if metadata.is_dir() => {
+            if checked_path(ancestor, false)? != *ancestor {
+              return Err(failure(
+                "Destination ancestor changed since preview. Preview again.",
+              ));
+            }
+          }
+          Ok(_) => {
+            return Err(failure(
+              "A missing destination folder is now occupied by a non-folder.",
+            ));
+          }
+          Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+          Err(error) => return Err(error.into()),
+        }
+      }
+      match fs::symlink_metadata(destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Ok(_) => false,
+        Err(error) => return Err(error.into()),
+      }
+    } else if approved.destination.is_empty() {
       absent_destination(destination)? == *destination
     } else {
       safe_path(destination, false)? == *destination
@@ -851,6 +991,41 @@ fn execute_operation(
   let operation = &approved.operation;
   let source = operation.source.as_deref();
   let destination = operation.destination.as_deref();
+  if matches!(operation.action, FileAction::Copy | FileAction::Move) {
+    for directory in &approved.missing_ancestors {
+      check_cancel(cancelled)?;
+      match fs::symlink_metadata(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+          match fs::create_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+              let metadata = fs::symlink_metadata(directory)?;
+              if !metadata.is_dir() || checked_path(directory, false)? != *directory {
+                return Err(failure(
+                  "A missing destination folder is now occupied by a non-folder.",
+                ));
+              }
+            }
+            Err(error) => return Err(error.into()),
+          }
+          checked_path(directory, false)?;
+        }
+        Ok(metadata) if metadata.is_dir() => {
+          if checked_path(directory, false)? != *directory {
+            return Err(failure(
+              "Destination ancestor changed since preview. Preview again.",
+            ));
+          }
+        }
+        Ok(_) => {
+          return Err(failure(
+            "A missing destination folder is now occupied by a non-folder.",
+          ));
+        }
+        Err(error) => return Err(error.into()),
+      }
+    }
+  }
   match &operation.action {
     FileAction::Copy | FileAction::Move => {
       copy_tree(
@@ -934,6 +1109,14 @@ mod tests {
     }
   }
 
+  fn copy_to(source: PathBuf, destination: PathBuf, overwrite: bool) -> FileActionRequest {
+    FileActionRequest::CopyTo {
+      source,
+      destination,
+      overwrite,
+    }
+  }
+
   fn run(plan: FileActionPlan) -> Vec<FileActionOutcome> {
     plan.execute(&AtomicBool::new(false), |_, _| {})
   }
@@ -959,6 +1142,177 @@ mod tests {
     );
     assert!(destination.join("source").join("empty").is_dir());
     assert!(source.exists());
+  }
+
+  #[test]
+  fn direct_directory_copy_previews_and_creates_missing_parent_folders() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("source");
+    let destination_root = temp.path().join("destination");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&destination_root).unwrap();
+    fs::create_dir(source.join("sub")).unwrap();
+    fs::write(source.join("a.txt"), b"alpha").unwrap();
+    fs::write(source.join("sub").join("b.txt"), b"beta").unwrap();
+    let destination = destination_root
+      .join("missing1")
+      .join("missing2")
+      .join("leaf");
+
+    let plan = FileActionPlan::preview(
+      copy_to(source.clone(), destination.clone(), false),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    let operation = &plan.operations()[0];
+    let canonical_destination_root = fs::canonicalize(&destination_root).unwrap();
+    let creation_entries: Vec<_> = operation
+      .entries
+      .iter()
+      .filter(|entry| entry.action == FileAction::CreateDirectory)
+      .collect();
+    assert_eq!(
+      creation_entries
+        .iter()
+        .map(|entry| entry.destination.as_ref().unwrap().clone())
+        .collect::<Vec<_>>(),
+      vec![
+        canonical_destination_root.join("missing1"),
+        canonical_destination_root.join("missing1").join("missing2"),
+      ]
+    );
+    assert!(creation_entries.iter().all(|entry| entry.source.is_none()));
+    assert_eq!(operation.entry_count, operation.entries.len());
+    assert_eq!(run(plan)[0].result, FileActionStatus::Completed);
+    assert_eq!(
+      fs::read(destination.join("sub").join("b.txt")).unwrap(),
+      b"beta"
+    );
+  }
+
+  #[test]
+  fn direct_file_copy_creates_missing_parent_with_either_overwrite_setting() {
+    let (_temp, source, destination_root) = fixture();
+    for overwrite in [false, true] {
+      let destination = destination_root
+        .join(format!("target-{overwrite}"))
+        .join("nested")
+        .join("copy.txt");
+      let plan = FileActionPlan::preview(
+        copy_to(source.join("a.txt"), destination.clone(), overwrite),
+        &AtomicBool::new(false),
+      )
+      .unwrap();
+      assert_eq!(run(plan)[0].result, FileActionStatus::Completed);
+      assert_eq!(fs::read(destination).unwrap(), b"alpha");
+    }
+  }
+
+  #[test]
+  fn batch_direct_copies_can_share_missing_parent_folders() {
+    let (_temp, source, destination_root) = fixture();
+    fs::write(source.join("b.txt"), b"beta").unwrap();
+    let parent = destination_root.join("shared").join("missing");
+    let plan = FileActionPlan::preview(
+      FileActionRequest::Batch {
+        requests: vec![
+          copy_to(source.join("a.txt"), parent.join("a.txt"), false),
+          copy_to(source.join("b.txt"), parent.join("b.txt"), false),
+        ],
+      },
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    let results = run(plan);
+    assert!(results
+      .iter()
+      .all(|result| result.result == FileActionStatus::Completed));
+    assert_eq!(fs::read(parent.join("a.txt")).unwrap(), b"alpha");
+    assert_eq!(fs::read(parent.join("b.txt")).unwrap(), b"beta");
+  }
+
+  #[test]
+  fn a_file_in_the_destination_ancestor_chain_blocks_preview() {
+    let (_temp, source, destination_root) = fixture();
+    fs::write(destination_root.join("blocked"), b"not a folder").unwrap();
+    let error = FileActionPlan::preview(
+      copy_to(
+        source.join("a.txt"),
+        destination_root
+          .join("blocked")
+          .join("nested")
+          .join("a.txt"),
+        false,
+      ),
+      &AtomicBool::new(false),
+    )
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("not a directory"));
+    assert!(error.to_string().contains("blocked"));
+    assert!(!destination_root.join("blocked").join("nested").exists());
+  }
+
+  #[test]
+  fn a_missing_ancestor_occupied_after_preview_is_rejected() {
+    let (_temp, source, destination_root) = fixture();
+    let blocked = destination_root.join("created-after-preview");
+    let destination = blocked.join("nested").join("a.txt");
+    let plan = FileActionPlan::preview(
+      copy_to(source.join("a.txt"), destination.clone(), false),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    fs::write(&blocked, b"now a file").unwrap();
+    assert!(matches!(run(plan)[0].result, FileActionStatus::Failed(_)));
+    assert!(!destination.exists());
+    assert_eq!(fs::read(source.join("a.txt")).unwrap(), b"alpha");
+  }
+
+  #[test]
+  fn move_to_missing_parent_recycles_source_only_after_copy_succeeds() {
+    let (_temp, source, destination_root) = fixture();
+    let source_file = source.join("a.txt");
+    let recovered = destination_root.join("recovered");
+    fs::create_dir(&recovered).unwrap();
+    let destination = destination_root.join("move").join("nested").join("a.txt");
+    let plan = FileActionPlan::preview(
+      FileActionRequest::MoveTo {
+        source: source_file.clone(),
+        destination: destination.clone(),
+        overwrite: false,
+      },
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    let result = plan.execute_with(&AtomicBool::new(false), &mut |_, _| {}, |path| {
+      fs::rename(path, recovered.join("a.txt")).map_err(Into::into)
+    });
+    assert_eq!(result[0].result, FileActionStatus::Completed);
+    assert!(!source_file.exists());
+    assert!(recovered.join("a.txt").exists());
+    assert_eq!(fs::read(destination).unwrap(), b"alpha");
+
+    fs::write(&source_file, b"alpha").unwrap();
+    let destination = destination_root
+      .join("move-failure")
+      .join("nested")
+      .join("a.txt");
+    let plan = FileActionPlan::preview(
+      FileActionRequest::MoveTo {
+        source: source_file.clone(),
+        destination: destination.clone(),
+        overwrite: false,
+      },
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    let result = plan.execute_with(&AtomicBool::new(false), &mut |_, _| {}, |_| {
+      Err(failure("trash unavailable"))
+    });
+    assert!(matches!(result[0].result, FileActionStatus::Failed(_)));
+    assert!(source_file.exists());
+    assert_eq!(fs::read(destination).unwrap(), b"alpha");
   }
 
   #[test]
@@ -1332,11 +1686,10 @@ mod tests {
     .unwrap();
     let entries = &plan.operations()[0].entries;
     assert_eq!(entries.len(), 4);
-    assert!(entries.iter().any(
-      |e| e.source == safe_path(&source.join("a.txt"), false).unwrap()
-        && e.destination == safe_path(&target.join("a.txt"), false).unwrap()
-        && e.replaces_existing
-    ));
+    assert!(entries.iter().any(|e| e.source
+      == Some(safe_path(&source.join("a.txt"), false).unwrap())
+      && e.destination == Some(safe_path(&target.join("a.txt"), false).unwrap())
+      && e.replaces_existing));
     assert_eq!(run(plan)[0].result, FileActionStatus::Completed);
     assert_eq!(fs::read(target.join("a.txt")).unwrap(), b"alpha");
     assert_eq!(fs::read(target.join("extra")).unwrap(), b"keep");
@@ -1600,13 +1953,13 @@ mod tests {
       assert_eq!(operation.entry_count, count);
       let entry = &operation.entries[0];
       assert_eq!(entry.action, action);
-      assert_eq!(entry.source, from);
-      assert_eq!(entry.destination, to);
+      assert_eq!(entry.source, Some(from.clone()));
+      assert_eq!(entry.destination, Some(to.clone()));
       assert_eq!(entry.directory, directory);
       assert!(!entry.replaces_existing);
       if count == 2 {
-        assert_eq!(operation.entries[1].source, from.join("a.txt"));
-        assert_eq!(operation.entries[1].destination, to.join("a.txt"));
+        assert_eq!(operation.entries[1].source, Some(from.join("a.txt")));
+        assert_eq!(operation.entries[1].destination, Some(to.join("a.txt")));
       }
       assert_eq!(
         serde_json::to_value(entry).unwrap(),

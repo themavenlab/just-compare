@@ -34,6 +34,7 @@ import {
   formatFolderErrorsLabel,
   formatSize,
   matchesName,
+  targetRelativeFor,
   toggleFolderErrorFilter,
 } from "./folderPresentation";
 import { FolderRulesDialog } from "./FolderRulesDialog";
@@ -3054,6 +3055,16 @@ export function ComparisonWorkspace({
     } else if (action === "copySide" || action === "moveSide") {
       const opposite = side === "left" ? "right" : "left";
       const requests: LocalActionRequest[] = [];
+      const sourceDirectories = new Map(
+        folders.flatMap((entry) => {
+          const sourceKind = side === "left" ? entry.leftKind : entry.rightKind;
+          const sourceRelative =
+            side === "left" ? entry.leftRelative : entry.rightRelative;
+          return sourceKind === "directory" && sourceRelative
+            ? [[sourceRelative, entry] as const]
+            : [];
+        }),
+      );
       for (const [index, entry] of entries.entries()) {
         if (
           entries.some(
@@ -3067,23 +3078,11 @@ export function ComparisonWorkspace({
         const sourceRelative =
           (side === "left" ? entry.leftRelative : entry.rightRelative) ??
           entry.relative;
-        let targetRelative =
+        const alignedTargetRelative =
           opposite === "left" ? entry.leftRelative : entry.rightRelative;
-        if (!targetRelative) {
-          const parent = folders
-            .filter(
-              (candidate) =>
-                candidate.isDirectory &&
-                entry.relative.startsWith(`${candidate.relative}/`) &&
-                (opposite === "left"
-                  ? candidate.leftRelative
-                  : candidate.rightRelative),
-            )
-            .sort((a, b) => b.relative.length - a.relative.length)[0];
-          targetRelative = parent
-            ? `${opposite === "left" ? parent.leftRelative : parent.rightRelative}/${entry.relative.slice(parent.relative.length + 1)}`
-            : sourceRelative;
-        }
+        const targetRelative =
+          alignedTargetRelative ??
+          targetRelativeFor(folders, sourceRelative, side, sourceDirectories);
         requests.push({
           kind: action === "copySide" ? "copyTo" : "moveTo",
           source: sources[index]!,
@@ -3799,14 +3798,20 @@ export function ComparisonWorkspace({
             {localPreview.operations.flatMap((operation) =>
               operation.entries.map((entry, index) => (
                 <p key={`${operation.source}-${index}`}>
-                  <strong>
-                    {entry.action.kind}
-                    {entry.replacesExisting ? " (replaces existing)" : ""}
-                  </strong>
-                  <br />
-                  {entry.source ?? "(new)"}
-                  <br />
-                  {entry.destination ?? "(recycle / metadata change)"}
+                  {entry.action.kind === "createDirectory" ? (
+                    <strong>Create folder {entry.destination}</strong>
+                  ) : (
+                    <>
+                      <strong>
+                        {entry.action.kind}
+                        {entry.replacesExisting ? " (replaces existing)" : ""}
+                      </strong>
+                      <br />
+                      {entry.source ?? "(new)"}
+                      <br />
+                      {entry.destination ?? "(recycle / metadata change)"}
+                    </>
+                  )}
                 </p>
               )),
             )}

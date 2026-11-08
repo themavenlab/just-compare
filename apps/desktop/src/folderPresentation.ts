@@ -46,6 +46,48 @@ export function formatSize(bytes: number) {
   }
   return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
+
+function directoriesBySourcePath(
+  entries: FolderEntry[],
+  sourceSide: "left" | "right",
+) {
+  const directories = new Map<string, FolderEntry>();
+  for (const entry of entries) {
+    const kind = sourceSide === "left" ? entry.leftKind : entry.rightKind;
+    const relative =
+      sourceSide === "left" ? entry.leftRelative : entry.rightRelative;
+    if (kind === "directory" && relative) directories.set(relative, entry);
+  }
+  return directories;
+}
+
+export function targetRelativeFor(
+  entries: FolderEntry[],
+  sourceRelative: string,
+  sourceSide: "left" | "right",
+  directories = directoriesBySourcePath(entries, sourceSide),
+) {
+  const targetSide = sourceSide === "left" ? "right" : "left";
+  const sourceParts = sourceRelative.split("/");
+  const targetParts: string[] = [];
+  for (const [index, part] of sourceParts.entries()) {
+    const sourcePrefix = sourceParts.slice(0, index + 1).join("/");
+    const directory = directories.get(sourcePrefix);
+    const targetKind =
+      targetSide === "left" ? directory?.leftKind : directory?.rightKind;
+    const targetRelative =
+      targetSide === "left"
+        ? directory?.leftRelative
+        : directory?.rightRelative;
+    if (targetKind === "directory" && targetRelative) {
+      targetParts.splice(0, targetParts.length, ...targetRelative.split("/"));
+    } else {
+      targetParts.push(part);
+    }
+  }
+  return targetParts.join("/");
+}
+
 export interface FolderNode {
   key: string;
   selectionKey: string;
