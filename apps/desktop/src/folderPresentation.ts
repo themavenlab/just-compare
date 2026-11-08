@@ -47,6 +47,8 @@ export function formatSize(bytes: number) {
   return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 export interface FolderNode {
+  key: string;
+  selectionKey: string;
   path: string;
   name: string;
   depth: number;
@@ -54,9 +56,89 @@ export interface FolderNode {
   leftBranch: boolean;
   rightBranch: boolean;
   entry: FolderEntry | null;
+  displayEntry: FolderEntry | null;
+  counterpartBlocked: boolean;
+  displaySide: "left" | "right" | null;
   guides: boolean[];
   lastSibling: boolean;
 }
+
+interface DisplayEntry {
+  key: string;
+  selectionKey: string;
+  source: FolderEntry;
+  entry: FolderEntry;
+  counterpartBlocked: boolean;
+  side: "left" | "right" | null;
+}
+
+function displayEntries(entries: FolderEntry[]): DisplayEntry[] {
+  return entries.flatMap<DisplayEntry>((source) => {
+    if (
+      source.status !== "typeMismatch" ||
+      source.leftKind === null ||
+      source.rightKind === null ||
+      source.leftKind === source.rightKind
+    ) {
+      return [
+        {
+          key: source.relative,
+          selectionKey: source.relative,
+          source,
+          entry: source,
+          counterpartBlocked: false,
+          side: null,
+        },
+      ];
+    }
+    return (["left", "right"] as const).map((side) => {
+      const left = side === "left";
+      const entry: FolderEntry = {
+        ...source,
+        status: left ? "leftOnly" : "rightOnly",
+        leftSize: left ? source.leftSize : null,
+        rightSize: left ? null : source.rightSize,
+        leftModified: left ? (source.leftModified ?? null) : null,
+        rightModified: left ? null : (source.rightModified ?? null),
+        leftRelative: left ? (source.leftRelative ?? null) : null,
+        rightRelative: left ? null : (source.rightRelative ?? null),
+        leftKind: left ? source.leftKind : null,
+        rightKind: left ? null : source.rightKind,
+        detail: null,
+        error: null,
+        newer: null,
+        newerMixed: false,
+        isDirectory:
+          (left ? source.leftKind : source.rightKind) === "directory",
+      };
+      const selectionKey = `${source.relative}\0${side}`;
+      return {
+        key: selectionKey,
+        selectionKey,
+        source,
+        entry,
+        counterpartBlocked: true,
+        side,
+      };
+    });
+  });
+}
+
+export function folderSelectionKeys(entries: FolderEntry[]) {
+  return displayEntries(entries).map(({ selectionKey }) => selectionKey);
+}
+
+export function countFolderEntries(
+  entries: FolderEntry[],
+  filter: string,
+  kindFilter: "all" | "files" | "folders",
+) {
+  return displayEntries(entries).filter(
+    ({ entry }) =>
+      matchesFilter(entry, filter) && matchesKindFilter(entry, kindFilter),
+  ).length;
+}
+
 export function matchesFilter(entry: FolderEntry, filter: string) {
   const paired = entry.leftSize !== null && entry.rightSize !== null;
   const different = entry.status !== "same" && entry.status !== "error";
@@ -114,8 +196,13 @@ export function matchesKindFilter(
   if (filter === "folders") return entry.isDirectory;
   return entry.leftKind === "file" || entry.rightKind === "file";
 }
-export function canCopy(entry: FolderEntry, destination: "left" | "right") {
+export function canCopy(
+  entry: FolderEntry,
+  destination: "left" | "right",
+  counterpartBlocked = false,
+) {
   if (
+    counterpartBlocked ||
     entry.status === "error" ||
     entry.status === "same" ||
     entry.status === "typeMismatch"
@@ -132,42 +219,60 @@ export function folderRows(
   collapsed: ReadonlySet<string>,
   sort: FolderSort,
   descending: boolean,
+  kindFilter: "all" | "files" | "folders" = "all",
 ): FolderNode[] {
   const compare = (a: FolderNode, b: FolderNode) => {
-    const aFolder = a.branch || a.entry?.isDirectory === true;
-    const bFolder = b.branch || b.entry?.isDirectory === true;
+    const aFolder = a.branch || a.displayEntry?.isDirectory === true;
+    const bFolder = b.branch || b.displayEntry?.isDirectory === true;
     if (aFolder !== bFolder) return aFolder ? -1 : 1;
     let order: number;
     if (sort === "name")
       order = a.name.localeCompare(b.name, undefined, { numeric: true });
     else if (sort === "status")
-      order = (a.entry?.status ?? "").localeCompare(b.entry?.status ?? "");
+      order = (a.displayEntry?.status ?? "").localeCompare(
+        b.displayEntry?.status ?? "",
+      );
     else {
-      const av = a.entry?.[sort] ?? -1;
-      const bv = b.entry?.[sort] ?? -1;
+      const av = a.displayEntry?.[sort] ?? -1;
+      const bv = b.displayEntry?.[sort] ?? -1;
       order = av - bv;
     }
-    return (descending ? -order : order) || a.path.localeCompare(b.path);
+    return (descending ? -order : order) || a.key.localeCompare(b.key);
   };
-  const filtered = entries.filter((entry) => matchesFilter(entry, filter));
+  const records = displayEntries(entries);
+  const filtered = records.filter(
+    ({ entry }) =>
+      matchesFilter(entry, filter) && matchesKindFilter(entry, kindFilter),
+  );
   if (!tree)
     return filtered
-      .map((entry) => ({
-        path: entry.relative,
-        name: entry.relative,
+      .map((record) => ({
+        key: record.key,
+        selectionKey: record.selectionKey,
+        path: record.entry.relative,
+        name: record.entry.relative,
         depth: 0,
         branch: false,
         leftBranch: false,
         rightBranch: false,
-        entry,
+        entry: record.source,
+        displayEntry: record.entry,
+        counterpartBlocked: record.counterpartBlocked,
+        displaySide: record.side,
         guides: [],
         lastSibling: true,
       }))
       .sort(compare);
-  const actual = new Map(entries.map((entry) => [entry.relative, entry]));
+  const actual = new Map<string, DisplayEntry[]>();
+  for (const record of records) {
+    const path = record.entry.relative;
+    const pathRecords = actual.get(path) ?? [];
+    pathRecords.push(record);
+    actual.set(path, pathRecords);
+  }
   const leftBranches = new Set<string>();
   const rightBranches = new Set<string>();
-  for (const entry of entries) {
+  for (const { entry } of records) {
     for (const [relative, kind, branches] of [
       [
         entry.leftRelative ?? (entry.leftSize !== null ? entry.relative : null),
@@ -195,21 +300,37 @@ export function folderRows(
     }
   }
   const nodes = new Map<string, FolderNode>();
-  for (const entry of filtered) {
-    const segments = entry.relative.split("/");
+  for (const record of filtered) {
+    const segments = record.entry.relative.split("/");
     for (let index = 0; index < segments.length; index++) {
       const path = segments.slice(0, index + 1).join("/");
-      if (!nodes.has(path)) {
-        const leftBranch = leftBranches.has(path);
-        const rightBranch = rightBranches.has(path);
-        nodes.set(path, {
+      const isLeaf = index === segments.length - 1;
+      const actualRecord = isLeaf
+        ? record
+        : actual.get(path)?.find(({ entry }) => entry.isDirectory);
+      const key = actualRecord?.key ?? path;
+      if (!nodes.has(key)) {
+        const leftBranch =
+          isLeaf && record.counterpartBlocked
+            ? record.entry.leftKind === "directory" && leftBranches.has(path)
+            : leftBranches.has(path);
+        const rightBranch =
+          isLeaf && record.counterpartBlocked
+            ? record.entry.rightKind === "directory" && rightBranches.has(path)
+            : rightBranches.has(path);
+        nodes.set(key, {
+          key,
+          selectionKey: actualRecord?.selectionKey ?? path,
           path,
           name: segments[index] ?? path,
           depth: index,
           branch: leftBranch || rightBranch,
           leftBranch,
           rightBranch,
-          entry: actual.get(path) ?? null,
+          entry: actualRecord?.source ?? null,
+          displayEntry: actualRecord?.entry ?? null,
+          counterpartBlocked: actualRecord?.counterpartBlocked ?? false,
+          displaySide: actualRecord?.side ?? null,
           guides: [],
           lastSibling: true,
         });
@@ -231,7 +352,7 @@ export function folderRows(
     for (const [index, node] of siblings.entries()) {
       const lastSibling = index === siblings.length - 1;
       result.push({ ...node, guides, lastSibling });
-      if (!collapsed.has(node.path))
+      if (node.branch && !collapsed.has(node.path))
         visit(node.path, [...guides, !lastSibling]);
     }
   };

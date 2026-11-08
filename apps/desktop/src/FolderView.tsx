@@ -13,6 +13,7 @@ export type FolderSide = "left" | "right";
 export function FolderView({
   entries,
   filter,
+  kindFilter,
   busy,
   selected,
   onSelect,
@@ -23,6 +24,7 @@ export function FolderView({
 }: {
   entries: FolderEntry[];
   filter: string;
+  kindFilter: "all" | "files" | "folders";
   busy: boolean;
   selected: string[];
   onSelect: (relative: string, checked: boolean) => void;
@@ -58,6 +60,7 @@ export function FolderView({
   const [menu, setMenu] = useState<{
     entry: FolderEntry;
     side: FolderSide;
+    selectionKey: string;
     x: number;
     y: number;
   } | null>(null);
@@ -65,11 +68,19 @@ export function FolderView({
   const anchorPath = useRef<string | null>(null);
   const id = useId();
   const rows = useMemo(
-    () => folderRows(entries, filter, tree, collapsed, sort, descending),
-    [entries, filter, tree, collapsed, sort, descending],
+    () =>
+      folderRows(
+        entries,
+        filter,
+        tree,
+        collapsed,
+        sort,
+        descending,
+        kindFilter,
+      ),
+    [entries, filter, tree, collapsed, sort, descending, kindFilter],
   );
   const latest = useRef({
-    entries,
     rows,
     selected,
     onSelect,
@@ -79,7 +90,6 @@ export function FolderView({
   });
   useLayoutEffect(() => {
     latest.current = {
-      entries,
       rows,
       selected,
       onSelect,
@@ -92,12 +102,19 @@ export function FolderView({
     registerCommands((name) => {
       const {
         rows: currentRows,
-        entries: currentEntries,
         selected: currentSelection,
         onSelect: select,
         onAction: action,
         side: currentSide,
       } = latest.current;
+      const selectedEntries = new Map<string, FolderEntry>();
+      for (const row of currentRows)
+        if (
+          row.entry &&
+          currentSelection.includes(row.selectionKey) &&
+          row.entry.status !== "error"
+        )
+          selectedEntries.set(row.entry.relative, row.entry);
       if (name === "tree") setTree(true);
       else if (name === "flat") setTree(false);
       else if (name === "expand") setExpanded(new Set(latest.current.branches));
@@ -110,24 +127,18 @@ export function FolderView({
         for (const row of currentRows)
           if (row.entry && row.entry.status !== "error")
             select(
-              row.path,
+              row.selectionKey,
               name === "selectAll" ||
                 (name === "selectInvert" &&
-                  !currentSelection.includes(row.path)),
+                  !currentSelection.includes(row.selectionKey)),
             );
       } else if (name) {
-        action(
-          name,
-          currentEntries.filter((entry) =>
-            currentSelection.includes(entry.relative),
-          ),
-          currentSide,
-        );
+        action(name, [...selectedEntries.values()], currentSide);
       }
     });
     return () => registerCommands(null);
   }, [registerCommands]);
-  const focusedIndex = rows.findIndex((row) => row.path === focused);
+  const focusedIndex = rows.findIndex((row) => row.selectionKey === focused);
   function toggle(path: string) {
     setExpanded((prior) => {
       const next = new Set(prior);
@@ -150,14 +161,23 @@ export function FolderView({
   function entryKind(entry: FolderEntry, activeSide: FolderSide) {
     return activeSide === "left" ? entry.leftKind : entry.rightKind;
   }
-  function commands(entry: FolderEntry, activeSide: FolderSide): MenuCommand[] {
-    const targets = selected.includes(entry.relative)
-      ? entries.filter((item) => selected.includes(item.relative))
-      : [entry];
-    const hasTypeMismatch = targets.some(
+  function commands(
+    entry: FolderEntry,
+    activeSide: FolderSide,
+    selectionKey: string,
+  ): MenuCommand[] {
+    const targets = new Map<string, FolderEntry>();
+    if (selected.includes(selectionKey)) {
+      for (const row of rows)
+        if (row.entry && selected.includes(row.selectionKey))
+          targets.set(row.entry.relative, row.entry);
+    } else targets.set(entry.relative, entry);
+    const selectedEntries = [...targets.values()];
+    const hasTypeMismatch = selectedEntries.some(
       (item) => item.status === "typeMismatch",
     );
-    const invoke = (name: string) => onAction(name, targets, activeSide);
+    const invoke = (name: string) =>
+      onAction(name, selectedEntries, activeSide);
     return [
       {
         label: "Open With",
@@ -198,7 +218,7 @@ export function FolderView({
       {
         label: "Rename...",
         run: () => invoke("rename"),
-        disabled: busy || targets.length !== 1,
+        disabled: busy || selectedEntries.length !== 1,
       },
       {
         label: "Attributes...",
@@ -311,28 +331,31 @@ export function FolderView({
                     : Math.max(0, Math.min(rows.length - 1, index + step));
               const nextRow = rows[next];
               if (!nextRow) return;
-              setFocused(nextRow.path);
+              setFocused(nextRow.selectionKey);
               if (!busy && !event.ctrlKey && !event.metaKey) {
                 const anchor =
                   event.shiftKey && anchorPath.current !== null
                     ? Math.max(
                         0,
-                        rows.findIndex((r) => r.path === anchorPath.current),
+                        rows.findIndex(
+                          (r) => r.selectionKey === anchorPath.current,
+                        ),
                       )
                     : next;
-                if (!event.shiftKey) anchorPath.current = nextRow.path;
+                if (!event.shiftKey) anchorPath.current = nextRow.selectionKey;
                 else if (anchorPath.current === null)
-                  anchorPath.current = row?.path ?? nextRow.path;
+                  anchorPath.current =
+                    row?.selectionKey ?? nextRow.selectionKey;
                 const range = new Set(
                   rows
                     .slice(Math.min(anchor, next), Math.max(anchor, next) + 1)
                     .filter((r) => r.entry && r.entry.status !== "error")
-                    .map((r) => r.path),
+                    .map((r) => r.selectionKey),
                 );
-                for (const path of selected)
-                  if (!range.has(path)) onSelect(path, false);
-                for (const path of range)
-                  if (!selected.includes(path)) onSelect(path, true);
+                for (const key of selected)
+                  if (!range.has(key)) onSelect(key, false);
+                for (const key of range)
+                  if (!selected.includes(key)) onSelect(key, true);
               }
             } else if (row && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
               event.preventDefault();
@@ -346,7 +369,7 @@ export function FolderView({
               else if (row.entry && openable(row.entry)) openPair(row.entry);
             } else if (row?.entry && !busy && event.key === " ") {
               event.preventDefault();
-              onSelect(row.path, !selected.includes(row.path));
+              onSelect(row.selectionKey, !selected.includes(row.selectionKey));
             } else if (
               row?.entry &&
               !busy &&
@@ -377,6 +400,7 @@ export function FolderView({
               setMenu({
                 entry: row.entry,
                 side,
+                selectionKey: row.selectionKey,
                 x: box?.left ?? 4,
                 y: (box?.top ?? 0) + 40,
               });
@@ -386,47 +410,52 @@ export function FolderView({
             const node = rows[index];
             if (!node) return null;
             const entry = node.entry;
+            const displayEntry = node.displayEntry;
             return (
               <div
-                className={`paired-folder-row folder-row ${index % 2 ? "alternate-row" : ""} ${focused === node.path ? "focused-row" : ""} ${selected.includes(node.path) ? "selected-folder-row" : ""}`}
-                data-status={entry?.status ?? "ancestor"}
+                className={`paired-folder-row folder-row ${index % 2 ? "alternate-row" : ""} ${focused === node.selectionKey ? "focused-row" : ""} ${selected.includes(node.selectionKey) ? "selected-folder-row" : ""}`}
+                data-status={displayEntry?.status ?? "ancestor"}
                 data-relative={node.path}
+                data-display-side={node.displaySide ?? "paired"}
                 id={`${id}-${index}`}
                 role={tree ? "treeitem" : undefined}
                 aria-level={tree ? node.depth + 1 : undefined}
                 aria-expanded={
                   tree && node.branch ? !collapsed.has(node.path) : undefined
                 }
-                aria-selected={tree ? selected.includes(node.path) : undefined}
+                aria-selected={
+                  tree ? selected.includes(node.selectionKey) : undefined
+                }
               >
                 {(["left", "right"] as const).map((pane) => {
-                  const kind: FolderEntryKind | null = entry
-                    ? entryKind(entry, pane)
+                  const kind: FolderEntryKind | null = displayEntry
+                    ? entryKind(displayEntry, pane)
                     : null;
                   const sideBranch =
                     pane === "left" ? node.leftBranch : node.rightBranch;
                   const sideIsDirectory =
                     kind === "directory" || (kind === null && sideBranch);
                   const missing =
-                    !!entry &&
-                    entry.status !== "error" &&
-                    (pane === "left" ? entry.leftSize : entry.rightSize) ===
-                      null;
+                    !!displayEntry &&
+                    displayEntry.status !== "error" &&
+                    (pane === "left"
+                      ? displayEntry.leftSize
+                      : displayEntry.rightSize) === null;
                   const relative =
                     (pane === "left"
-                      ? entry?.leftRelative
-                      : entry?.rightRelative) ?? node.path;
+                      ? displayEntry?.leftRelative
+                      : displayEntry?.rightRelative) ?? node.path;
                   return (
                     <div
-                      className={`folder-side-columns folder-side ${entry?.status ?? ""} ${missing ? "missing" : ""}`}
+                      className={`folder-side-columns folder-side ${displayEntry?.status ?? ""} ${missing ? "missing" : ""}`}
                       key={pane}
-                      aria-label={`${pane === "left" ? "Left" : "Right"}: ${node.path}${kind ? ` (${kind})` : ""}${entry?.status === "typeMismatch" ? "; not compared because the entry kinds differ" : ""}`}
+                      aria-label={`${pane === "left" ? "Left" : "Right"}: ${node.path}${kind ? ` (${kind})` : ""}`}
                       onClick={(event) => {
                         if (
                           (event.target as HTMLElement).closest("button,input")
                         )
                           return;
-                        setSide(pane);
+                        if (!missing) setSide(pane);
                         if (entry && !busy && entry.status !== "error") {
                           if (event.shiftKey && focusedIndex >= 0) {
                             for (const row of rows.slice(
@@ -434,17 +463,22 @@ export function FolderView({
                               Math.max(index, focusedIndex) + 1,
                             ))
                               if (row.entry && row.entry.status !== "error")
-                                onSelect(row.path, true);
+                                onSelect(row.selectionKey, true);
                           } else if (event.ctrlKey || event.metaKey)
-                            onSelect(node.path, !selected.includes(node.path));
+                            onSelect(
+                              node.selectionKey,
+                              !selected.includes(node.selectionKey),
+                            );
                           else {
-                            for (const path of selected)
-                              if (path !== node.path) onSelect(path, false);
-                            onSelect(node.path, true);
+                            for (const key of selected)
+                              if (key !== node.selectionKey)
+                                onSelect(key, false);
+                            onSelect(node.selectionKey, true);
                           }
                         }
-                        setFocused(node.path);
-                        if (!event.shiftKey) anchorPath.current = node.path;
+                        setFocused(node.selectionKey);
+                        if (!event.shiftKey)
+                          anchorPath.current = node.selectionKey;
                         element.current
                           ?.querySelector<HTMLElement>(".virtual")
                           ?.focus({ preventScroll: true });
@@ -459,22 +493,23 @@ export function FolderView({
                       }}
                       onContextMenu={(event) => {
                         event.preventDefault();
+                        if (!entry || missing) return;
                         setSide(pane);
-                        setFocused(node.path);
-                        if (entry)
-                          setMenu({
-                            entry,
-                            side: pane,
-                            x: event.clientX,
-                            y: event.clientY,
-                          });
+                        setFocused(node.selectionKey);
+                        setMenu({
+                          entry,
+                          side: pane,
+                          selectionKey: node.selectionKey,
+                          x: event.clientX,
+                          y: event.clientY,
+                        });
                       }}
                     >
                       <span
                         className="folder-name-cell"
                         title={
-                          entry?.detail
-                            ? `${relative}: ${entry.detail}`
+                          displayEntry?.detail
+                            ? `${relative}: ${displayEntry.detail}`
                             : relative
                         }
                       >
@@ -499,7 +534,7 @@ export function FolderView({
                             onClick={(event) => {
                               event.stopPropagation();
                               toggle(node.path);
-                              setFocused(node.path);
+                              setFocused(node.selectionKey);
                               element.current
                                 ?.querySelector<HTMLElement>(".virtual")
                                 ?.focus({ preventScroll: true });
@@ -519,9 +554,9 @@ export function FolderView({
                         ) : null}
                         {!missing && (
                           <Icon
-                            className={`entry-icon ${entry?.status === "error" ? "error-icon" : sideIsDirectory ? "folder-icon" : "file-icon"}`}
+                            className={`entry-icon ${displayEntry?.status === "error" ? "error-icon" : sideIsDirectory ? "folder-icon" : "file-icon"}`}
                             name={
-                              entry?.status === "error"
+                              displayEntry?.status === "error"
                                 ? "error"
                                 : sideIsDirectory
                                   ? tree && !collapsed.has(node.path)
@@ -538,14 +573,6 @@ export function FolderView({
                               ? relative.split("/").at(-1)
                               : relative}
                         </span>
-                        {entry?.status === "typeMismatch" && (
-                          <span
-                            className="type-mismatch-note"
-                            title={entry.detail ?? "The entry kinds differ."}
-                          >
-                            Not compared
-                          </span>
-                        )}
                       </span>
                       <span className="file-size">
                         {missing || sideIsDirectory
@@ -553,8 +580,8 @@ export function FolderView({
                           : (() => {
                               const size =
                                 pane === "left"
-                                  ? entry?.leftSize
-                                  : entry?.rightSize;
+                                  ? displayEntry?.leftSize
+                                  : displayEntry?.rightSize;
                               return size == null ? "" : formatSize(size);
                             })()}
                       </span>
@@ -563,8 +590,8 @@ export function FolderView({
                           ? ""
                           : formatTime(
                               pane === "left"
-                                ? entry?.leftModified
-                                : entry?.rightModified,
+                                ? displayEntry?.leftModified
+                                : displayEntry?.rightModified,
                             )}
                       </span>
                       {entry && (
@@ -575,12 +602,14 @@ export function FolderView({
                             disabled={
                               busy ||
                               !canCopy(
-                                entry,
+                                displayEntry ?? entry,
                                 pane === "left" ? "right" : "left",
+                                node.counterpartBlocked,
                               )
                             }
                             onClick={() =>
-                              entryKind(entry, pane) === "directory"
+                              entryKind(displayEntry ?? entry, pane) ===
+                              "directory"
                                 ? onAction("copySide", [entry], pane)
                                 : preview(
                                     entry,
@@ -604,7 +633,7 @@ export function FolderView({
       {menu && (
         <CommandMenu
           label={`Actions for ${menu.entry.relative}`}
-          commands={commands(menu.entry, menu.side)}
+          commands={commands(menu.entry, menu.side, menu.selectionKey)}
           position={{ x: menu.x, y: menu.y }}
           onClose={() => {
             setMenu(null);

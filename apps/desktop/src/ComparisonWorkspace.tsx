@@ -28,11 +28,11 @@ import {
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
 import {
+  countFolderEntries,
   differenceFilters,
+  folderSelectionKeys,
   formatFolderErrorsLabel,
   formatSize,
-  matchesFilter,
-  matchesKindFilter,
   matchesName,
   toggleFolderErrorFilter,
 } from "./folderPresentation";
@@ -2654,12 +2654,13 @@ export function ComparisonWorkspace({
     (row) =>
       peek ||
       (matchesName(row.relative, quickFilter || "*") &&
-        matchesKindFilter(row, filesVisible) &&
         (showMinor || row.importance !== "unimportant") &&
         !ignored.has(row.relative)),
   );
-  const visibleFolders = filteredFolders.filter((row) =>
-    matchesFilter(row, peek ? "all" : filter),
+  const visibleFolderCount = countFolderEntries(
+    filteredFolders,
+    peek ? "all" : filter,
+    peek ? "all" : filesVisible,
   );
   async function openPair(row: FolderEntry) {
     if (folderStale)
@@ -2752,10 +2753,9 @@ export function ComparisonWorkspace({
           jobId,
         });
         setFolders(refreshed);
+        const refreshedKeys = new Set(folderSelectionKeys(refreshed));
         setSelectedFiles((prior) =>
-          prior.filter((path) =>
-            refreshed.some((entry) => entry.relative === path),
-          ),
+          prior.filter((key) => refreshedKeys.has(key)),
         );
         setNotice(
           `Refreshed ${entries.length} selected entries, their descendants, and affected directory summaries.`,
@@ -3831,8 +3831,8 @@ export function ComparisonWorkspace({
         {mode === "folder" && (
           <span className="folder-status-counts">
             {folderStale ? "Results stale / " : ""}
-            {visibleFolders.length} visible / {selectedFiles.length} selected /
-            L: {formatSize(folderBytes("left"))} / R:{" "}
+            {visibleFolderCount} visible / {selectedFiles.length} selected / L:{" "}
+            {formatSize(folderBytes("left"))} / R:{" "}
             {formatSize(folderBytes("right"))}
             {(diskSpace.left || diskSpace.right) && (
               <span
@@ -4817,7 +4817,7 @@ export function ComparisonWorkspace({
             {folderStale
               ? "Files changed on disk. These folder results may be stale; rescan to refresh."
               : hasScanned
-                ? `${visibleFolders.length} matching entries / ${selectedFiles.length} selected.`
+                ? `${visibleFolderCount} matching entries / ${selectedFiles.length} selected.`
                 : "Scan folders to list their contents. Row arrows preview either copy direction; Update and Mirror run left to right."}
           </p>
           {folders.some((entry) => entry.status === "error") &&
@@ -4871,6 +4871,7 @@ export function ComparisonWorkspace({
             key={`${nativeFolderRoots.left}\0${nativeFolderRoots.right}`}
             entries={filteredFolders}
             filter={peek ? "all" : filter}
+            kindFilter={peek ? "all" : filesVisible}
             busy={busy}
             selected={selectedFiles}
             onSelect={(relative, checked) =>

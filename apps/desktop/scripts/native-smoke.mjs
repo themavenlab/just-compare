@@ -1032,16 +1032,31 @@ try {
     "child",
   );
   await page.getByRole("button", { name: "Scan folders", exact: true }).click();
-  const folderMismatchRow = folderList.locator(
+  const folderMismatchRows = folderList.locator(
     '.folder-row[data-relative="type-mismatch-folder"]',
   );
-  await folderMismatchRow.waitFor();
+  await folderMismatchRows.first().waitFor();
   assert.equal(
-    await folderMismatchRow.getAttribute("data-status"),
-    "typeMismatch",
+    await folderMismatchRows.count(),
+    2,
+    "A file/folder conflict is displayed as two side-only rows.",
+  );
+  const folderMismatchFolder = folderList.locator(
+    '.folder-row[data-relative="type-mismatch-folder"][data-display-side="left"]',
+  );
+  const folderMismatchFile = folderList.locator(
+    '.folder-row[data-relative="type-mismatch-folder"][data-display-side="right"]',
+  );
+  assert.equal(
+    await folderMismatchFolder.getAttribute("data-status"),
+    "leftOnly",
+  );
+  assert.equal(
+    await folderMismatchFile.getAttribute("data-status"),
+    "rightOnly",
   );
   assert.match(
-    await folderMismatchRow
+    await folderMismatchFolder
       .locator(".folder-side")
       .nth(0)
       .locator(".entry-icon")
@@ -1049,7 +1064,7 @@ try {
     /folder-icon/,
   );
   assert.match(
-    await folderMismatchRow
+    await folderMismatchFile
       .locator(".folder-side")
       .nth(1)
       .locator(".entry-icon")
@@ -1057,23 +1072,23 @@ try {
     /file-icon/,
   );
   assert.equal(
-    await folderMismatchRow.locator(".type-mismatch-note").count(),
-    2,
+    await folderMismatchRows.locator(".type-mismatch-note").count(),
+    0,
   );
   assert.equal(
-    await folderMismatchRow.locator(".row-hover-actions button").isDisabled(),
-    true,
+    await folderMismatchRows
+      .locator(".row-hover-actions button:not(:disabled)")
+      .count(),
+    0,
   );
-  assert.equal(
-    await folderList
-      .locator('.folder-row[data-relative="type-mismatch-file"]')
-      .getAttribute("data-status"),
-    "typeMismatch",
-  );
-  const reverseMismatch = folderList.locator(
+  const reverseMismatchRows = folderList.locator(
     '.folder-row[data-relative="type-mismatch-file"]',
   );
-  await reverseMismatch
+  assert.equal(await reverseMismatchRows.count(), 2);
+  const reverseMismatchFolder = reverseMismatchRows.locator(
+    '[data-display-side="right"]',
+  );
+  await reverseMismatchFolder
     .locator(".folder-side")
     .nth(1)
     .locator(".tree-toggle")
@@ -1091,7 +1106,7 @@ try {
   );
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await page.getByRole("menuitem", { name: "Files only", exact: true }).click();
-  await folderMismatchRow.waitFor();
+  await folderMismatchFile.waitFor();
   assert.equal(
     await folderList.locator('.folder-row[data-relative="empty"]').count(),
     0,
@@ -1099,7 +1114,9 @@ try {
   );
   assert.equal(
     await folderList
-      .locator('.folder-row[data-relative="type-mismatch-folder"]')
+      .locator(
+        '.folder-row[data-relative="type-mismatch-folder"][data-display-side="right"]',
+      )
       .count(),
     1,
     "Files-only filtering retains mixed-kind rows with a file side.",
@@ -1115,7 +1132,9 @@ try {
   );
   assert.equal(
     await folderList
-      .locator('.folder-row[data-relative="type-mismatch-folder"]')
+      .locator(
+        '.folder-row[data-relative="type-mismatch-folder"][data-display-side="left"]',
+      )
       .count(),
     1,
     "Folders-only filtering retains mixed-kind rows with a folder side.",

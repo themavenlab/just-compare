@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { FolderEntry } from "./api";
 import {
   canCopy,
-  differenceFilters,
+  countFolderEntries,
   folderRows,
+  folderSelectionKeys,
   formatFolderErrorsLabel,
   formatSize,
   matchesFilter,
@@ -223,7 +224,7 @@ describe("folder presentation", () => {
       ),
     ).toEqual(["z-folder", "a-folder", "file10.txt", "file2.txt"]);
   });
-  it("keeps mismatch kinds side-specific and blocks counterpart copies", () => {
+  it("splits mismatches into kind-sorted orphan rows and blocks counterpart copies", () => {
     const mismatch: FolderEntry = {
       ...entry("folder", "typeMismatch", 0, 4),
       isDirectory: true,
@@ -243,17 +244,76 @@ describe("folder presentation", () => {
           leftRelative: "folder/child.txt",
         },
       ],
-      "differences",
+      "all",
       true,
       new Set(),
       "name",
       false,
     );
-    expect(rows.map((row) => row.path)).toEqual(["folder", "folder/child.txt"]);
-    expect(rows[0]?.leftBranch).toBe(true);
-    expect(rows[0]?.rightBranch).toBe(false);
-    expect(rows[0]?.entry?.leftKind).toBe("directory");
-    expect(rows[0]?.entry?.rightKind).toBe("file");
+    expect(rows.map((row) => row.path)).toEqual([
+      "folder",
+      "folder/child.txt",
+      "folder",
+    ]);
+    const mismatchRows = rows.filter((row) => row.path === "folder");
+    expect(mismatchRows).toHaveLength(2);
+    expect(
+      mismatchRows.map((row) => ({
+        side: row.displaySide,
+        status: row.displayEntry?.status,
+        leftKind: row.displayEntry?.leftKind,
+        rightKind: row.displayEntry?.rightKind,
+        branch: row.branch,
+      })),
+    ).toEqual([
+      {
+        side: "left",
+        status: "leftOnly",
+        leftKind: "directory",
+        rightKind: null,
+        branch: true,
+      },
+      {
+        side: "right",
+        status: "rightOnly",
+        leftKind: null,
+        rightKind: "file",
+        branch: false,
+      },
+    ]);
+    expect(mismatchRows[0]?.selectionKey).not.toBe(
+      mismatchRows[1]?.selectionKey,
+    );
+    expect(mismatchRows.every((row) => row.counterpartBlocked)).toBe(true);
+    expect(canCopy(mismatchRows[0]!.displayEntry!, "right", true)).toBe(false);
+    expect(
+      folderRows(
+        [mismatch],
+        "all",
+        false,
+        new Set(),
+        "name",
+        false,
+        "files",
+      ).map((row) => row.displaySide),
+    ).toEqual(["right"]);
+    expect(
+      folderRows(
+        [mismatch],
+        "all",
+        false,
+        new Set(),
+        "name",
+        false,
+        "folders",
+      ).map((row) => row.displaySide),
+    ).toEqual(["left"]);
+    expect(folderSelectionKeys([mismatch])).toEqual([
+      "folder\u0000left",
+      "folder\u0000right",
+    ]);
+    expect(countFolderEntries([mismatch], "all", "all")).toBe(2);
+    expect(countFolderEntries([mismatch], "leftOnly", "all")).toBe(1);
   });
   it("checks actual copy direction and rejects same/error sources", () => {
     expect(canCopy(entry("a", "rightOnly", null), "left")).toBe(true);
