@@ -8,6 +8,11 @@ use unicode_normalization::UnicodeNormalization;
 const JS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const TEXT_LIMIT: u64 = 1024 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    static BINARY_CHUNK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum FolderSide {
@@ -436,20 +441,31 @@ fn binary(
   rm: &fs::Metadata,
   cancelled: &AtomicBool,
 ) -> Result<ComparisonImportance, FileError> {
+  cancel(cancelled)?;
+  if lm.len() != rm.len() {
+    checked_path(left, false)?;
+    checked_path(right, false)?;
+    return Ok(ComparisonImportance::Important);
+  }
   let mut left = open(left, lm, MAX_FILE_BYTES)?;
   let mut right = open(right, rm, MAX_FILE_BYTES)?;
   let mut a = [0u8; 64 * 1024];
   let mut b = [0u8; 64 * 1024];
-  let mut equal = lm.len() == rm.len();
   let mut offset = 0;
-  while offset < lm.len().max(rm.len()) {
+  while offset < lm.len() {
     cancel(cancelled)?;
     let alen = (lm.len().saturating_sub(offset)).min(a.len() as u64) as usize;
-    let blen = (rm.len().saturating_sub(offset)).min(b.len() as u64) as usize;
+    #[cfg(test)]
+    BINARY_CHUNK_READS.with(|reads| reads.set(reads.get() + 1));
     left.read_exact(&mut a[..alen])?;
-    right.read_exact(&mut b[..blen])?;
-    equal &= a[..alen] == b[..blen];
-    offset += a.len() as u64;
+    right.read_exact(&mut b[..alen])?;
+    if a[..alen] != b[..alen] {
+      stable(lm, &left.metadata()?)?;
+      stable(rm, &right.metadata()?)?;
+      cancel(cancelled)?;
+      return Ok(ComparisonImportance::Important);
+    }
+    offset += alen as u64;
   }
   if left.read(&mut a[..1])? != 0 || right.read(&mut b[..1])? != 0 {
     return Err(FileError("File grew while comparing.".into()));
@@ -457,11 +473,7 @@ fn binary(
   stable(lm, &left.metadata()?)?;
   stable(rm, &right.metadata()?)?;
   cancel(cancelled)?;
-  Ok(if equal {
-    ComparisonImportance::Equal
-  } else {
-    ComparisonImportance::Important
-  })
+  Ok(ComparisonImportance::Equal)
 }
 
 fn read_text(
@@ -1769,13 +1781,86 @@ mod tests {
     let fixture = Fixture::new();
     let mut bytes = vec![0u8; 128 * 1024 + 1];
     fixture.files(&bytes, &bytes);
-    assert_eq!(fixture.scan(&FolderRules::default())[0].status, "same");
+    let left = fixture.left.join("file");
+    let right = fixture.right.join("file");
+    let compare = || {
+      binary(
+        &left,
+        &right,
+        &fs::metadata(&left).unwrap(),
+        &fs::metadata(&right).unwrap(),
+        &AtomicBool::new(false),
+      )
+      .unwrap()
+    };
+    BINARY_CHUNK_READS.with(|reads| reads.set(0));
+    assert_eq!(compare(), ComparisonImportance::Equal);
+    assert_eq!(BINARY_CHUNK_READS.with(std::cell::Cell::get), 3);
     *bytes.last_mut().unwrap() = 1;
-    fs::write(fixture.right.join("file"), bytes).unwrap();
-    assert_eq!(fixture.scan(&FolderRules::default())[0].status, "different");
-    let old = fs::metadata(fixture.left.join("file")).unwrap();
-    fs::write(fixture.left.join("file"), b"changed").unwrap();
-    assert!(open(&fixture.left.join("file"), &old, MAX_FILE_BYTES).is_err());
+    fs::write(&right, bytes).unwrap();
+    BINARY_CHUNK_READS.with(|reads| reads.set(0));
+    assert_eq!(compare(), ComparisonImportance::Important);
+    assert_eq!(BINARY_CHUNK_READS.with(std::cell::Cell::get), 3);
+    let old = fs::metadata(&left).unwrap();
+    fs::write(&left, b"changed").unwrap();
+    assert!(open(&left, &old, MAX_FILE_BYTES).is_err());
+  }
+
+  #[test]
+  fn binary_length_mismatch_returns_without_reading_file_chunks() {
+    let fixture = Fixture::new();
+    let left = fixture.left.join("file");
+    let right = fixture.right.join("file");
+    let length = 10 * 1024 * 1024;
+    fs::File::create(&left).unwrap().set_len(length).unwrap();
+    fs::File::create(&right)
+      .unwrap()
+      .set_len(length - 1)
+      .unwrap();
+    let left_metadata = fs::metadata(&left).unwrap();
+    let right_metadata = fs::metadata(&right).unwrap();
+    BINARY_CHUNK_READS.with(|reads| reads.set(0));
+
+    assert_eq!(
+      binary(
+        &left,
+        &right,
+        &left_metadata,
+        &right_metadata,
+        &AtomicBool::new(false),
+      )
+      .unwrap(),
+      ComparisonImportance::Important
+    );
+    assert_eq!(BINARY_CHUNK_READS.with(std::cell::Cell::get), 0);
+  }
+
+  #[test]
+  fn binary_content_mismatch_stops_after_the_first_chunk() {
+    let fixture = Fixture::new();
+    let left = fixture.left.join("file");
+    let right = fixture.right.join("file");
+    let left_bytes = vec![0u8; 10 * 1024 * 1024];
+    let mut right_bytes = left_bytes.clone();
+    right_bytes[0] = 1;
+    fs::write(&left, &left_bytes).unwrap();
+    fs::write(&right, &right_bytes).unwrap();
+    let left_metadata = fs::metadata(&left).unwrap();
+    let right_metadata = fs::metadata(&right).unwrap();
+    BINARY_CHUNK_READS.with(|reads| reads.set(0));
+
+    assert_eq!(
+      binary(
+        &left,
+        &right,
+        &left_metadata,
+        &right_metadata,
+        &AtomicBool::new(false),
+      )
+      .unwrap(),
+      ComparisonImportance::Important
+    );
+    assert_eq!(BINARY_CHUNK_READS.with(std::cell::Cell::get), 1);
   }
 
   #[test]
