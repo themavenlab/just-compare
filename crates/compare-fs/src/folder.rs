@@ -1,4 +1,4 @@
-use crate::{checked_path, FileError};
+use crate::{checked_path, display_path, FileError};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -371,12 +371,26 @@ fn scan_internal(
 }
 
 fn roots(left: &Path, right: &Path) -> Result<(PathBuf, PathBuf), FileError> {
-  let left = checked_path(left, false)?;
-  let right = checked_path(right, false)?;
+  let left = checked_path(left, false).map_err(|error| {
+    error.context(format!(
+      "Could not read the left folder \"{}\"",
+      display_path(left)
+    ))
+  })?;
+  let right = checked_path(right, false).map_err(|error| {
+    error.context(format!(
+      "Could not read the right folder \"{}\"",
+      display_path(right)
+    ))
+  })?;
   if left.starts_with(&right) || right.starts_with(&left) {
-    return Err(FileError(
-      "Folder roots must not be identical or nested.".into(),
-    ));
+    return Err(
+      FileError("Folder roots must not be identical or nested.".into()).context(format!(
+        "Could not compare the left folder \"{}\" with the right folder \"{}\"",
+        display_path(&left),
+        display_path(&right)
+      )),
+    );
   }
   Ok((left, right))
 }
@@ -622,6 +636,23 @@ impl Plan {
     cancelled: &AtomicBool,
     collision_scope: Option<&str>,
   ) -> Result<Self, FileError> {
+    let context = format!(
+      "Could not prepare Sync between the left folder \"{}\" and the right folder \"{}\"",
+      display_path(left),
+      display_path(right)
+    );
+    Self::preview_internal_impl(left, right, options, mode, cancelled, collision_scope)
+      .map_err(|error| error.context(context))
+  }
+
+  fn preview_internal_impl(
+    left: &Path,
+    right: &Path,
+    options: FolderOptions,
+    mode: SyncMode,
+    cancelled: &AtomicBool,
+    collision_scope: Option<&str>,
+  ) -> Result<Self, FileError> {
     let (left, right) = roots(left, right)?;
     let (a, ae) = scan_for_plan(&left, &options, cancelled, &mut |_| {})?;
     let (b, be) = scan_for_plan(&right, &options, cancelled, &mut |_| {})?;
@@ -720,12 +751,26 @@ impl Plan {
     mut progress: impl FnMut(usize),
     mut recycle: impl FnMut(&Path) -> Result<(), FileError>,
   ) -> Result<OperationResults, FileError> {
-    let (a, ae) = scan_for_plan(&self.left, &self.options, cancelled, &mut |_| {})?;
-    let (b, be) = scan_for_plan(&self.right, &self.options, cancelled, &mut |_| {})?;
+    let left_context = format!(
+      "Could not recheck the left folder \"{}\"",
+      display_path(&self.left)
+    );
+    let right_context = format!(
+      "Could not recheck the right folder \"{}\"",
+      display_path(&self.right)
+    );
+    let (a, ae) = scan_for_plan(&self.left, &self.options, cancelled, &mut |_| {})
+      .map_err(|error| error.context(left_context))?;
+    let (b, be) = scan_for_plan(&self.right, &self.options, cancelled, &mut |_| {})
+      .map_err(|error| error.context(right_context))?;
     if a != self.left_snapshot || b != self.right_snapshot || !ae.is_empty() || !be.is_empty() {
-      return Err(FileError(
-        "Sync preview is stale. Create a new preview.".into(),
-      ));
+      return Err(
+        FileError("Sync preview is stale. Create a new preview.".into()).context(format!(
+          "Could not execute Sync between the left folder \"{}\" and the right folder \"{}\"",
+          display_path(&self.left),
+          display_path(&self.right)
+        )),
+      );
     }
     let mut results = Vec::new();
     for operation in self.operations {
@@ -738,6 +783,7 @@ impl Plan {
       }
       let source = self.left.join(&operation.relative);
       let destination = self.right.join(&operation.relative);
+      let operation_context = sync_operation_context(&operation.action, &source, &destination);
       let result = (|| -> Result<(), FileError> {
         checked_path(&self.left, false)?;
         checked_path(&self.right, false)?;
@@ -852,12 +898,39 @@ impl Plan {
         }
         Ok(())
       })()
-      .map_err(|e| e.to_string());
+      .map_err(|error| error.context(&operation_context).to_string());
       results.push((operation.relative, result));
       progress(results.len());
     }
     Ok(results)
   }
+}
+
+fn sync_operation_context(action: &str, source: &Path, destination: &Path) -> String {
+  let source = display_path(source);
+  let destination = display_path(destination);
+  match action {
+        "copy" => format!(
+            "Could not copy \"{source}\" from the left folder to \"{destination}\" in the right folder"
+        ),
+        "overwrite" => format!(
+            "Could not overwrite \"{destination}\" in the right folder from \"{source}\" in the left folder"
+        ),
+        "move" => format!(
+            "Could not move \"{source}\" from the left folder to \"{destination}\" in the right folder"
+        ),
+        "mkdir" => format!(
+            "Could not create folder \"{destination}\" in the right folder from \"{source}\" in the left folder"
+        ),
+        "trashLeft" => format!("Could not recycle \"{source}\" from the left folder"),
+        "trash" => format!("Could not recycle \"{destination}\" from the right folder"),
+        "trashDirectory" => format!(
+            "Could not recycle directory \"{destination}\" from the right folder"
+        ),
+        _ => format!(
+            "Could not execute Sync action \"{action}\" for \"{source}\" and \"{destination}\""
+        ),
+    }
 }
 
 fn excluded_from_plan(
@@ -1286,6 +1359,53 @@ mod tests {
         FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
       );
     }
+  }
+
+  #[test]
+  fn sync_preview_and_operation_errors_name_side_paths_and_reasons() {
+    let root = tempfile::tempdir().unwrap();
+    let left = root.path().join("left");
+    let right = root.path().join("right");
+    fs::create_dir(&right).unwrap();
+    let missing_left = root.path().join("missing-left");
+    let preview_error = Plan::preview(
+      &missing_left,
+      &right,
+      FolderOptions::default(),
+      SyncMode::Update,
+      &AtomicBool::new(false),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(preview_error.contains("Could not prepare Sync"));
+    assert!(preview_error.contains("Could not read the left folder"));
+    assert!(preview_error.contains(&display_path(&missing_left)));
+
+    fs::create_dir(&left).unwrap();
+    let orphan = right.join("orphan.txt");
+    fs::write(&orphan, "right only").unwrap();
+    let flag = AtomicBool::new(false);
+    let plan = Plan::preview(
+      &left,
+      &right,
+      FolderOptions::default(),
+      SyncMode::Mirror,
+      &flag,
+    )
+    .unwrap();
+    let mut results = plan
+      .execute_with(
+        &flag,
+        |_| {},
+        |_| Err(FileError("trash unavailable".into())),
+      )
+      .unwrap();
+    let error = results.pop().unwrap().1.unwrap_err();
+    assert!(error.contains("Could not recycle"));
+    assert!(error.contains("right folder"));
+    assert!(error.contains(&display_path(&checked_path(&orphan, false).unwrap())));
+    assert!(error.contains("trash unavailable"));
   }
 
   #[test]

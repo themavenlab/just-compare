@@ -13,6 +13,11 @@ impl fmt::Display for FileError {
     f.write_str(&self.0)
   }
 }
+impl FileError {
+  pub fn context(self, prefix: impl fmt::Display) -> Self {
+    Self(format!("{prefix}: {}", self.0))
+  }
+}
 impl std::error::Error for FileError {}
 impl From<std::io::Error> for FileError {
   fn from(error: std::io::Error) -> Self {

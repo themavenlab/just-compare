@@ -492,8 +492,123 @@ fn absent_destination(path: &Path) -> Result<PathBuf, FileError> {
   }
 }
 
+fn display_paths(paths: &[PathBuf]) -> String {
+  paths
+    .iter()
+    .map(|path| format!("\"{}\"", display_path(path)))
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+fn preview_context(request: &FileActionRequest) -> Option<String> {
+  match request {
+    FileActionRequest::Batch { .. } => None,
+    FileActionRequest::Copy {
+      sources,
+      destination,
+      ..
+    } => Some(format!(
+      "Could not prepare copy of {} to the destination folder \"{}\"",
+      display_paths(sources),
+      display_path(destination)
+    )),
+    FileActionRequest::Move {
+      sources,
+      destination,
+      ..
+    } => Some(format!(
+      "Could not prepare move of {} to the destination folder \"{}\"",
+      display_paths(sources),
+      display_path(destination)
+    )),
+    FileActionRequest::CopyTo {
+      source,
+      destination,
+      ..
+    } => Some(format!(
+      "Could not prepare copy of \"{}\" to the destination folder \"{}\"",
+      display_path(source),
+      display_path(destination)
+    )),
+    FileActionRequest::MoveTo {
+      source,
+      destination,
+      ..
+    } => Some(format!(
+      "Could not prepare move of \"{}\" to the destination folder \"{}\"",
+      display_path(source),
+      display_path(destination)
+    )),
+    FileActionRequest::Recycle { sources } => Some(format!(
+      "Could not prepare recycle of {}",
+      display_paths(sources)
+    )),
+    FileActionRequest::Rename { source, name } => Some(format!(
+      "Could not prepare rename of \"{}\" to \"{}\"",
+      display_path(source),
+      display_path(&source.with_file_name(name))
+    )),
+    FileActionRequest::CreateDirectory { parent, name } => Some(format!(
+      "Could not prepare create folder in \"{}\" at \"{}\"",
+      display_path(parent),
+      display_path(&parent.join(name))
+    )),
+    FileActionRequest::SetReadOnly { sources, readonly } => Some(format!(
+      "Could not prepare set {} on {}",
+      if *readonly { "read-only" } else { "writable" },
+      display_paths(sources)
+    )),
+    FileActionRequest::Touch {
+      sources,
+      modified_ms: _,
+    } => Some(format!(
+      "Could not prepare touch of {}",
+      display_paths(sources)
+    )),
+  }
+}
+
+fn operation_context(operation: &FileActionOperation) -> String {
+  let source = operation
+    .source
+    .as_deref()
+    .map(display_path)
+    .unwrap_or_else(|| "(new entry)".into());
+  let destination = operation
+    .destination
+    .as_deref()
+    .map(display_path)
+    .unwrap_or_else(|| "(unchanged)".into());
+  match operation.action {
+        FileAction::Copy => format!(
+            "Could not copy \"{source}\" from the source side to \"{destination}\" on the destination side"
+        ),
+        FileAction::Move => format!(
+            "Could not move \"{source}\" from the source side to \"{destination}\" on the destination side"
+        ),
+        FileAction::Recycle => format!("Could not recycle \"{source}\" on the selected side"),
+        FileAction::Rename => {
+            format!("Could not rename \"{source}\" to \"{destination}\"")
+        }
+        FileAction::CreateDirectory => format!("Could not create folder \"{destination}\""),
+        FileAction::SetReadOnly { readonly } => format!(
+            "Could not set {} on \"{source}\"",
+            if readonly { "read-only" } else { "writable" }
+        ),
+        FileAction::Touch { .. } => format!("Could not touch \"{source}\""),
+    }
+}
+
 impl FileActionPlan {
   pub fn preview(request: FileActionRequest, cancelled: &AtomicBool) -> Result<Self, FileError> {
+    let context = preview_context(&request);
+    Self::preview_inner(request, cancelled).map_err(|error| match context {
+      Some(context) => error.context(context),
+      None => error,
+    })
+  }
+
+  fn preview_inner(request: FileActionRequest, cancelled: &AtomicBool) -> Result<Self, FileError> {
     check_cancel(cancelled)?;
     let request = match request {
       FileActionRequest::Batch { requests } => {
@@ -874,7 +989,8 @@ impl FileActionPlan {
         match execute_operation(&approved, cancelled, &mut recycle) {
           Ok(()) => FileActionStatus::Completed,
           Err(error) => FileActionStatus::Failed(format!(
-            "Operation failed; any completed effects are retained: {error}"
+            "Operation failed; any completed effects are retained. {}: {error}",
+            operation_context(&approved.operation)
           )),
         }
       };
@@ -1387,9 +1503,34 @@ mod tests {
     )
     .err()
     .unwrap();
+    assert!(error.to_string().contains("Could not prepare copy of"));
+    assert!(error
+      .to_string()
+      .contains(&display_path(&source.join("a.txt"))));
     assert!(error.to_string().contains("not a directory"));
     assert!(error.to_string().contains("blocked"));
     assert!(!destination_root.join("blocked").join("nested").exists());
+  }
+
+  #[test]
+  fn failed_copy_execution_reports_action_source_destination_and_reason() {
+    let (_temp, source, destination_root) = fixture();
+    let source_file = source.join("a.txt");
+    let destination = destination_root.join("appeared-after-preview.txt");
+    let plan = FileActionPlan::preview(
+      copy_to(source_file.clone(), destination.clone(), false),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    fs::write(&destination, b"external").unwrap();
+    let outcome = run(plan).remove(0);
+    let FileActionStatus::Failed(message) = outcome.result else {
+      panic!("expected a failed operation");
+    };
+    assert!(message.contains("Could not copy"));
+    assert!(message.contains(&display_path(&safe_path(&source_file, false).unwrap())));
+    assert!(message.contains(&display_path(&safe_path(&destination, false).unwrap())));
+    assert!(message.contains("Destination already exists"));
   }
 
   #[test]

@@ -204,14 +204,28 @@ struct Item {
   error: Option<String>,
 }
 
+fn side_label(side: FolderSide) -> &'static str {
+  match side {
+    FolderSide::Left => "left",
+    FolderSide::Right => "right",
+  }
+}
+
 fn collect(
   root: &Path,
+  side: FolderSide,
   options: &FolderOptions,
   cancelled: &AtomicBool,
   progress: &mut impl FnMut(usize),
 ) -> Result<BTreeMap<String, Item>, FileError> {
   if !root.is_dir() {
-    return Err(FileError("Folder root must be a directory.".into()));
+    return Err(
+      FileError("Folder root must be a directory.".into()).context(format!(
+        "Could not read the {} folder \"{}\"",
+        side_label(side),
+        crate::display_path(root)
+      )),
+    );
   }
   let filters = exclusion_filters(options)?;
   let mut items: BTreeMap<String, Item> = BTreeMap::new();
@@ -227,7 +241,13 @@ fn collect(
         }
         continue;
       }
-      Err(error) => return Err(error),
+      Err(error) => {
+        return Err(error.context(format!(
+          "Could not read the {} folder \"{}\"",
+          side_label(side),
+          crate::display_path(root)
+        )));
+      }
     };
     for child in children {
       cancel(cancelled)?;
@@ -846,28 +866,41 @@ fn scan_with_selection(
     ));
   }
   let (left, right) = if single_side {
-    let validate = |path: &Path| {
+    let validate = |path: &Path, side: FolderSide| {
       if path.as_os_str().is_empty() {
         Ok(PathBuf::new())
       } else {
-        checked_path(path, false)
+        checked_path(path, false).map_err(|error| {
+          error.context(format!(
+            "Could not read the {} folder \"{}\"",
+            side_label(side),
+            crate::display_path(path)
+          ))
+        })
       }
     };
-    (validate(left)?, validate(right)?)
+    (
+      validate(left, FolderSide::Left)?,
+      validate(right, FolderSide::Right)?,
+    )
   } else {
     roots(left, right)?
   };
   let a = if left.as_os_str().is_empty() {
     BTreeMap::new()
   } else {
-    collect(&left, options, cancelled, &mut progress)?
+    collect(&left, FolderSide::Left, options, cancelled, &mut progress)?
   };
   let b = if right.as_os_str().is_empty() {
     BTreeMap::new()
   } else {
-    collect(&right, options, cancelled, &mut |count| {
-      progress(a.len() + count)
-    })?
+    collect(
+      &right,
+      FolderSide::Right,
+      options,
+      cancelled,
+      &mut |count| progress(a.len() + count),
+    )?
   };
   if let Some(selected) = selected {
     if !refresh
@@ -1166,6 +1199,26 @@ mod tests {
           .unwrap();
       }
     }
+  }
+
+  #[test]
+  fn missing_left_root_error_names_side_and_path() {
+    let fixture = Fixture::new();
+    let missing = fixture.left.join("missing");
+    let error = scan_pair_with_rules(
+      &missing,
+      &fixture.right,
+      &FolderOptions::default(),
+      &FolderRules::default(),
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("Could not read the left folder"));
+    assert!(error.contains(&crate::display_path(&missing)));
+    assert!(error.contains("os error") || error.contains("No such file"));
   }
 
   #[test]
