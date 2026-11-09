@@ -810,9 +810,8 @@ impl Plan {
         if hash.finalize().to_hex().as_str() != self.left_snapshot[&operation.relative].hash {
           return Err(FileError("Source changed during copy.".into()));
         }
-        temp.as_file().sync_all()?;
         checked_path(&destination, true)?;
-        if let Some(expected) = self.right_snapshot.get(&operation.relative) {
+        let permissions = if let Some(expected) = self.right_snapshot.get(&operation.relative) {
           if snapshot(&destination, cancelled)? != *expected {
             return Err(FileError("Destination changed during copy.".into()));
           }
@@ -820,18 +819,25 @@ impl Plan {
           if permissions.readonly() {
             return Err(FileError("Destination is read-only.".into()));
           }
-          temp.as_file().set_permissions(permissions)?;
+          permissions
+        } else {
+          fs::metadata(&source)?.permissions()
+        };
+        temp.as_file().set_times(
+          fs::FileTimes::new().set_modified(self.left_snapshot[&operation.relative].modified),
+        )?;
+        temp.as_file().set_permissions(permissions)?;
+        temp.as_file().sync_all()?;
+        if self.right_snapshot.contains_key(&operation.relative) {
           temp
             .persist(&destination)
             .map_err(|e| FileError(e.error.to_string()))?;
         } else {
           temp
-            .as_file()
-            .set_permissions(fs::metadata(&source)?.permissions())?;
-          temp
             .persist_noclobber(&destination)
             .map_err(|e| FileError(e.error.to_string()))?;
         }
+        crate::file_actions::copy_hidden_system_attributes(&source, &destination)?;
         if operation.action == "move" {
           if snapshot(&source, cancelled)? != self.left_snapshot[&operation.relative] {
             return Err(FileError(
@@ -1217,6 +1223,69 @@ mod tests {
     flag.store(true, Ordering::Relaxed);
     assert!(plan.execute(&flag, |_| {}).is_err());
     assert_eq!(fs::read_to_string(b.join("file")).unwrap(), "old");
+  }
+
+  #[test]
+  fn sync_copy_preserves_source_modified_time_and_windows_attributes() {
+    let root = tempfile::tempdir().unwrap();
+    let left = root.path().join("left");
+    let right = root.path().join("right");
+    fs::create_dir(&left).unwrap();
+    fs::create_dir(&right).unwrap();
+    let source = left.join("file");
+    let destination = right.join("file");
+    fs::write(&source, "new content").unwrap();
+    fs::write(&destination, "old content").unwrap();
+    let modified =
+      std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_620_000_000);
+    fs::File::options()
+      .write(true)
+      .open(&source)
+      .unwrap()
+      .set_times(fs::FileTimes::new().set_modified(modified))
+      .unwrap();
+    #[cfg(windows)]
+    {
+      use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
+      use windows_sys::Win32::Storage::FileSystem::{
+        SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
+      };
+      let path: Vec<u16> = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+      let attributes = fs::metadata(&source).unwrap().file_attributes()
+        | FILE_ATTRIBUTE_HIDDEN
+        | FILE_ATTRIBUTE_SYSTEM;
+      assert_ne!(unsafe { SetFileAttributesW(path.as_ptr(), attributes) }, 0);
+    }
+
+    let flag = AtomicBool::new(false);
+    let plan = Plan::preview(
+      &left,
+      &right,
+      FolderOptions::default(),
+      SyncMode::Update,
+      &flag,
+    )
+    .unwrap();
+    assert!(plan
+      .execute(&flag, |_| {})
+      .unwrap()
+      .iter()
+      .all(|(_, result)| result.is_ok()));
+    let copied = fs::metadata(&destination).unwrap();
+    assert_eq!(copied.modified().unwrap(), modified);
+    #[cfg(windows)]
+    {
+      use std::os::windows::fs::MetadataExt;
+      use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM};
+      assert_eq!(
+        copied.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM),
+        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+      );
+    }
   }
 
   #[test]

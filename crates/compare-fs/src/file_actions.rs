@@ -206,6 +206,56 @@ fn failure(message: &str) -> FileError {
   FileError(message.into())
 }
 
+pub(crate) fn copy_hidden_system_attributes(
+  source: &Path,
+  destination: &Path,
+) -> Result<(), FileError> {
+  #[cfg(windows)]
+  {
+    use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+      SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_SYSTEM,
+    };
+
+    let mask = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+    let source_attributes = fs::metadata(source)?.file_attributes();
+    let mut destination_attributes = fs::metadata(destination)?.file_attributes();
+    destination_attributes = (destination_attributes & !mask) | (source_attributes & mask);
+    if destination_attributes & !FILE_ATTRIBUTE_NORMAL != 0 {
+      destination_attributes &= !FILE_ATTRIBUTE_NORMAL;
+    }
+    let path: Vec<u16> = destination
+      .as_os_str()
+      .encode_wide()
+      .chain(std::iter::once(0))
+      .collect();
+    if unsafe { SetFileAttributesW(path.as_ptr(), destination_attributes) } == 0 {
+      return Err(std::io::Error::last_os_error().into());
+    }
+  }
+  #[cfg(not(windows))]
+  let _ = (source, destination);
+  Ok(())
+}
+
+fn set_path_modified_time(path: &Path, modified: SystemTime) -> Result<(), FileError> {
+  #[cfg(windows)]
+  let file = {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+      FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+    };
+    std::fs::OpenOptions::new()
+      .access_mode(FILE_WRITE_ATTRIBUTES)
+      .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+      .open(path)?
+  };
+  #[cfg(not(windows))]
+  let file = File::open(path)?;
+  file.set_times(FileTimes::new().set_modified(modified))?;
+  Ok(())
+}
+
 fn check_cancel(cancelled: &AtomicBool) -> Result<(), FileError> {
   if cancelled.load(Ordering::Relaxed) {
     Err(failure("File action cancelled."))
@@ -963,7 +1013,9 @@ fn copy_tree(
       .map_err(|e| FileError(e.to_string()))?;
       // Keep the owned temporary writable until published, so cancellation
       // cannot strand a read-only temporary on Windows.
+      persisted.set_times(FileTimes::new().set_modified(expected.modified))?;
       persisted.set_permissions(permissions)?;
+      copy_hidden_system_attributes(&from, &to)?;
       persisted.sync_all()?;
     }
   }
@@ -976,6 +1028,16 @@ fn copy_tree(
       safe_path(&from, false)?;
       safe_path(&to, false)?;
       fs::set_permissions(to, fs::metadata(from)?.permissions())?;
+    }
+  }
+  for (relative, snapshot) in tree.iter().rev() {
+    if snapshot.directory {
+      check_cancel(cancelled)?;
+      let from = tree_path(source, relative);
+      let to = tree_path(destination, relative);
+      safe_path(&from, false)?;
+      safe_path(&to, false)?;
+      set_path_modified_time(&to, snapshot.modified)?;
     }
   }
   Ok(())
@@ -1187,6 +1249,83 @@ mod tests {
     assert_eq!(
       fs::read(destination.join("sub").join("b.txt")).unwrap(),
       b"beta"
+    );
+  }
+
+  #[test]
+  fn recursive_copy_preserves_file_and_directory_times_and_readonly_state() {
+    let (_temp, source, destination) = fixture();
+    let nested = source.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let file = nested.join("readonly.txt");
+    fs::write(&file, b"read-only data").unwrap();
+    let root_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+    let nested_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_610_000_000);
+    let file_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_620_000_000);
+    set_path_modified_time(&source, root_time).unwrap();
+    set_path_modified_time(&nested, nested_time).unwrap();
+    set_path_modified_time(&file, file_time).unwrap();
+    let mut permissions = fs::metadata(&file).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&file, permissions).unwrap();
+
+    let plan = FileActionPlan::preview(
+      copy(source.clone(), destination.clone()),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(run(plan)[0].result, FileActionStatus::Completed);
+
+    let copied_root = destination.join("source");
+    let copied_nested = copied_root.join("nested");
+    let copied_file = copied_nested.join("readonly.txt");
+    assert_eq!(
+      fs::metadata(copied_root).unwrap().modified().unwrap(),
+      root_time
+    );
+    assert_eq!(
+      fs::metadata(copied_nested).unwrap().modified().unwrap(),
+      nested_time
+    );
+    let copied_metadata = fs::metadata(copied_file).unwrap();
+    assert_eq!(copied_metadata.modified().unwrap(), file_time);
+    assert!(copied_metadata.permissions().readonly());
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn copy_preserves_windows_hidden_and_system_attributes() {
+    use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+      SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
+    };
+
+    let (_temp, source, destination) = fixture();
+    let source_file = source.join("a.txt");
+    let path: Vec<u16> = source_file
+      .as_os_str()
+      .encode_wide()
+      .chain(std::iter::once(0))
+      .collect();
+    let source_attributes = fs::metadata(&source_file).unwrap().file_attributes()
+      | FILE_ATTRIBUTE_HIDDEN
+      | FILE_ATTRIBUTE_SYSTEM;
+    assert_ne!(
+      unsafe { SetFileAttributesW(path.as_ptr(), source_attributes) },
+      0
+    );
+    let plan = FileActionPlan::preview(
+      copy(source_file, destination.clone()),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(run(plan)[0].result, FileActionStatus::Completed);
+    let copied_attributes = fs::metadata(destination.join("a.txt"))
+      .unwrap()
+      .file_attributes();
+    assert_eq!(
+      copied_attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM),
+      source_attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
     );
   }
 
