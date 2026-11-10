@@ -4,7 +4,7 @@ use compare_text::{
   CompareOptions, DiffKind, MoveDirection, MovedBlock, SearchOptions, UnimportantRule, WorkControl,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,14 +14,48 @@ use tauri::{Emitter, Manager, State};
 #[derive(Default)]
 pub struct Resources {
   documents: Mutex<HashMap<String, Document>>,
-  plans: Mutex<HashMap<String, Plan>>,
-  file_plans: Mutex<HashMap<String, compare_fs::file_actions::FileActionPlan>>,
+  plans: Mutex<BoundedPlans<Plan>>,
+  file_plans: Mutex<BoundedPlans<compare_fs::file_actions::FileActionPlan>>,
   jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
   next: AtomicU64,
   pub git_accepted: AtomicBool,
   merge_blocks: Mutex<Option<Vec<Block>>>,
   saved_output: Mutex<Option<String>>,
   shell_requests: Mutex<std::collections::VecDeque<Vec<String>>>,
+}
+
+const MAX_STORED_PLANS: usize = 8;
+
+struct BoundedPlans<T> {
+  entries: HashMap<String, T>,
+  insertion_order: VecDeque<String>,
+}
+
+impl<T> Default for BoundedPlans<T> {
+  fn default() -> Self {
+    Self {
+      entries: HashMap::new(),
+      insertion_order: VecDeque::new(),
+    }
+  }
+}
+
+impl<T> BoundedPlans<T> {
+  fn insert(&mut self, id: String, plan: T) {
+    self.insertion_order.retain(|existing| existing != &id);
+    self.insertion_order.push_back(id.clone());
+    self.entries.insert(id, plan);
+    while self.insertion_order.len() > MAX_STORED_PLANS {
+      if let Some(oldest) = self.insertion_order.pop_front() {
+        self.entries.remove(&oldest);
+      }
+    }
+  }
+
+  fn remove(&mut self, id: &str) -> Option<T> {
+    self.insertion_order.retain(|existing| existing != id);
+    self.entries.remove(id)
+  }
 }
 
 impl Resources {
@@ -851,10 +885,11 @@ pub async fn preview_local_action(
       .map_err(|e| e.to_string())?;
     let operations = plan.operations().to_vec();
     let id = retained.id();
-    retained.plans.lock().map_err(|e| e.to_string())?.clear();
-    let mut plans = retained.file_plans.lock().map_err(|e| e.to_string())?;
-    plans.clear();
-    plans.insert(id.clone(), plan);
+    retained
+      .file_plans
+      .lock()
+      .map_err(|e| e.to_string())?
+      .insert(id.clone(), plan);
     Ok(FilePreview { id, operations })
   })
   .await;
@@ -948,13 +983,10 @@ pub async fn preview_sync(
       .collect();
     let id = worker_resources.id();
     worker_resources
-      .file_plans
+      .plans
       .lock()
       .map_err(|e| e.to_string())?
-      .clear();
-    let mut plans = worker_resources.plans.lock().map_err(|e| e.to_string())?;
-    plans.clear();
-    plans.insert(id.clone(), plan);
+      .insert(id.clone(), plan);
     Ok(Preview { id, operations })
   })
   .await;
@@ -1000,13 +1032,10 @@ pub async fn preview_file_action(
       .collect();
     let id = worker_resources.id();
     worker_resources
-      .file_plans
+      .plans
       .lock()
       .map_err(|e| e.to_string())?
-      .clear();
-    let mut plans = worker_resources.plans.lock().map_err(|e| e.to_string())?;
-    plans.clear();
-    plans.insert(id.clone(), plan);
+      .insert(id.clone(), plan);
     Ok(Preview { id, operations })
   })
   .await;
@@ -1376,6 +1405,23 @@ pub fn finish_git_merge(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn bounded_plan_store_evicts_oldest_and_removes_consumed_ids() {
+    let mut plans = BoundedPlans::default();
+    for index in 0..9 {
+      plans.insert(format!("preview-{index}"), index);
+    }
+
+    assert_eq!(plans.entries.len(), 8);
+    assert!(!plans.entries.contains_key("preview-0"));
+    for index in 1..9 {
+      assert!(plans.entries.contains_key(&format!("preview-{index}")));
+    }
+    assert_eq!(plans.remove("preview-4"), Some(4));
+    assert!(!plans.entries.contains_key("preview-4"));
+    assert_eq!(plans.insertion_order.len(), 7);
+  }
 
   #[test]
   fn progress_throttle_bounds_large_same_instant_updates_and_emits_final_count() {

@@ -76,7 +76,7 @@ Run native scripts sequentially: they share a WebView2 profile and simultaneous
 launches can attach to the wrong process. The maintained package scripts include
 `test:native`, `test:git`, `test:acceptance`, `test:workflows`, `test:workbench`,
 `test:compact`, `test:interactions`, `test:auto-compare`, `test:keyboard`,
-`test:sessions`, `test:recovery`, `test:alignment-merge`, `test:folder-copy`, `test:folder-exclude` and `test:folder-save`:
+`test:sessions`, `test:recovery`, `test:alignment-merge`, `test:folder-copy`, `test:preview-maps`, `test:folder-exclude` and `test:folder-save`:
 
 ```powershell
 npm run test:native --workspace apps\desktop
@@ -87,6 +87,7 @@ node apps\desktop\scripts\explorer-regression.mjs
 ```
 
 Select other suite names from `apps/desktop/package.json` as appropriate.
+`npm run test:preview-maps --workspace apps\desktop` verifies that a later tab's preview does not evict an earlier tab's native plan.
 `npm run test:folder-copy --workspace apps\desktop` exercises direct-target folder copy when the destination parent folders do not yet exist.
 `npm run test:folder-exclude --workspace apps\desktop` runs the focused native folder exclusion regression independently of the broader native smoke flow.
 `COMPARE_TEST_DESKTOP` permits an alternate embedded-assets test executable.
