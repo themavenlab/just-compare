@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
 
 #[derive(Default)]
@@ -675,6 +675,37 @@ pub fn validate_folder_rules(
   compare_fs::validate_folder_configuration(&rules, &options).map_err(|error| error.to_string())
 }
 
+struct ProgressThrottle {
+  last_emit: Instant,
+  last_count: usize,
+}
+
+impl ProgressThrottle {
+  fn new(now: Instant) -> Self {
+    Self {
+      last_emit: now,
+      last_count: 0,
+    }
+  }
+
+  fn should_emit(&mut self, count: usize, now: Instant) -> bool {
+    if count.saturating_sub(self.last_count) < 500
+      && now.duration_since(self.last_emit) < Duration::from_millis(100)
+    {
+      return false;
+    }
+    self.last_emit = now;
+    self.last_count = count;
+    true
+  }
+
+  fn emit_final(&mut self, count: usize, emit: impl FnOnce(usize)) {
+    self.last_emit = Instant::now();
+    self.last_count = count;
+    emit(count);
+  }
+}
+
 #[tauri::command]
 pub async fn scan_folders(
   left: String,
@@ -690,9 +721,14 @@ pub async fn scan_folders(
   let event_id = job_id.clone();
   let result = worker(move || {
     let mut event_error = None;
+    let mut throttle = ProgressThrottle::new(Instant::now());
+    let mut final_count = 0;
     let mut progress = |count| {
-      if let Err(e) = app.emit("operation-progress", (&event_id, count)) {
-        event_error = Some(e.to_string());
+      final_count = count;
+      if throttle.should_emit(count, Instant::now()) {
+        if let Err(e) = app.emit("operation-progress", (&event_id, count)) {
+          event_error = Some(e.to_string());
+        }
       }
     };
     let result = if let Some(rules) = rules {
@@ -714,6 +750,12 @@ pub async fn scan_folders(
       )
     }
     .map_err(|e| e.to_string());
+    drop(progress);
+    throttle.emit_final(final_count, |count| {
+      if let Err(e) = app.emit("operation-progress", (&event_id, count)) {
+        event_error = Some(e.to_string());
+      }
+    });
     if let Some(error) = event_error {
       return Err(format!("Progress delivery failed: {error}"));
     }
@@ -1329,4 +1371,25 @@ pub fn finish_git_merge(
   state.git_accepted.store(success, Ordering::Relaxed);
   app.exit(if success { 0 } else { 1 });
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn progress_throttle_bounds_large_same_instant_updates_and_emits_final_count() {
+    let now = Instant::now();
+    let mut throttle = ProgressThrottle::new(now);
+    let mut emitted = Vec::new();
+    for count in 1..=10_000 {
+      if throttle.should_emit(count, now) {
+        emitted.push(count);
+      }
+    }
+    throttle.emit_final(10_000, |count| emitted.push(count));
+
+    assert!(emitted.len() <= 21);
+    assert_eq!(emitted.last(), Some(&10_000));
+  }
 }
