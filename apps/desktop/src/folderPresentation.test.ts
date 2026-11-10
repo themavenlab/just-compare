@@ -8,6 +8,7 @@ import {
   folderSelectionKeys,
   formatFolderErrorsLabel,
   formatSize,
+  isCurrentFolderGeneration,
   matchesFilter,
   matchesKindFilter,
   matchesName,
@@ -500,5 +501,26 @@ describe("folder presentation", () => {
     expect(
       targetRelativeFor([supportFile], "support/github-tracker", "left"),
     ).toBe("support/github-tracker");
+  });
+  it("ignores an older scan result that arrives after a newer one", async () => {
+    let currentGeneration = 1;
+    let displayed = "previous";
+    let resolveOlder!: (result: string) => void;
+    const olderScan = new Promise<string>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const applyResult = async (generation: number, result: Promise<string>) => {
+      const entries = await result;
+      if (isCurrentFolderGeneration(currentGeneration, generation))
+        displayed = entries;
+    };
+    const olderResult = applyResult(currentGeneration, olderScan);
+
+    currentGeneration += 1;
+    await applyResult(currentGeneration, Promise.resolve("new result"));
+    resolveOlder("stale result");
+    await olderResult;
+
+    expect(displayed).toBe("new result");
   });
 });

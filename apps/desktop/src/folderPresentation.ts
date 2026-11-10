@@ -47,6 +47,10 @@ export function formatSize(bytes: number) {
   return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+export function isCurrentFolderGeneration(current: number, generation: number) {
+  return current === generation;
+}
+
 function directoriesBySourcePath(
   entries: FolderEntry[],
   sourceSide: "left" | "right",

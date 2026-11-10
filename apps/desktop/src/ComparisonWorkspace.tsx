@@ -33,6 +33,7 @@ import {
   folderSelectionKeys,
   formatFolderErrorsLabel,
   formatSize,
+  isCurrentFolderGeneration,
   matchesName,
   targetRelativeFor,
   toggleFolderErrorFilter,
@@ -247,6 +248,8 @@ export function ComparisonWorkspace({
     [],
   );
   const folderRefreshInFlight = useRef(false);
+  const folderGeneration = useRef(0);
+  const folderJobId = useRef<string | null>(null);
   const [staleSides, setStaleSides] = useState<Side[]>([]);
   const [staleOutput, setStaleOutput] = useState(false);
   const [diskChanges, setDiskChanges] = useState<Side[]>([]);
@@ -442,6 +445,23 @@ export function ComparisonWorkspace({
     },
     [setLog, updateError],
   );
+  function beginFolderGeneration() {
+    const generation = ++folderGeneration.current;
+    const jobId = crypto.randomUUID();
+    const previousJobId = folderJobId.current;
+    folderJobId.current = jobId;
+    if (previousJobId) {
+      void native("cancel_job", { jobId: previousJobId }).catch((failure) => {
+        const message = errorMessage(failure);
+        if (message !== "Job is not active.")
+          setError(`Could not cancel the previous folder scan: ${message}`);
+      });
+    }
+    return { generation, jobId };
+  }
+  function finishFolderJob(jobId: string) {
+    if (folderJobId.current === jobId) folderJobId.current = null;
+  }
   async function cancelLiveComparison() {
     const jobId = liveComparisonJob.current;
     if (!jobId) {
@@ -835,11 +855,17 @@ export function ComparisonWorkspace({
   async function recordHistory(
     folders: string[],
     comparison: import("./api").RecentComparison | null,
+    generation?: number,
   ) {
     const saved = await native("remember_history", {
       folders,
       comparison,
     });
+    if (
+      generation !== undefined &&
+      !isCurrentFolderGeneration(folderGeneration.current, generation)
+    )
+      return;
     setSettings((prior) => ({
       ...prior,
       recentFolders: saved.recentFolders ?? [],
@@ -1476,91 +1502,124 @@ export function ComparisonWorkspace({
     options = folderOptions(),
     rules = folderRules,
   ) {
+    const { generation, jobId } = beginFolderGeneration();
     discardPreview(tab.id);
     setPreview(null);
     setLocalPreview(null);
     setFolderStale(true);
     setSelectedFiles([]);
     setProgress(0);
-    const roots =
-      requestedRoots.left && requestedRoots.right
-        ? await native("normalize_folder_roots", requestedRoots)
-        : requestedRoots;
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const result = await native("scan_folders", {
-      left: roots.left,
-      right: roots.right,
-      options,
-      rules,
-      jobId,
-    });
-    setFolders(result);
-    if (filter === "error") {
-      selectFilter("all");
-    }
-    setFolderRoots(roots);
-    setNativeFolderRoots(roots);
-    rememberRoots(roots);
-    const spaceFor = async (side: FolderSide) => {
-      if (!roots[side]) return "";
-      try {
-        const value = await native("disk_space", { path: roots[side] });
-        return `${formatSize(Number(value.availableBytes))} free`;
-      } catch (failure) {
-        return `Free space unavailable: ${errorMessage(failure)}`;
+    try {
+      const roots =
+        requestedRoots.left && requestedRoots.right
+          ? await native("normalize_folder_roots", requestedRoots)
+          : requestedRoots;
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      startJob(jobId);
+      const result = await native("scan_folders", {
+        left: roots.left,
+        right: roots.right,
+        options,
+        rules,
+        jobId,
+      });
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      setFolders(result);
+      if (filter === "error") {
+        setFilter("all");
       }
-    };
-    const space = await Promise.all([spaceFor("left"), spaceFor("right")]);
-    setDiskSpace({ left: space[0], right: space[1] });
-    setHasScanned(true);
-    setFolderStale(false);
-    setNotice(
-      roots.left && roots.right
-        ? `Scan complete: ${result.length} file entries.`
-        : `Listed ${result.length} entries. Choose the other folder to compare.`,
-    );
-    await recordHistory(
-      [roots.left, roots.right],
-      roots.left && roots.right ? { mode: "folder", ...roots, base: "" } : null,
-    );
+      setFolderRoots(roots);
+      setNativeFolderRoots(roots);
+      rememberRoots(roots);
+      const spaceFor = async (side: FolderSide) => {
+        if (!roots[side]) return "";
+        try {
+          const value = await native("disk_space", { path: roots[side] });
+          return `${formatSize(Number(value.availableBytes))} free`;
+        } catch (failure) {
+          return `Free space unavailable: ${errorMessage(failure)}`;
+        }
+      };
+      const space = await Promise.all([spaceFor("left"), spaceFor("right")]);
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      setDiskSpace({ left: space[0], right: space[1] });
+      setHasScanned(true);
+      setFolderStale(false);
+      setNotice(
+        roots.left && roots.right
+          ? `Scan complete: ${result.length} file entries.`
+          : `Listed ${result.length} entries. Choose the other folder to compare.`,
+      );
+      await recordHistory(
+        [roots.left, roots.right],
+        roots.left && roots.right
+          ? { mode: "folder", ...roots, base: "" }
+          : null,
+        generation,
+      );
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+    } catch (failure) {
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      throw failure;
+    } finally {
+      finishFolderJob(jobId);
+    }
   }
   async function recheckDisk() {
     if (mode === "folder") {
-      if (!folderRoots.left && !folderRoots.right)
-        throw new Error("Choose a folder before rechecking disk.");
-      if (!hasScanned) {
-        await scan();
-        return;
+      const { generation, jobId } = beginFolderGeneration();
+      try {
+        if (!folderRoots.left && !folderRoots.right)
+          throw new Error("Choose a folder before rechecking disk.");
+        if (!hasScanned) {
+          await scan();
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
+          return;
+        }
+        const roots =
+          folderRoots.left && folderRoots.right
+            ? await native("normalize_folder_roots", folderRoots)
+            : folderRoots;
+        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+          return;
+        startJob(jobId);
+        const refreshed = await native("scan_folders", {
+          left: roots.left,
+          right: roots.right,
+          options: folderOptions(),
+          rules: folderRules,
+          jobId,
+        });
+        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+          return;
+        setFolderRoots(roots);
+        setNativeFolderRoots(roots);
+        const changed = JSON.stringify(refreshed) !== JSON.stringify(folders);
+        setFolderStale(changed);
+        if (changed) {
+          discardPreview(tab.id);
+          setPreview(null);
+          setLocalPreview(null);
+          setSelectedFiles([]);
+        }
+        setNotice(
+          changed
+            ? "Folder contents changed on disk. Existing results are retained; scan folders to refresh."
+            : "No folder changes found on disk.",
+        );
+      } catch (failure) {
+        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+          return;
+        throw failure;
+      } finally {
+        finishFolderJob(jobId);
       }
-      const roots =
-        folderRoots.left && folderRoots.right
-          ? await native("normalize_folder_roots", folderRoots)
-          : folderRoots;
-      const jobId = crypto.randomUUID();
-      startJob(jobId);
-      const refreshed = await native("scan_folders", {
-        left: roots.left,
-        right: roots.right,
-        options: folderOptions(),
-        rules: folderRules,
-        jobId,
-      });
-      setFolderRoots(roots);
-      setNativeFolderRoots(roots);
-      const changed = JSON.stringify(refreshed) !== JSON.stringify(folders);
-      setFolderStale(changed);
-      if (changed) {
-        discardPreview(tab.id);
-        setPreview(null);
-        setLocalPreview(null);
-        setSelectedFiles([]);
-      }
-      setNotice(
-        changed
-          ? "Folder contents changed on disk. Existing results are retained; scan folders to refresh."
-          : "No folder changes found on disk.",
-      );
       return;
     }
 
@@ -1680,6 +1739,7 @@ export function ComparisonWorkspace({
     )
       return;
     void attempt(async () => {
+      const { generation, jobId } = beginFolderGeneration();
       const paths = pendingFolderRefresh;
       setPendingFolderRefresh([]);
       folderRefreshInFlight.current = true;
@@ -1695,11 +1755,12 @@ export function ComparisonWorkspace({
             native("relative_folder_path", { ...roots, path }),
           ),
         );
+        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+          return;
         const selected = [
           ...new Set(mapped.filter((path): path is string => path !== null)),
         ];
         if (selected.length) {
-          const jobId = crypto.randomUUID();
           startJob(jobId);
           const refreshed = await native("compare_folder_selection", {
             ...roots,
@@ -1709,6 +1770,8 @@ export function ComparisonWorkspace({
             previous: folders,
             jobId,
           });
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
           setFolders(refreshed);
         }
         const allMapped = mapped.every((path) => path !== null);
@@ -1719,11 +1782,14 @@ export function ComparisonWorkspace({
             : "Some saved files could not be mapped to the scanned roots. Results remain stale; run a full refresh to update them.",
         );
       } catch (failure) {
+        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+          return;
         setFolderStale(true);
         setPendingFolderRefresh([]);
         throw failure;
       } finally {
         folderRefreshInFlight.current = false;
+        finishFolderJob(jobId);
       }
     });
   });
@@ -1772,13 +1838,17 @@ export function ComparisonWorkspace({
     setFolderRoots(roots);
     await scan(roots);
   }
-  async function normalizeFolderRoots() {
+  async function normalizeFolderRoots(generation?: number) {
     if (folderStale)
       throw new Error(
         "Folder results are stale. Refresh the current roots before using folder actions.",
       );
     const roots = await native("normalize_folder_roots", folderRoots);
-    setNativeFolderRoots(roots);
+    if (
+      generation === undefined ||
+      isCurrentFolderGeneration(folderGeneration.current, generation)
+    )
+      setNativeFolderRoots(roots);
     return roots;
   }
   async function createPreview(
@@ -2759,28 +2829,39 @@ export function ComparisonWorkspace({
           throw new Error(
             "The roots or rules changed. Run a full refresh before refreshing a selection.",
           );
-        discardPreview(tab.id);
-        setPreview(null);
-        setLocalPreview(null);
-        const roots = await normalizeFolderRoots();
-        const jobId = crypto.randomUUID();
-        startJob(jobId);
-        const refreshed = await native("compare_folder_selection", {
-          ...roots,
-          options: folderOptions(),
-          rules: folderRules,
-          selected: entries.map((entry) => entry.relative),
-          previous: folders,
-          jobId,
-        });
-        setFolders(refreshed);
-        const refreshedKeys = new Set(folderSelectionKeys(refreshed));
-        setSelectedFiles((prior) =>
-          prior.filter((key) => refreshedKeys.has(key)),
-        );
-        setNotice(
-          `Refreshed ${entries.length} selected entries, their descendants, and affected directory summaries.`,
-        );
+        const generation = folderGeneration.current;
+        try {
+          discardPreview(tab.id);
+          setPreview(null);
+          setLocalPreview(null);
+          const roots = await normalizeFolderRoots(generation);
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
+          const jobId = crypto.randomUUID();
+          startJob(jobId);
+          const refreshed = await native("compare_folder_selection", {
+            ...roots,
+            options: folderOptions(),
+            rules: folderRules,
+            selected: entries.map((entry) => entry.relative),
+            previous: folders,
+            jobId,
+          });
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
+          setFolders(refreshed);
+          const refreshedKeys = new Set(folderSelectionKeys(refreshed));
+          setSelectedFiles((prior) =>
+            prior.filter((key) => refreshedKeys.has(key)),
+          );
+          setNotice(
+            `Refreshed ${entries.length} selected entries, their descendants, and affected directory summaries.`,
+          );
+        } catch (failure) {
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
+          throw failure;
+        }
       });
       return;
     }
@@ -2910,38 +2991,49 @@ export function ComparisonWorkspace({
     method: "binary" | "rules" | "crc",
     showResults: boolean,
   ) {
-    const roots = await normalizeFolderRoots();
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const compared = await native("compare_folder_selection", {
-      ...roots,
-      options: folderOptions(),
-      rules: {
-        ...folderRules,
-        content: method,
-        quickTest: "none",
-        quickTestPolicy: "override",
-        compareSize: false,
-        compareModified: false,
-      },
-      selected: entries.map((entry) => entry.relative),
-      previous: folders,
-      jobId,
-    });
-    setFolders(compared);
-    const selectedResults = compared.filter((entry) =>
-      entries.some(
-        (selected) =>
-          selected.relative === entry.relative ||
-          (selected.isDirectory &&
-            entry.relative.startsWith(`${selected.relative}/`)),
-      ),
-    );
-    if (showResults) setContentResults(selectedResults);
-    setFolderDialog(null);
-    setNotice(
-      `Compared ${selectedResults.length} selected entries. ${selectedResults.filter((entry) => entry.status === "error").length} errors; ${selectedResults.filter((entry) => entry.status === "typeMismatch").length} not compared because the entry kinds differ.`,
-    );
+    const generation = folderGeneration.current;
+    try {
+      const roots = await normalizeFolderRoots(generation);
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      const jobId = crypto.randomUUID();
+      startJob(jobId);
+      const compared = await native("compare_folder_selection", {
+        ...roots,
+        options: folderOptions(),
+        rules: {
+          ...folderRules,
+          content: method,
+          quickTest: "none",
+          quickTestPolicy: "override",
+          compareSize: false,
+          compareModified: false,
+        },
+        selected: entries.map((entry) => entry.relative),
+        previous: folders,
+        jobId,
+      });
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      setFolders(compared);
+      const selectedResults = compared.filter((entry) =>
+        entries.some(
+          (selected) =>
+            selected.relative === entry.relative ||
+            (selected.isDirectory &&
+              entry.relative.startsWith(`${selected.relative}/`)),
+        ),
+      );
+      if (showResults) setContentResults(selectedResults);
+      setFolderDialog(null);
+      setNotice(
+        `Compared ${selectedResults.length} selected entries. ${selectedResults.filter((entry) => entry.status === "error").length} errors; ${selectedResults.filter((entry) => entry.status === "typeMismatch").length} not compared because the entry kinds differ.`,
+      );
+    } catch (failure) {
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return;
+      throw failure;
+    }
   }
   async function prepareFolderAction() {
     if (!folderDialog) return;
@@ -4892,14 +4984,9 @@ export function ComparisonWorkspace({
                     type="button"
                     className={`folder-errors${isFilteringErrors ? " active" : ""}`}
                     aria-pressed={isFilteringErrors}
-                    onClick={() => {
-                      if (filter !== "error") {
-                        setPreviousFilter(filter);
-                      }
-                      setFilter(
-                        toggleFolderErrorFilter(filter, previousFilter),
-                      );
-                    }}
+                    onClick={() =>
+                      setFilter(toggleFolderErrorFilter(filter, previousFilter))
+                    }
                     title={
                       isFilteringErrors
                         ? "Clear comparison error filter and restore previous view"
