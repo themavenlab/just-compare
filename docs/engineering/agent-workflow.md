@@ -26,6 +26,8 @@ Human approval is required before:
 
 When requesting approval, present the concrete change, rationale, alternatives, and validation plan.
 
+Recorded product decision: the folder dialog's Start click is the single approval for copy/move to the other side (same-name files are replaced by default) and for Recycle Bin delete of the selected entries. Those actions do not show a second confirmation, and the listing refreshes automatically after they finish. Permanent deletion is still not offered.
+
 ---
 
 ## Execution Steps

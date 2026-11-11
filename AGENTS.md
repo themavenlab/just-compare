@@ -24,7 +24,7 @@ Review the [Product Roadmap & Scope](docs/product/roadmap.md) for product bounda
 ## Context & Completion
 
 - For unfinished tasks, leave a structured handoff following [Agent Workflow](docs/engineering/agent-workflow.md#handoff).
-- Human approval is required prior to introducing new dependencies, making breaking contract changes, or executing destructive development actions.
+- Human approval is required prior to introducing new dependencies, making breaking contract changes, or executing destructive development actions. Product decision (approved by the owner): copy and move to the other side replace same-name files by default, and delete (Recycle Bin) runs after one Start click in the folder dialog with no second confirmation. Single-dialog copy/move/recycle matches standard "Copy to Side" behavior. Do not add extra confirmations or a replacement opt-out without a new owner decision.
 - For every bug fix, add or extend an automated regression test wherever feasible. Exercise the reported behavior and relevant entry points; for UI/IPC bugs prefer native interaction coverage over checking implementation details. If automation is impractical, explain why and record the manual verification.
 - Tool-specific instruction files, if introduced, must point here rather than duplicate policy. Verify each tool's discovery behavior before relying on it.
 - **Markdown Formatting:** Do not break lines mid-sentence at arbitrary column widths. Write full sentences on continuous lines; allow text editors and Markdown renderers to handle soft wrapping.
