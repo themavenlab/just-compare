@@ -17,6 +17,8 @@ await Promise.all([
 await Promise.all([
   writeFile(join(tracker, "a.txt"), "alpha\n"),
   writeFile(join(tracker, "sub", "b.txt"), "beta\n"),
+  writeFile(join(left, "paired.txt"), "paired\n"),
+  writeFile(join(right, "paired.txt"), "paired\n"),
 ]);
 
 let session;
@@ -89,6 +91,36 @@ try {
     ),
     "beta\n",
   );
+
+  await list
+    .locator('.folder-row[data-relative="paired.txt"]')
+    .locator(".folder-side")
+    .first()
+    .dblclick();
+  await page.getByRole("textbox", { name: "Left text", exact: true }).waitFor();
+  assert.equal(await page.getByRole("alert").count(), 0);
+  await selectWorkspace(page, "folder");
+
+  await list
+    .locator('.folder-row[data-relative="support"]')
+    .locator(".folder-side")
+    .nth(1)
+    .click({ button: "right" });
+  await page
+    .getByRole("menuitem", { name: "Copy Filename", exact: true })
+    .click();
+  const copyNameDialog = page.getByRole("dialog", {
+    name: "copyFilename - right side",
+    exact: true,
+  });
+  await copyNameDialog.waitFor();
+  await copyNameDialog
+    .getByRole("button", { name: "Copy", exact: true })
+    .click();
+  await workspace
+    .getByText("Copied 1 paths to the clipboard.", { exact: true })
+    .waitFor();
+  assert.equal(await page.getByRole("alert").count(), 0);
 
   await workspace
     .getByRole("button", { name: "Scan folders", exact: true })

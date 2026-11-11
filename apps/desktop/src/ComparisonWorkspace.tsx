@@ -1838,8 +1838,8 @@ export function ComparisonWorkspace({
     setFolderRoots(roots);
     await scan(roots);
   }
-  async function normalizeFolderRoots(generation?: number) {
-    if (folderStale)
+  async function normalizeFolderRoots(generation?: number, allowStale = false) {
+    if (folderStale && !allowStale)
       throw new Error(
         "Folder results are stale. Refresh the current roots before using folder actions.",
       );
@@ -2754,10 +2754,6 @@ export function ComparisonWorkspace({
     excludedDirectories,
   );
   async function openPair(row: FolderEntry) {
-    if (folderStale)
-      throw new Error(
-        "Folder results are stale. Refresh the current roots before opening a listed pair.",
-      );
     if (row.leftKind !== "file" || row.rightKind !== "file")
       throw new Error("Only file-to-file pairs can be opened in Text Compare.");
     const left = await join(
@@ -2775,14 +2771,23 @@ export function ComparisonWorkspace({
     entries: FolderEntry[],
     side: FolderSide,
   ) {
-    if (folderStale) {
-      setError(
-        "Folder results are stale. Refresh the current roots before using folder actions.",
-      );
-      return;
-    }
     if (busy) {
       setError("Wait for the active operation to finish.");
+      return;
+    }
+    if (
+      folderStale &&
+      ![
+        "compareContents",
+        "copyFilename",
+        "ignored",
+        "openWith",
+        "reveal",
+      ].includes(action)
+    ) {
+      setError(
+        "Folder results are stale. Refresh the current roots before using this action.",
+      );
       return;
     }
     if (
@@ -2993,7 +2998,7 @@ export function ComparisonWorkspace({
   ) {
     const generation = folderGeneration.current;
     try {
-      const roots = await normalizeFolderRoots(generation);
+      const roots = await normalizeFolderRoots(generation, true);
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))
         return;
       const jobId = crypto.randomUUID();
