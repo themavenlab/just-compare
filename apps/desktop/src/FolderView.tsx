@@ -20,7 +20,6 @@ export function FolderView({
   selected,
   onSelect,
   openPair,
-  preview,
   onAction,
   registerCommands,
 }: {
@@ -33,11 +32,6 @@ export function FolderView({
   selected: string[];
   onSelect: (relative: string, checked: boolean) => void;
   openPair: (entry: FolderEntry) => void;
-  preview: (
-    entry: FolderEntry,
-    action: "copy",
-    destination: FolderSide,
-  ) => void;
   onAction: (action: string, entries: FolderEntry[], side: FolderSide) => void;
   registerCommands: (controller: ((name: string) => void) | null) => void;
 }) {
@@ -613,8 +607,8 @@ export function FolderView({
                       {entry && (
                         <span className="row-hover-actions">
                           <button
-                            aria-label={`Preview copy ${node.path} to ${pane === "left" ? "right" : "left"}`}
-                            title="Review the exact copy before applying; no immediate changes"
+                            aria-label={`Copy ${node.path} to ${pane === "left" ? "right" : "left"}`}
+                            title="Copy to the other side"
                             disabled={
                               busy ||
                               !canCopy(
@@ -623,16 +617,7 @@ export function FolderView({
                                 node.counterpartBlocked,
                               )
                             }
-                            onClick={() =>
-                              entryKind(displayEntry ?? entry, pane) ===
-                              "directory"
-                                ? onAction("copySide", [entry], pane)
-                                : preview(
-                                    entry,
-                                    "copy",
-                                    pane === "left" ? "right" : "left",
-                                  )
-                            }
+                            onClick={() => onAction("copySide", [entry], pane)}
                           >
                             {pane === "left" ? "\u2192" : "\u2190"}
                           </button>

@@ -45,6 +45,26 @@ try {
     }
     assert.equal(actual, expected);
   };
+  // A one-click copy runs asynchronously; poll until the file reaches its expected content.
+  // A file arrow opens the folder dialog; one Start click performs the copy.
+  const copyDialog = async (side) => {
+    const dialog = page.getByRole("dialog", {
+      name: `copySide - ${side} side`,
+      exact: true,
+    });
+    await dialog.waitFor();
+    await dialog.getByRole("button", { name: "Start", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+  };
+  const waitForFile = async (path, expected) => {
+    const deadline = Date.now() + 10000;
+    let actual = null;
+    while (actual !== expected && Date.now() < deadline) {
+      actual = await readFile(path, "utf8").catch(() => null);
+      if (actual !== expected) await page.waitForTimeout(100);
+    }
+    assert.equal(actual, expected);
+  };
   const compare = async () => {
     await page.getByRole("heading", { name: /changed regions/ }).waitFor();
     // Automatic comparison is debounced; let the final result replace any stale one.
@@ -102,74 +122,22 @@ try {
       .click();
     await row("first.txt").waitFor();
 
-    await row("right-only.txt").locator(".folder-side").last().hover();
-    const copyAction = row("right-only.txt").getByRole("button", {
-      name: "Preview copy right-only.txt to left",
-      exact: true,
-    });
-    await copyAction.click();
-    let copyPreview = page.getByRole("dialog", {
-      name: "Copy right to left",
-      exact: true,
-    });
-    await copyPreview.waitFor();
-    assert.match(await copyPreview.innerText(), /RIGHT.*LEFT/);
-    assert.match(await copyPreview.innerText(), /Copy[\s\S]*right-only\.txt/);
     await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
-    await page.keyboard.press("Escape");
-    assert.equal(await page.getByRole("dialog").count(), 0);
-    await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
-
     await row("right-only.txt").locator(".folder-side").last().hover();
-    await copyAction.click();
-    copyPreview = page.getByRole("dialog", {
-      name: "Copy right to left",
-      exact: true,
-    });
-    await copyPreview
-      .getByRole("button", { name: "Copy file to left", exact: true })
+    await row("right-only.txt")
+      .getByRole("button", { name: "Copy right-only.txt to left", exact: true })
       .click();
-    await page.waitForFunction(
-      () => document.querySelector(".new-tab-button")?.disabled,
-    );
-    await page.waitForFunction(
-      () => !document.querySelector(".new-tab-button")?.disabled,
-    );
-    assert.equal(
-      await readFile(join(left, "right-only.txt"), "utf8"),
-      "right-only\n",
-    );
+    await copyDialog("right");
+    await waitForFile(join(left, "right-only.txt"), "right-only\n");
     assert.equal(await page.getByRole("dialog").count(), 0);
 
     await row("replace.txt").locator(".folder-side").first().hover();
     await row("replace.txt")
-      .getByRole("button", {
-        name: "Preview copy replace.txt to right",
-        exact: true,
-      })
+      .getByRole("button", { name: "Copy replace.txt to right", exact: true })
       .click();
-    const overwritePreview = page.getByRole("dialog", {
-      name: "Copy left to right",
-      exact: true,
-    });
-    await overwritePreview.waitFor();
-    assert.match(
-      await overwritePreview.innerText(),
-      /Replace[\s\S]*replace\.txt/,
-    );
-    await overwritePreview
-      .getByRole("button", { name: "Replace file on right", exact: true })
-      .click();
-    await page.waitForFunction(
-      () => document.querySelector(".new-tab-button")?.disabled,
-    );
-    await page.waitForFunction(
-      () => !document.querySelector(".new-tab-button")?.disabled,
-    );
-    assert.equal(
-      await readFile(join(right, "replace.txt"), "utf8"),
-      "new left version\n",
-    );
+    await copyDialog("left");
+    await waitForFile(join(right, "replace.txt"), "new left version\n");
+    assert.equal(await page.getByRole("dialog").count(), 0);
 
     await page
       .getByRole("button", { name: "Copy options", exact: true })
@@ -221,7 +189,8 @@ try {
     await selectWorkspace(page, "text");
   } catch (error) {
     failures.push(`Folder round-trip: ${error.message}`);
-    await selectWorkspace(page, "text");
+    // Recovery is best-effort so it cannot replace the recorded failure.
+    await selectWorkspace(page, "text").catch(() => {});
   }
 
   const shared = Array.from(

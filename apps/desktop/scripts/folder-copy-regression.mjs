@@ -63,18 +63,13 @@ try {
   });
   await actionDialog.waitFor();
   await actionDialog
-    .getByRole("button", { name: "Preview", exact: true })
+    .getByRole("button", { name: "Start", exact: true })
     .click();
-  const preview = page.getByRole("dialog", {
-    name: "Local action preview",
-    exact: true,
-  });
-  await preview.waitFor();
-  assert.match(await preview.innerText(), /Create folder .*support/i);
-  await preview
-    .getByRole("button", { name: "Confirm and execute preview", exact: true })
-    .click();
-  await session.respondToDialog("Confirm");
+  await actionDialog.waitFor({ state: "detached" });
+  assert.equal(
+    await page.getByRole("dialog", { name: "Local action preview" }).count(),
+    0,
+  );
   await workspace
     .locator(".status-bar")
     .getByText("Completed 1 of 1 local actions.", { exact: false })

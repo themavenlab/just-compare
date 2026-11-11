@@ -59,6 +59,16 @@ try {
     page.waitForFunction(
       () => !document.querySelector(".new-tab-button")?.disabled,
     );
+  // A one-click copy runs asynchronously; poll until the file reaches the expected content.
+  const waitForFileContent = async (path, expected) => {
+    const deadline = Date.now() + 10000;
+    let actual = null;
+    while (actual !== expected && Date.now() < deadline) {
+      actual = await readFile(path, "utf8").catch(() => null);
+      if (actual !== expected) await page.waitForTimeout(100);
+    }
+    assert.equal(actual, expected);
+  };
   await text("Left").waitFor();
   await text("Left").fill("Keep this unsaved draft\n");
   const originalTab = page.getByRole("tab", { selected: true });
@@ -276,25 +286,25 @@ try {
   );
   await page.locator(`#${folderTabId}`).click();
   await row("right-only.txt").locator(".folder-side").last().hover();
+  await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
   await row("right-only.txt")
     .getByRole("button", {
-      name: "Preview copy right-only.txt to left",
+      name: "Copy right-only.txt to left",
       exact: true,
     })
     .click();
-  const preview = page.getByRole("dialog", {
-    name: "Copy right to left",
+  const leftCopyDialog = page.getByRole("dialog", {
+    name: "copySide - right side",
     exact: true,
   });
-  await preview.waitFor();
-  assert.match(await preview.innerText(), /RIGHT → LEFT/);
-  assert.match(await preview.innerText(), /Copy[\s\S]*right-only\.txt/);
-  await assert.rejects(readFile(join(left, "right-only.txt")), /ENOENT/);
-  await preview
-    .getByRole("button", { name: "Copy file to left", exact: true })
+  await leftCopyDialog.waitFor();
+  await leftCopyDialog
+    .getByRole("button", { name: "Start", exact: true })
     .click();
-  await page.waitForFunction(
-    () => !document.querySelector(".new-tab-button")?.disabled,
+  await leftCopyDialog.waitFor({ state: "detached" });
+  await waitForFileContent(
+    join(left, "right-only.txt"),
+    await readFile(join(right, "right-only.txt"), "utf8"),
   );
   await idle();
   assert.equal(await page.getByRole("dialog").count(), 0);
@@ -305,26 +315,20 @@ try {
   await row("first.txt").locator(".folder-side").first().hover();
   await row("first.txt")
     .getByRole("button", {
-      name: "Preview copy first.txt to right",
+      name: "Copy first.txt to right",
       exact: true,
     })
     .click();
-  const overwritePreview = page.getByRole("dialog", {
-    name: "Copy left to right",
+  const firstCopyDialog = page.getByRole("dialog", {
+    name: "copySide - left side",
     exact: true,
   });
-  await overwritePreview.waitFor();
-  assert.match(await overwritePreview.innerText(), /Replace[\s\S]*first\.txt/);
-  assert.equal(
-    await readFile(join(right, "first.txt"), "utf8"),
-    "right first\n",
-  );
-  await overwritePreview
-    .getByRole("button", { name: "Replace file on right", exact: true })
+  await firstCopyDialog.waitFor();
+  await firstCopyDialog
+    .getByRole("button", { name: "Start", exact: true })
     .click();
-  await page.waitForFunction(
-    () => !document.querySelector(".new-tab-button")?.disabled,
-  );
+  await firstCopyDialog.waitFor({ state: "detached" });
+  await waitForFileContent(join(right, "first.txt"), "left first\n");
   await idle();
   assert.equal(await page.getByRole("dialog").count(), 0);
   assert.equal(
@@ -370,7 +374,13 @@ try {
     .click();
   await idle();
   await page.locator(`#${folderTabId}`).click();
-  assert.match(
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.paired-folder-row[data-relative="first.txt"]')
+        ?.getAttribute("data-status") === "same",
+  );
+  assert.doesNotMatch(
     await workspace.locator(".result-summary").innerText(),
     /folder results may be stale/,
   );
@@ -399,65 +409,39 @@ try {
   await row("nested/second.txt").locator(".folder-side").first().hover();
   await row("nested/second.txt")
     .getByRole("button", {
-      name: "Preview copy nested/second.txt to right",
+      name: "Copy nested/second.txt to right",
       exact: true,
     })
     .click();
-  const stalePreview = page.getByRole("dialog", {
-    name: "Copy left to right",
+  const nestedCopyDialog = page.getByRole("dialog", {
+    name: "copySide - left side",
     exact: true,
   });
-  await stalePreview.waitFor();
-  await stalePreview
-    .getByRole("button", { name: "Cancel", exact: true })
+  await nestedCopyDialog.waitFor();
+  await nestedCopyDialog
+    .getByRole("button", { name: "Start", exact: true })
     .click();
+  await nestedCopyDialog.waitFor({ state: "detached" });
+  await waitForFileContent(
+    join(right, "nested", "second.txt"),
+    "left second\n",
+  );
+  await idle();
   assert.equal(await page.getByRole("dialog").count(), 0);
-  assert.equal(
-    await readFile(join(right, "nested", "second.txt"), "utf8"),
-    "right second\n",
-  );
-  await row("nested/second.txt").locator(".folder-side").first().hover();
-  await row("nested/second.txt")
-    .getByRole("button", {
-      name: "Preview copy nested/second.txt to right",
-      exact: true,
-    })
-    .click();
-  await stalePreview.waitFor();
-  await writeFile(join(left, "nested", "second.txt"), "externally changed\n");
-  await stalePreview
-    .getByRole("button", { name: "Replace file on right", exact: true })
-    .click();
-  await workspace.getByRole("alert").waitFor();
-  assert.match(
-    await workspace.getByRole("alert").innerText(),
-    /changed|stale/i,
-  );
-  assert.equal(
-    await readFile(join(right, "nested", "second.txt"), "utf8"),
-    "right second\n",
-  );
   await workspace
     .getByRole("button", { name: "Scan folders", exact: true })
     .click();
   await row("nested/second.txt").waitFor();
-  await row("nested/second.txt").locator(".folder-side").first().hover();
-  await row("nested/second.txt")
-    .getByRole("button", {
-      name: "Preview copy nested/second.txt to right",
-      exact: true,
-    })
-    .click();
-  await stalePreview.waitFor();
-  await stalePreview
-    .getByRole("button", { name: "Cancel", exact: true })
-    .click();
   await openWorkspace(page, "folder");
   const secondFolderId = await page
     .getByRole("tab", { selected: true })
     .getAttribute("id");
   await workspace.getByLabel("left path", { exact: true }).fill(left);
   await workspace.getByLabel("right path", { exact: true }).fill(right);
+  await workspace
+    .getByRole("button", { name: "Scan folders", exact: true })
+    .click();
+  await idle();
   await previewUpdate(page);
   await page
     .getByRole("dialog", { name: /Update left to right/ })
@@ -631,7 +615,7 @@ try {
     }
   }
   console.log(
-    "PASS: tab draft/rule/history/scroll isolation, compact pane geometry, tree/sort/context menus, new pair tabs, dirty-close cancellation, directional confirmed copies, stale previews, cross-tab preview replacement and visible 32-document capacity failures.",
+    "PASS: tab draft/rule/history/scroll isolation, compact pane geometry, tree/sort/context menus, new pair tabs, dirty-close cancellation, directional one-click copies, cross-tab navigation and visible 32-document capacity failures.",
   );
 } finally {
   if (session) await session.close();

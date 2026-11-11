@@ -456,15 +456,7 @@ try {
     name: "copySide - left side",
     exact: true,
   });
-  await sideCopy.getByRole("checkbox", { name: /Allow replacement/ }).check();
-  await sideCopy.getByRole("button", { name: "Preview", exact: true }).click();
-  await preview.waitFor();
-  assert.equal(await preview.locator(".local-preview-entries p").count(), 2);
-  assert.match(await preview.innerText(), /replaces existing/);
-  await preview
-    .getByRole("button", { name: "Confirm and execute preview", exact: true })
-    .click();
-  await session.respondToDialog("Confirm");
+  await sideCopy.getByRole("button", { name: "Start", exact: true }).click();
   await workspace
     .locator(".status-bar")
     .getByText("Completed 2 of 2 local actions.", { exact: false })

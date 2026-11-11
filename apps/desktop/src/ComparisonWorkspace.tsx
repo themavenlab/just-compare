@@ -360,7 +360,6 @@ export function ComparisonWorkspace({
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [profileSuffix, setProfileSuffix] = useState("");
   const [localPreview, setLocalPreview] = useState<LocalPreview | null>(null);
-  const [overwriteAction, setOverwriteAction] = useState(false);
   const [actionMetadata, setActionMetadata] = useState<
     {
       path: string;
@@ -377,7 +376,7 @@ export function ComparisonWorkspace({
   );
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewKind, setPreviewKind] = useState<
-    "copy" | "selected-update" | "selected-mirror" | "update" | "mirror" | null
+    "selected-update" | "selected-mirror" | "update" | "mirror" | null
   >(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [blocks, setBlocks] = useState<Block[] | null>(null);
@@ -1885,36 +1884,6 @@ export function ComparisonWorkspace({
     });
     setPreview(result);
   }
-  async function previewFile(
-    relative: string,
-    action: "copy",
-    destination: "left" | "right" = "right",
-  ) {
-    if (folderStale)
-      throw new Error(
-        "Folder results are stale. Scan folders before previewing actions.",
-      );
-    const roots = await normalizeFolderRoots();
-    if (!(await claimPreview(tab.id))) return;
-    setPreview(null);
-    setPreviewKind("copy");
-    setPreviewDirection(destination);
-    const jobId = crypto.randomUUID();
-    startJob(jobId);
-    const result = await native("preview_file_action", {
-      left: destination === "right" ? roots.left : roots.right,
-      right: destination === "right" ? roots.right : roots.left,
-      options: folderOptions(),
-      relative,
-      action,
-      jobId,
-    }).catch((failure: unknown) => {
-      discardPreview(tab.id);
-      setPreviewKind(null);
-      throw failure;
-    });
-    setPreview(result);
-  }
   function dismissPreview() {
     if (busy) return;
     discardPreview(tab.id);
@@ -1922,10 +1891,20 @@ export function ComparisonWorkspace({
     setPreviewKind(null);
   }
   async function executePreview() {
-    if (!preview || !preview.operations.length) return;
+    if (!preview) return;
+    await executeSyncPlan(preview);
+  }
+  async function executeSyncPlan(plan: Preview) {
+    if (!plan.operations.length) {
+      discardPreview(tab.id);
+      setPreview(null);
+      setPreviewKind(null);
+      setNotice("Nothing to copy: the destination already matches.");
+      return;
+    }
     const jobId = crypto.randomUUID();
     startJob(jobId);
-    const id = preview.id;
+    const id = plan.id;
     discardPreview(tab.id);
     setPreview(null);
     setPreviewKind(null);
@@ -2809,7 +2788,6 @@ export function ComparisonWorkspace({
       setError("Open With requires a file on the selected side.");
       return;
     }
-    setOverwriteAction(false);
     if (!entries.length && action !== "mkdir" && action !== "synchronize") {
       setError("Select one or more folder entries first.");
       return;
@@ -3122,6 +3100,12 @@ export function ComparisonWorkspace({
       }),
     );
     let request: LocalActionRequest;
+    const oneStep =
+      action === "copySide" ||
+      action === "moveSide" ||
+      action === "copyFolder" ||
+      action === "moveFolder" ||
+      action === "recycle";
     const source = sources[0];
     if (action === "recycle") request = { kind: "recycle", sources };
     else if (action === "rename" && source && sources.length === 1)
@@ -3187,7 +3171,7 @@ export function ComparisonWorkspace({
             folderRoots[opposite],
             ...targetRelative.split("/"),
           ),
-          overwrite: overwriteAction,
+          overwrite: true,
         });
       }
       request = { kind: "batch", requests };
@@ -3198,7 +3182,7 @@ export function ComparisonWorkspace({
         kind: action === "copyFolder" ? "copy" : "move",
         sources,
         destination,
-        overwrite: overwriteAction,
+        overwrite: true,
       };
     } else throw new Error("Choose a supported filesystem action.");
     if (!(await claimPreview(tab.id))) return;
@@ -3206,24 +3190,32 @@ export function ComparisonWorkspace({
     setLocalPreview(null);
     const jobId = crypto.randomUUID();
     startJob(jobId);
+    let result: LocalPreview;
     try {
-      const result = await native("preview_local_action", { request, jobId });
-      setLocalPreview(result);
-      setFolderDialog(null);
+      result = await native("preview_local_action", { request, jobId });
     } catch (failure) {
       discardPreview(tab.id);
       throw failure;
     }
-  }
-  async function executeLocalPreview() {
-    if (
-      !localPreview ||
-      !(await confirmAction(
-        `Execute exactly these ${localPreview.operations.length} local actions? Recycling has no permanent-delete fallback. Partial effects are not rolled back.`,
-      ))
-    )
+    if (oneStep) {
+      setFolderDialog(null);
+      if (!result.operations.length) {
+        discardPreview(tab.id);
+        setNotice("Nothing to change: the destination already matches.");
+        return;
+      }
+      const { total, failures } = await executeLocalPlan(result);
+      await scan();
+      setNotice(
+        `Completed ${total - failures.length} of ${total} local actions.`,
+      );
+      if (failures.length) throw new Error(failures.join("\n"));
       return;
-    const plan = localPreview;
+    }
+    setLocalPreview(result);
+    setFolderDialog(null);
+  }
+  async function executeLocalPlan(plan: LocalPreview) {
     setLocalPreview(null);
     discardPreview(tab.id);
     const jobId = crypto.randomUUID();
@@ -3239,21 +3231,27 @@ export function ComparisonWorkspace({
     );
     diskChanged(paths);
     setFolderStale(true);
-    const failures = results.filter(
-      (item) => item.result.status !== "completed",
-    );
-    setNotice(
-      `Completed ${results.length - failures.length} of ${results.length} local actions. Rescan to refresh this listing.`,
-    );
-    if (failures.length)
-      throw new Error(
-        failures
-          .map(
-            (item) =>
-              `${item.operation.source ?? item.operation.destination}: ${item.result.message ?? item.result.status}`,
-          )
-          .join("\n"),
+    const failures = results
+      .filter((item) => item.result.status !== "completed")
+      .map(
+        (item) =>
+          `${item.operation.source ?? item.operation.destination}: ${item.result.message ?? item.result.status}`,
       );
+    return { total: results.length, failures };
+  }
+  async function executeLocalPreview() {
+    if (
+      !localPreview ||
+      !(await confirmAction(
+        `Execute exactly these ${localPreview.operations.length} local actions? Recycling has no permanent-delete fallback. Partial effects are not rolled back.`,
+      ))
+    )
+      return;
+    const { total, failures } = await executeLocalPlan(localPreview);
+    setNotice(
+      `Completed ${total - failures.length} of ${total} local actions. Rescan to refresh this listing.`,
+    );
+    if (failures.length) throw new Error(failures.join("\n"));
   }
   const inputs = (
     <section
@@ -3798,25 +3796,24 @@ export function ComparisonWorkspace({
                 </button>
               )}
             </label>
+          ) : folderDialog.action === "copySide" ||
+            folderDialog.action === "moveSide" ||
+            folderDialog.action === "copyFolder" ||
+            folderDialog.action === "moveFolder" ? (
+            <p>
+              Existing files with the same name on the other side are replaced
+              when you click Start.
+            </p>
+          ) : folderDialog.action === "recycle" ? (
+            <p>
+              Selected entries are sent to the Recycle Bin when you click Start.
+              The listing refreshes automatically.
+            </p>
           ) : (
             <p>
               No files change until you inspect and approve the exact native
               preview.
             </p>
-          )}
-          {["copySide", "moveSide", "copyFolder", "moveFolder"].includes(
-            folderDialog.action,
-          ) && (
-            <label>
-              <input
-                type="checkbox"
-                checked={overwriteAction}
-                disabled={busy}
-                onChange={(event) => setOverwriteAction(event.target.checked)}
-              />
-              Allow replacement of existing files (every replacement appears in
-              the preview)
-            </label>
           )}
           {error && (
             <p role="alert" className="error">
@@ -3834,12 +3831,24 @@ export function ComparisonWorkspace({
                   ? "Compare selected contents without changing files."
                   : folderDialog.action === "copyFilename"
                     ? "Copy the selected names or paths to the clipboard."
-                    : "Build an exact native preview; no files change until separate execution approval."
+                    : folderDialog.action === "copySide" ||
+                        folderDialog.action === "moveSide" ||
+                        folderDialog.action === "copyFolder" ||
+                        folderDialog.action === "moveFolder"
+                      ? "Copy or move now; existing files with the same name are replaced."
+                      : folderDialog.action === "recycle"
+                        ? "Send the selected entries to the Recycle Bin now."
+                        : "Build an exact native preview; no files change until separate execution approval."
               }
               disabled={busy}
               onClick={() => void attempt(prepareFolderAction)}
             >
-              {folderDialog.action === "compareContents"
+              {folderDialog.action === "compareContents" ||
+              folderDialog.action === "copySide" ||
+              folderDialog.action === "moveSide" ||
+              folderDialog.action === "copyFolder" ||
+              folderDialog.action === "moveFolder" ||
+              folderDialog.action === "recycle"
                 ? "Start"
                 : folderDialog.action === "copyFilename"
                   ? "Copy"
@@ -5033,9 +5042,6 @@ export function ComparisonWorkspace({
               )
             }
             openPair={(row) => void attempt(() => openPair(row))}
-            preview={(row, action, destination) =>
-              void attempt(() => previewFile(row.relative, action, destination))
-            }
             registerCommands={registerFolderCommands}
             onAction={folderAction}
           />
@@ -5089,14 +5095,11 @@ export function ComparisonWorkspace({
           {preview && (
             <WorkspaceDialog
               title={
-                previewKind === "copy"
-                  ? `Copy ${previewDirection === "right" ? "left to right" : "right to left"}`
-                  : previewKind === "mirror" ||
-                      previewKind === "selected-mirror"
-                    ? `Mirror ${previewDirection === "right" ? "left to right" : "right to left"}`
-                    : previewKind === "selected-update"
-                      ? `Synchronize selected entries ${previewDirection === "right" ? "left to right" : "right to left"}`
-                      : `Update ${previewDirection === "right" ? "left to right" : "right to left"}`
+                previewKind === "mirror" || previewKind === "selected-mirror"
+                  ? `Mirror ${previewDirection === "right" ? "left to right" : "right to left"}`
+                  : previewKind === "selected-update"
+                    ? `Synchronize selected entries ${previewDirection === "right" ? "left to right" : "right to left"}`
+                    : `Update ${previewDirection === "right" ? "left to right" : "right to left"}`
               }
               onClose={dismissPreview}
               className="sync-preview-dialog"
@@ -5208,18 +5211,12 @@ export function ComparisonWorkspace({
                     disabled={busy || !preview.operations.length}
                     onClick={() => void attempt(executePreview)}
                   >
-                    {previewKind === "copy"
-                      ? preview.operations.some(
-                          (operation) => operation.action === "overwrite",
-                        )
-                        ? `Replace file on ${previewDirection}`
-                        : `Copy file to ${previewDirection}`
-                      : previewKind === "mirror" ||
-                          previewKind === "selected-mirror"
-                        ? "Apply mirror"
-                        : previewKind === "selected-update"
-                          ? "Apply selected sync"
-                          : "Apply update"}
+                    {previewKind === "mirror" ||
+                    previewKind === "selected-mirror"
+                      ? "Apply mirror"
+                      : previewKind === "selected-update"
+                        ? "Apply selected sync"
+                        : "Apply update"}
                   </button>
                 </div>
               </div>
