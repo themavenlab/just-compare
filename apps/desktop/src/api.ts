@@ -375,17 +375,6 @@ interface Commands {
     };
     result: Preview;
   };
-  preview_file_action: {
-    args: {
-      left: string;
-      right: string;
-      options: FolderOptions;
-      relative: string;
-      action: string;
-      jobId?: string;
-    };
-    result: Preview;
-  };
   execute_sync: { args: { id: string; jobId: string }; result: Outcome[] };
   cancel_job: { args: { jobId: string }; result: void };
   merge_text: {

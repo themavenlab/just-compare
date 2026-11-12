@@ -566,51 +566,6 @@ impl Plan {
     Ok(())
   }
 
-  pub fn file_action(
-    left: &Path,
-    right: &Path,
-    options: FolderOptions,
-    relative: &str,
-    action: &str,
-    cancelled: &AtomicBool,
-  ) -> Result<Self, FileError> {
-    if !["copy", "move", "trashLeft"].contains(&action) {
-      return Err(FileError("Unsupported file action.".into()));
-    }
-    // Pass `relative` as the collision scope so that a file/directory type
-    // mismatch at an unrelated path (e.g. a `.git` file vs directory in a
-    // git worktree) does not block a single-item copy of an unrelated entry.
-    let mut plan = Self::preview_internal(
-      left,
-      right,
-      options,
-      SyncMode::Update,
-      cancelled,
-      Some(relative),
-    )?;
-    if !plan.left_snapshot.contains_key(relative) {
-      return Err(FileError(
-        "Selected source is not in the scanned folder.".into(),
-      ));
-    }
-    if plan.left_snapshot[relative].hash == "excludedFile" {
-      return Err(FileError(
-        "Selected source is excluded from folder operations.".into(),
-      ));
-    }
-    if is_directory_hash(&plan.left_snapshot[relative].hash) && action != "copy" {
-      return Err(FileError("Directory move/delete must use a complete sync preview; direct recursive operations are disabled.".into()));
-    }
-    if action == "copy" {
-      plan.select(&[relative.into()])?;
-    } else {
-      plan.operations = vec![PlannedOperation {
-        relative: relative.into(),
-        action: action.into(),
-      }];
-    }
-    Ok(plan)
-  }
   pub fn preview(
     left: &Path,
     right: &Path,
@@ -618,30 +573,22 @@ impl Plan {
     mode: SyncMode,
     cancelled: &AtomicBool,
   ) -> Result<Self, FileError> {
-    Self::preview_internal(left, right, options, mode, cancelled, None)
+    Self::preview_internal(left, right, options, mode, cancelled)
   }
 
-  /// Inner implementation shared by [`Self::preview`] and [`Self::file_action`].
-  ///
-  /// `collision_scope` constrains which file/directory type-mismatch entries
-  /// are treated as fatal.  When `None` (full-sync preview), every mismatch
-  /// in the tree is an error.  When `Some(scope)`, only mismatches that are
-  /// the scope entry itself or an ancestor directory of it are errors; a
-  /// mismatch at an unrelated sibling path does not block a single-item copy.
   fn preview_internal(
     left: &Path,
     right: &Path,
     options: FolderOptions,
     mode: SyncMode,
     cancelled: &AtomicBool,
-    collision_scope: Option<&str>,
   ) -> Result<Self, FileError> {
     let context = format!(
       "Could not prepare Sync between the left folder \"{}\" and the right folder \"{}\"",
       display_path(left),
       display_path(right)
     );
-    Self::preview_internal_impl(left, right, options, mode, cancelled, collision_scope)
+    Self::preview_internal_impl(left, right, options, mode, cancelled)
       .map_err(|error| error.context(context))
   }
 
@@ -651,7 +598,6 @@ impl Plan {
     options: FolderOptions,
     mode: SyncMode,
     cancelled: &AtomicBool,
-    collision_scope: Option<&str>,
   ) -> Result<Self, FileError> {
     let (left, right) = roots(left, right)?;
     let (a, ae) = scan_for_plan(&left, &options, cancelled, &mut |_| {})?;
@@ -665,21 +611,9 @@ impl Plan {
         .get(name)
         .is_some_and(|other| is_directory_hash(&value.hash) != is_directory_hash(&other.hash))
       {
-        // When a scope is set (single-item file_action), only collisions
-        // on the scope entry itself or one of its ancestor directories
-        // are fatal.  A mismatch at an unrelated entry (e.g. a `.git`
-        // file vs directory in a git worktree) must not block copying a
-        // completely different file.
-        let in_scope = collision_scope
-          .map(|scope| name == scope || scope.starts_with(&format!("{name}/")))
-          .unwrap_or(true);
-        if in_scope {
-          return Err(FileError(format!(
-            "File/directory collision at {name}; no sync was planned."
-          )));
-        }
-        // Out-of-scope collision: skip the entry so it produces no operation.
-        continue;
+        return Err(FileError(format!(
+          "File/directory collision at {name}; no sync was planned."
+        )));
       }
       if excluded_from_plan(name, &a, &b, &options) {
         continue;
@@ -1137,38 +1071,23 @@ mod tests {
     };
     let plan = Plan::preview(&left, &right, options, SyncMode::Update, &flag).unwrap();
     assert!(plan.operations.is_empty());
-
-    fs::write(left.join("excluded.txt"), b"left").unwrap();
-    fs::write(right.join("excluded.txt"), b"right").unwrap();
-    let options = FolderOptions {
-      exclude_files: vec!["excluded.txt".into()],
-      ..FolderOptions::default()
-    };
-    assert!(
-      Plan::file_action(&left, &right, options, "excluded.txt", "trashLeft", &flag,).is_err()
-    );
   }
 
   #[test]
-  fn file_action_copy_ignores_unrelated_type_collisions() {
-    // Regression: when one root has `.git` as a directory (main clone) and the
-    // other has `.git` as a plain file (git worktree pointer), a full-sync
-    // preview correctly errors, but a single-item file_action copy of an
-    // unrelated path must not be blocked by that mismatch.
+  fn full_sync_reports_unrelated_type_collisions() {
+    // A `.git` directory on one side and a plain `.git` file on the other
+    // (git worktree pointer) must block a full sync, even when the mismatch
+    // is unrelated to any user-selected change.
     let root = tempfile::tempdir().unwrap();
     let src = root.path().join("src");
     let dst = root.path().join("dst");
     fs::create_dir(&src).unwrap();
     fs::create_dir(&dst).unwrap();
-    // `.git` is a directory on the source, a plain file on the destination
-    // (simulating a git worktree).
     fs::create_dir(src.join(".git")).unwrap();
     fs::write(dst.join(".git"), b"gitdir: /path/to/.git").unwrap();
-    // The target file lives in a subfolder present only on the source side.
     fs::create_dir(src.join("support")).unwrap();
     fs::write(src.join("support/README.md"), b"readme").unwrap();
     let flag = AtomicBool::new(false);
-    // Full sync preview must still report the collision.
     assert!(
       Plan::preview(
         &src,
@@ -1179,29 +1098,6 @@ mod tests {
       )
       .is_err(),
       "full-sync preview must report the .git type collision"
-    );
-    // Single-item file_action must succeed; the .git collision is out of scope.
-    let plan = Plan::file_action(
-      &src,
-      &dst,
-      FolderOptions::default(),
-      "support/README.md",
-      "copy",
-      &flag,
-    )
-    .expect("file_action copy must not fail due to unrelated .git collision");
-    assert!(
-      plan
-        .operations
-        .iter()
-        .any(|op| op.relative == "support/README.md"),
-      "plan must include the requested file"
-    );
-    let results = plan.execute(&flag, |_| {}).unwrap();
-    assert!(results.iter().all(|(_, r)| r.is_ok()));
-    assert_eq!(
-      fs::read_to_string(dst.join("support/README.md")).unwrap(),
-      "readme"
     );
   }
 

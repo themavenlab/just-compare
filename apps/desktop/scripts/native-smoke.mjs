@@ -638,16 +638,23 @@ try {
   assert.equal(rows[0].status, "same");
   assert.equal(rows[1].isDirectory, true);
   await writeFile(join(leftFolder, "move.txt"), "move safely");
-  let filePlan = await call("preview_file_action", {
-    left: leftFolder,
-    right: rightFolder,
-    options,
-    relative: "move.txt",
-    action: "move",
+  let filePlan = await call("preview_local_action", {
+    request: {
+      kind: "move",
+      sources: [join(leftFolder, "move.txt")],
+      destination: rightFolder,
+    },
+    jobId: "move",
   });
+  const moveResults = await call("execute_local_action", {
+    id: filePlan.id,
+    jobId: "move",
+  });
+  assert.equal(moveResults.length, 1);
   assert.equal(
-    (await call("execute_sync", { id: filePlan.id, jobId: "move" }))[0].error,
-    null,
+    moveResults[0].result.status,
+    "completed",
+    moveResults[0].result.message,
   );
   assert.equal(
     await readFile(join(rightFolder, "move.txt"), "utf8"),
@@ -655,17 +662,19 @@ try {
   );
   await assert.rejects(access(join(leftFolder, "move.txt")));
   await writeFile(join(leftFolder, "delete.txt"), "recycle safely");
-  filePlan = await call("preview_file_action", {
-    left: leftFolder,
-    right: rightFolder,
-    options,
-    relative: "delete.txt",
-    action: "trashLeft",
+  filePlan = await call("preview_local_action", {
+    request: { kind: "recycle", sources: [join(leftFolder, "delete.txt")] },
+    jobId: "recycle",
   });
+  const recycleResults = await call("execute_local_action", {
+    id: filePlan.id,
+    jobId: "recycle",
+  });
+  assert.equal(recycleResults.length, 1);
   assert.equal(
-    (await call("execute_sync", { id: filePlan.id, jobId: "recycle" }))[0]
-      .error,
-    null,
+    recycleResults[0].result.status,
+    "completed",
+    recycleResults[0].result.message,
   );
   await assert.rejects(access(join(leftFolder, "delete.txt")));
   const mismatchLeft = join(fixtures, "mismatch-left");

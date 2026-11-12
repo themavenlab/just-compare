@@ -998,55 +998,6 @@ pub async fn preview_sync(
   result
 }
 
-#[tauri::command]
-pub async fn preview_file_action(
-  left: String,
-  right: String,
-  options: FolderOptions,
-  relative: String,
-  action: String,
-  job_id: Option<String>,
-  state: State<'_, Arc<Resources>>,
-) -> Result<Preview, String> {
-  let resources = state.inner().clone();
-  let job_id = job_id.unwrap_or_else(|| resources.id());
-  let flag = begin(&resources, &job_id)?;
-  let worker_resources = resources.clone();
-  let result = worker(move || {
-    let plan = Plan::file_action(
-      Path::new(&left),
-      Path::new(&right),
-      options,
-      &relative,
-      &action,
-      &flag,
-    )
-    .map_err(|e| e.to_string())?;
-    let operations = plan
-      .operations
-      .iter()
-      .map(|o| Operation {
-        relative: o.relative.clone(),
-        action: o.action.clone(),
-      })
-      .collect();
-    let id = worker_resources.id();
-    worker_resources
-      .plans
-      .lock()
-      .map_err(|e| e.to_string())?
-      .insert(id.clone(), plan);
-    Ok(Preview { id, operations })
-  })
-  .await;
-  resources
-    .jobs
-    .lock()
-    .map_err(|e| e.to_string())?
-    .remove(&job_id);
-  result
-}
-
 #[derive(Serialize)]
 pub struct Outcome {
   relative: String,

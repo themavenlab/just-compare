@@ -120,7 +120,7 @@ fn main() {
       commands::reveal_path,
       commands::open_with,
       commands::preview_sync,
-      commands::preview_file_action,
+      commands::preview_local_action,
       commands::execute_sync,
       commands::preview_local_action,
       commands::execute_local_action,
