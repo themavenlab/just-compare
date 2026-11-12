@@ -359,7 +359,6 @@ export function ComparisonWorkspace({
   const searchToken = useRef(0);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [profileSuffix, setProfileSuffix] = useState("");
-  const [localPreview, setLocalPreview] = useState<LocalPreview | null>(null);
   const [actionMetadata, setActionMetadata] = useState<
     {
       path: string;
@@ -726,7 +725,6 @@ export function ComparisonWorkspace({
     setNativeFolderRoots({ left: "", right: "" });
     discardPreview(tab.id);
     setPreview(null);
-    setLocalPreview(null);
     setFolderStale(true);
     setSelectedFiles([]);
     setError("");
@@ -1504,7 +1502,6 @@ export function ComparisonWorkspace({
     const { generation, jobId } = beginFolderGeneration();
     discardPreview(tab.id);
     setPreview(null);
-    setLocalPreview(null);
     setFolderStale(true);
     setSelectedFiles([]);
     setProgress(0);
@@ -1527,7 +1524,7 @@ export function ComparisonWorkspace({
         return;
       setFolders(result);
       if (filter === "error") {
-        setFilter("all");
+        selectFilter("all");
       }
       setFolderRoots(roots);
       setNativeFolderRoots(roots);
@@ -1604,7 +1601,6 @@ export function ComparisonWorkspace({
         if (changed) {
           discardPreview(tab.id);
           setPreview(null);
-          setLocalPreview(null);
           setSelectedFiles([]);
         }
         setNotice(
@@ -2259,7 +2255,6 @@ export function ComparisonWorkspace({
       },
       clearPreview: () => {
         setPreview(null);
-        setLocalPreview(null);
       },
       diskChanged: (paths, refreshFolders = false) => {
         const affected = (path: string) =>
@@ -2307,7 +2302,6 @@ export function ComparisonWorkspace({
         ) {
           discardPreview(tab.id);
           setPreview(null);
-          setLocalPreview(null);
           if (!refreshFolders || !affectedFolderRoots)
             setNotice(
               "Files changed on disk. Rescan folders or reopen inputs to refresh; drafts are retained.",
@@ -2816,7 +2810,6 @@ export function ComparisonWorkspace({
         try {
           discardPreview(tab.id);
           setPreview(null);
-          setLocalPreview(null);
           const roots = await normalizeFolderRoots(generation);
           if (!isCurrentFolderGeneration(folderGeneration.current, generation))
             return;
@@ -3100,12 +3093,6 @@ export function ComparisonWorkspace({
       }),
     );
     let request: LocalActionRequest;
-    const oneStep =
-      action === "copySide" ||
-      action === "moveSide" ||
-      action === "copyFolder" ||
-      action === "moveFolder" ||
-      action === "recycle";
     const source = sources[0];
     if (action === "recycle") request = { kind: "recycle", sources };
     else if (action === "rename" && source && sources.length === 1)
@@ -3187,7 +3174,6 @@ export function ComparisonWorkspace({
     } else throw new Error("Choose a supported filesystem action.");
     if (!(await claimPreview(tab.id))) return;
     setPreview(null);
-    setLocalPreview(null);
     const jobId = crypto.randomUUID();
     startJob(jobId);
     let result: LocalPreview;
@@ -3197,26 +3183,20 @@ export function ComparisonWorkspace({
       discardPreview(tab.id);
       throw failure;
     }
-    if (oneStep) {
-      setFolderDialog(null);
-      if (!result.operations.length) {
-        discardPreview(tab.id);
-        setNotice("Nothing to change: the destination already matches.");
-        return;
-      }
-      const { total, failures } = await executeLocalPlan(result);
-      await scan();
-      setNotice(
-        `Completed ${total - failures.length} of ${total} local actions.`,
-      );
-      if (failures.length) throw new Error(failures.join("\n"));
+    setFolderDialog(null);
+    if (!result.operations.length) {
+      discardPreview(tab.id);
+      setNotice("Nothing to change: the destination already matches.");
       return;
     }
-    setLocalPreview(result);
-    setFolderDialog(null);
+    const { total, failures } = await executeLocalPlan(result);
+    await scan();
+    setNotice(
+      `Completed ${total - failures.length} of ${total} local actions.`,
+    );
+    if (failures.length) throw new Error(failures.join("\n"));
   }
   async function executeLocalPlan(plan: LocalPreview) {
-    setLocalPreview(null);
     discardPreview(tab.id);
     const jobId = crypto.randomUUID();
     startJob(jobId);
@@ -3238,20 +3218,6 @@ export function ComparisonWorkspace({
           `${item.operation.source ?? item.operation.destination}: ${item.result.message ?? item.result.status}`,
       );
     return { total: results.length, failures };
-  }
-  async function executeLocalPreview() {
-    if (
-      !localPreview ||
-      !(await confirmAction(
-        `Execute exactly these ${localPreview.operations.length} local actions? Recycling has no permanent-delete fallback. Partial effects are not rolled back.`,
-      ))
-    )
-      return;
-    const { total, failures } = await executeLocalPlan(localPreview);
-    setNotice(
-      `Completed ${total - failures.length} of ${total} local actions. Rescan to refresh this listing.`,
-    );
-    if (failures.length) throw new Error(failures.join("\n"));
   }
   const inputs = (
     <section
@@ -3811,8 +3777,8 @@ export function ComparisonWorkspace({
             </p>
           ) : (
             <p>
-              No files change until you inspect and approve the exact native
-              preview.
+              Click Start to apply this change now. The listing refreshes
+              automatically.
             </p>
           )}
           {error && (
@@ -3838,21 +3804,18 @@ export function ComparisonWorkspace({
                       ? "Copy or move now; existing files with the same name are replaced."
                       : folderDialog.action === "recycle"
                         ? "Send the selected entries to the Recycle Bin now."
-                        : "Build an exact native preview; no files change until separate execution approval."
+                        : folderDialog.action === "synchronize"
+                          ? "Build a sync preview; no files change until you apply it."
+                          : "Apply this change now; the listing refreshes automatically."
               }
               disabled={busy}
               onClick={() => void attempt(prepareFolderAction)}
             >
-              {folderDialog.action === "compareContents" ||
-              folderDialog.action === "copySide" ||
-              folderDialog.action === "moveSide" ||
-              folderDialog.action === "copyFolder" ||
-              folderDialog.action === "moveFolder" ||
-              folderDialog.action === "recycle"
-                ? "Start"
+              {folderDialog.action === "synchronize"
+                ? "Preview"
                 : folderDialog.action === "copyFilename"
                   ? "Copy"
-                  : "Preview"}
+                  : "Start"}
             </button>
             {working && cancellableJob && (
               <button
@@ -3883,62 +3846,6 @@ export function ComparisonWorkspace({
           </div>
           <div className="dialog-actions">
             <button onClick={() => setContentResults(null)}>Close</button>
-          </div>
-        </WorkspaceDialog>
-      )}
-      {localPreview && (
-        <WorkspaceDialog
-          title="Local action preview"
-          onClose={() => {
-            if (!busy) {
-              setLocalPreview(null);
-              discardPreview(tab.id);
-            }
-          }}
-        >
-          <p>
-            No files changed. Inspect every source, destination and replacement
-            before execution.
-          </p>
-          <div className="local-preview-entries">
-            {localPreview.operations.flatMap((operation) =>
-              operation.entries.map((entry, index) => (
-                <p key={`${operation.source}-${index}`}>
-                  {entry.action.kind === "createDirectory" ? (
-                    <strong>Create folder {entry.destination}</strong>
-                  ) : (
-                    <>
-                      <strong>
-                        {entry.action.kind}
-                        {entry.replacesExisting ? " (replaces existing)" : ""}
-                      </strong>
-                      <br />
-                      {entry.source ?? "(new)"}
-                      <br />
-                      {entry.destination ?? "(recycle / metadata change)"}
-                    </>
-                  )}
-                </p>
-              )),
-            )}
-          </div>
-          <div className="dialog-actions">
-            <button
-              disabled={busy}
-              onClick={() => {
-                setLocalPreview(null);
-                discardPreview(tab.id);
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              disabled={busy}
-              className="primary"
-              onClick={() => void attempt(executeLocalPreview)}
-            >
-              Confirm and execute preview
-            </button>
           </div>
         </WorkspaceDialog>
       )}

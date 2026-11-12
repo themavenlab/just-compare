@@ -391,17 +391,8 @@ try {
     exact: true,
   });
   await rename.getByLabel("Action value").fill("renamed.txt");
-  await rename.getByRole("button", { name: "Preview", exact: true }).click();
-  const preview = page.getByRole("dialog", {
-    name: "Local action preview",
-    exact: true,
-  });
-  await preview.waitFor();
-  assert.match(await preview.innerText(), /renamed\.txt/);
-  await preview
-    .getByRole("button", { name: "Confirm and execute preview", exact: true })
-    .click();
-  await session.respondToDialog("Confirm");
+  await rename.getByRole("button", { name: "Start", exact: true }).click();
+  await rename.waitFor({ state: "detached" });
   await page.waitForFunction(() =>
     document
       .querySelector('.workspace-slot[aria-hidden="false"] .status-bar')

@@ -66,10 +66,6 @@ try {
     .getByRole("button", { name: "Start", exact: true })
     .click();
   await actionDialog.waitFor({ state: "detached" });
-  assert.equal(
-    await page.getByRole("dialog", { name: "Local action preview" }).count(),
-    0,
-  );
   await workspace
     .locator(".status-bar")
     .getByText("Completed 1 of 1 local actions.", { exact: false })
