@@ -90,6 +90,7 @@ Select other suite names from `apps/desktop/package.json` as appropriate.
 `npm run test:preview-maps --workspace apps\desktop` verifies that a later tab's preview does not evict an earlier tab's native plan.
 `npm run test:folder-copy --workspace apps\desktop` exercises direct-target folder copy when the destination parent folders do not yet exist.
 `npm run test:delete --workspace apps\desktop` covers the folder Delete flow: one folder dialog, one Start, no second confirmation, and an automatic refresh.
+`npm run test:one-step-actions --workspace apps\desktop` applies the same one-Start flow to rename, New Folder, Attributes, and Touch.
 `npm run test:folder-exclude --workspace apps\desktop` runs the focused native folder exclusion regression independently of the broader native smoke flow.
 `COMPARE_TEST_DESKTOP` permits an alternate embedded-assets test executable.
 These are Windows native WebView2/CDP tests, not packaged-release or other-OS

@@ -26,7 +26,7 @@ Human approval is required before:
 
 When requesting approval, present the concrete change, rationale, alternatives, and validation plan.
 
-Recorded product decision: the folder dialog's Start click is the single approval for copy/move to the other side (same-name files are replaced by default) and for Recycle Bin delete of the selected entries. Those actions do not show a second confirmation, and the listing refreshes automatically after they finish. Permanent deletion is still not offered.
+Recorded product decision: the folder dialog's Start click is the single approval for copy/move to the other side (same-name files are replaced by default), for Recycle Bin delete, and for rename, new folder, attribute and touch changes on the selected entries. Those actions do not show a second confirmation, and the listing refreshes automatically after they finish. Synchronize and Mirror keep one plan review step, because that is where planned deletions are shown. Permanent deletion is still not offered.
 
 ---
 
