@@ -436,88 +436,100 @@ pub fn scan_pair(
     .chain(ae.keys())
     .chain(be.keys())
     .collect();
-  Ok(
-    names
-      .into_iter()
-      .map(|name| {
-        let l = a.get(name);
-        let r = b.get(name);
-        let detail = ae.get(name).or_else(|| be.get(name)).cloned();
-        let status = if detail.is_some() {
-          "error"
-        } else {
-          match (l, r) {
-            (Some(l), Some(r)) => {
-              if is_directory_hash(&l.hash) != is_directory_hash(&r.hash) {
-                "typeMismatch"
-              } else {
-                let equal = match options.criterion {
-                  Criterion::Content => l.hash == r.hash,
-                  Criterion::Size => l.size == r.size,
-                  Criterion::Modified => l.size == r.size && l.modified == r.modified,
-                };
-                if equal {
-                  "same"
-                } else {
-                  "different"
-                }
-              }
-            }
-            (Some(_), None) => "leftOnly",
-            (None, Some(_)) => "rightOnly",
-            _ => "error",
-          }
+  let mut rows = Vec::new();
+  for name in names {
+    let l = a.get(name);
+    let r = b.get(name);
+    let detail = ae.get(name).or_else(|| be.get(name)).cloned();
+    // A file on one side and a folder on the other are independent rows.
+    let kind_differs = detail.is_none()
+      && l
+        .zip(r)
+        .is_some_and(|(l, r)| is_directory_hash(&l.hash) != is_directory_hash(&r.hash));
+    if kind_differs {
+      rows.push(scan_entry(name, l, None, &ae, &be, None, options));
+      rows.push(scan_entry(name, None, r, &ae, &be, None, options));
+    } else {
+      rows.push(scan_entry(name, l, r, &ae, &be, detail, options));
+    }
+  }
+  rows.sort_by(|x, y| {
+    x.relative
+      .cmp(&y.relative)
+      .then(y.is_directory.cmp(&x.is_directory))
+  });
+  Ok(rows)
+}
+
+fn scan_entry(
+  name: &str,
+  l: Option<&Snapshot>,
+  r: Option<&Snapshot>,
+  ae: &BTreeMap<String, String>,
+  be: &BTreeMap<String, String>,
+  detail: Option<String>,
+  options: &FolderOptions,
+) -> FolderEntry {
+  let status = if detail.is_some() {
+    "error"
+  } else {
+    match (l, r) {
+      (Some(l), Some(r)) => {
+        let equal = match options.criterion {
+          Criterion::Content => l.hash == r.hash,
+          Criterion::Size => l.size == r.size,
+          Criterion::Modified => l.size == r.size && l.modified == r.modified,
         };
-        FolderEntry {
-          relative: name.clone(),
-          left_relative: (l.is_some() || ae.contains_key(name)).then(|| name.clone()),
-          right_relative: (r.is_some() || be.contains_key(name)).then(|| name.clone()),
-          left_kind: l.map(|snapshot| {
-            if snapshot.hash == "directory" {
-              FolderEntryKind::Directory
-            } else {
-              FolderEntryKind::File
-            }
-          }),
-          right_kind: r.map(|snapshot| {
-            if snapshot.hash == "directory" {
-              FolderEntryKind::Directory
-            } else {
-              FolderEntryKind::File
-            }
-          }),
-          status: status.into(),
-          left_size: l.map(|s| s.size),
-          right_size: r.map(|s| s.size),
-          left_modified: l.and_then(|s| folder_rules::modified_ms(s.modified)),
-          right_modified: r.and_then(|s| folder_rules::modified_ms(s.modified)),
-          newer: if status == "typeMismatch" {
-            None
-          } else {
-            match (l, r) {
-              (Some(l), Some(r)) if l.modified > r.modified => Some(FolderSide::Left),
-              (Some(l), Some(r)) if l.modified < r.modified => Some(FolderSide::Right),
-              _ => None,
-            }
-          },
-          newer_mixed: false,
-          importance: match status {
-            "same" => ComparisonImportance::Equal,
-            "error" => ComparisonImportance::Unknown,
-            _ => ComparisonImportance::Important,
-          },
-          error: (status == "error").then(|| detail.clone()).flatten(),
-          detail: if status == "typeMismatch" {
-            Some("Not compared: one side is a file and the other is a folder.".into())
-          } else {
-            detail
-          },
-          is_directory: l.is_some_and(|s| s.hash == "directory")
-            || r.is_some_and(|s| s.hash == "directory"),
+        if equal {
+          "same"
+        } else {
+          "different"
         }
-      })
-      .collect(),
-  )
+      }
+      (Some(_), None) => "leftOnly",
+      (None, Some(_)) => "rightOnly",
+      _ => "error",
+    }
+  };
+  FolderEntry {
+    relative: name.to_owned(),
+    left_relative: (l.is_some() || ae.contains_key(name)).then(|| name.to_owned()),
+    right_relative: (r.is_some() || be.contains_key(name)).then(|| name.to_owned()),
+    left_kind: l.map(|snapshot| {
+      if snapshot.hash == "directory" {
+        FolderEntryKind::Directory
+      } else {
+        FolderEntryKind::File
+      }
+    }),
+    right_kind: r.map(|snapshot| {
+      if snapshot.hash == "directory" {
+        FolderEntryKind::Directory
+      } else {
+        FolderEntryKind::File
+      }
+    }),
+    status: status.into(),
+    left_size: l.map(|s| s.size),
+    right_size: r.map(|s| s.size),
+    left_modified: l.and_then(|s| folder_rules::modified_ms(s.modified)),
+    right_modified: r.and_then(|s| folder_rules::modified_ms(s.modified)),
+    newer: match (l, r) {
+      (Some(l), Some(r)) if l.modified > r.modified => Some(FolderSide::Left),
+      (Some(l), Some(r)) if l.modified < r.modified => Some(FolderSide::Right),
+      _ => None,
+    },
+    newer_mixed: false,
+    importance: match status {
+      "same" => ComparisonImportance::Equal,
+      "error" => ComparisonImportance::Unknown,
+      _ => ComparisonImportance::Important,
+    },
+    error: (status == "error").then(|| detail.clone()).flatten(),
+    detail,
+    is_directory: l.is_some_and(|s| s.hash == "directory")
+      || r.is_some_and(|s| s.hash == "directory"),
+  }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -1154,16 +1166,31 @@ mod tests {
     fs::write(b.join("reverse").join("child"), "file").unwrap();
     assert!(Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).is_err());
     let rows = scan_pair(&a, &b, &FolderOptions::default(), &flag, |_| {}).unwrap();
-    let collision = rows.iter().find(|row| row.relative == "collision").unwrap();
-    assert_eq!(collision.status, "typeMismatch");
-    assert_eq!(collision.left_kind, Some(FolderEntryKind::Directory));
-    assert_eq!(collision.right_kind, Some(FolderEntryKind::File));
-    assert!(collision.error.is_none());
-    let reverse = rows.iter().find(|row| row.relative == "reverse").unwrap();
-    assert_eq!(reverse.status, "typeMismatch");
-    assert_eq!(reverse.left_kind, Some(FolderEntryKind::File));
-    assert_eq!(reverse.right_kind, Some(FolderEntryKind::Directory));
-    assert!(reverse.error.is_none());
+    let collision_rows: Vec<_> = rows
+      .iter()
+      .filter(|row| row.relative == "collision")
+      .collect();
+    assert_eq!(collision_rows.len(), 2);
+    let collision_folder = collision_rows.iter().find(|row| row.is_directory).unwrap();
+    assert_eq!(collision_folder.status, "leftOnly");
+    assert_eq!(collision_folder.left_kind, Some(FolderEntryKind::Directory));
+    assert_eq!(collision_folder.right_kind, None);
+    let collision_file = collision_rows.iter().find(|row| !row.is_directory).unwrap();
+    assert_eq!(collision_file.status, "rightOnly");
+    assert_eq!(collision_file.right_kind, Some(FolderEntryKind::File));
+    assert!(rows.iter().all(|row| row.status != "typeMismatch"));
+    assert!(rows.iter().all(|row| row.error.is_none()));
+    let reverse_rows: Vec<_> = rows
+      .iter()
+      .filter(|row| row.relative == "reverse")
+      .collect();
+    assert_eq!(reverse_rows.len(), 2);
+    assert!(reverse_rows
+      .iter()
+      .any(|row| row.status == "leftOnly" && row.left_kind == Some(FolderEntryKind::File)));
+    assert!(reverse_rows
+      .iter()
+      .any(|row| row.status == "rightOnly" && row.right_kind == Some(FolderEntryKind::Directory)));
     assert!(rows
       .iter()
       .any(|row| { row.relative == "reverse/child" && row.status == "rightOnly" }));

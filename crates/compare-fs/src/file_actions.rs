@@ -492,6 +492,26 @@ fn absent_destination(path: &Path) -> Result<PathBuf, FileError> {
   }
 }
 
+fn absent_copy_destination(source: &Path, path: &Path) -> Result<PathBuf, FileError> {
+  let path = safe_path(path, true)?;
+  match fs::symlink_metadata(&path) {
+    Ok(metadata) if metadata.is_dir() != source.is_dir() => {
+      let kind = |is_dir: bool| if is_dir { "folder" } else { "file" };
+      let name = source.file_name().map_or_else(
+        || display_path(source),
+        |n| n.to_string_lossy().into_owned(),
+      );
+      Err(failure(&format!(
+        "Cannot copy {} \"{}\" because a {} with that name exists.",
+        kind(source.is_dir()),
+        name,
+        kind(metadata.is_dir()),
+      )))
+    }
+    _ => absent_destination(&path),
+  }
+}
+
 fn display_paths(paths: &[PathBuf]) -> String {
   paths
     .iter()
@@ -792,7 +812,7 @@ impl FileActionPlan {
               Some(if overwrite {
                 safe_path(&target, true)?
               } else {
-                absent_destination(&target)?
+                absent_copy_destination(source, &target)?
               })
             } else {
               let leaf = target
@@ -807,7 +827,7 @@ impl FileActionPlan {
             Some(if overwrite {
               safe_path(&target, true)?
             } else {
-              absent_destination(&target)?
+              absent_copy_destination(source, &target)?
             })
           }
         }
@@ -1510,6 +1530,38 @@ mod tests {
     assert!(error.to_string().contains("not a directory"));
     assert!(error.to_string().contains("blocked"));
     assert!(!destination_root.join("blocked").join("nested").exists());
+  }
+
+  #[test]
+  fn copy_onto_an_opposite_kind_entry_names_the_conflict() {
+    let (_temp, source, destination_root) = fixture();
+    let file = source.join(".git");
+    fs::write(&file, b"file").unwrap();
+    fs::create_dir(destination_root.join(".git")).unwrap();
+    let error = FileActionPlan::preview(
+      copy_to(file.clone(), destination_root.join(".git"), false),
+      &AtomicBool::new(false),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("Cannot copy file \".git\""), "{error}");
+    assert!(error.contains("a folder with that name exists"), "{error}");
+
+    let folder = source.join("folder");
+    fs::create_dir(&folder).unwrap();
+    fs::write(destination_root.join("folder"), b"file").unwrap();
+    let error = FileActionPlan::preview(
+      copy(folder.clone(), destination_root.clone()),
+      &AtomicBool::new(false),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains("Cannot copy folder \"folder\""), "{error}");
+    assert!(error.contains("a file with that name exists"), "{error}");
+    assert!(destination_root.join(".git").is_dir());
+    assert!(destination_root.join("folder").is_file());
   }
 
   #[test]
