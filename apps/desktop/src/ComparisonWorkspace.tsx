@@ -2764,15 +2764,6 @@ export function ComparisonWorkspace({
       return;
     }
     if (
-      ["copySide", "moveSide", "synchronize"].includes(action) &&
-      entries.some((entry) => entry.status === "typeMismatch")
-    ) {
-      setError(
-        "File/folder type mismatches cannot be copied, moved or synchronized as counterparts.",
-      );
-      return;
-    }
-    if (
       action === "openWith" &&
       entries.some(
         (entry) =>
@@ -3003,7 +2994,7 @@ export function ComparisonWorkspace({
       if (showResults) setContentResults(selectedResults);
       setFolderDialog(null);
       setNotice(
-        `Compared ${selectedResults.length} selected entries. ${selectedResults.filter((entry) => entry.status === "error").length} errors; ${selectedResults.filter((entry) => entry.status === "typeMismatch").length} not compared because the entry kinds differ.`,
+        `Compared ${selectedResults.length} selected entries. ${selectedResults.filter((entry) => entry.status === "error").length} errors.`,
       );
     } catch (failure) {
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))

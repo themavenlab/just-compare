@@ -10,8 +10,8 @@ import {
   formatSize,
   isCurrentFolderGeneration,
   matchesFilter,
-  matchesKindFilter,
   matchesName,
+  rowKey,
   targetRelativeFor,
   toggleFolderErrorFilter,
 } from "./folderPresentation";
@@ -113,7 +113,7 @@ describe("folder presentation", () => {
       entries,
       "all",
       true,
-      new Set(["nested"]),
+      new Set(["d:nested"]),
       "name",
       true,
     );
@@ -158,7 +158,7 @@ describe("folder presentation", () => {
       [entry("a/one.txt"), entry("a/two.txt", "same"), entry("b/three.txt")],
       "differences",
       true,
-      new Set(["b"]),
+      new Set(["d:b"]),
       "name",
       true,
     );
@@ -227,104 +227,75 @@ describe("folder presentation", () => {
       ),
     ).toEqual(["z-folder", "a-folder", "file10.txt", "file2.txt"]);
   });
-  it("splits mismatches into kind-sorted orphan rows and blocks counterpart copies", () => {
-    const mismatch: FolderEntry = {
-      ...entry("folder", "typeMismatch", 0, 4),
-      isDirectory: true,
-      leftKind: "directory",
-      rightKind: "file",
-      detail: "Not compared: one side is a file and the other is a folder.",
+  it("keeps a same-name file and folder as independent rows with their own children", () => {
+    const gitFile: FolderEntry = {
+      ...entry(".git", "leftOnly", 4, null),
+      leftKind: "file",
+      rightKind: null,
     };
-    expect(canCopy(mismatch, "left")).toBe(false);
-    expect(canCopy(mismatch, "right")).toBe(false);
-    expect(matchesKindFilter(mismatch, "folders")).toBe(true);
-    expect(matchesKindFilter(mismatch, "files")).toBe(true);
+    const gitFolder: FolderEntry = {
+      ...entry(".git", "rightOnly", null, 0),
+      isDirectory: true,
+      leftKind: null,
+      rightKind: "directory",
+    };
+    const head: FolderEntry = {
+      ...entry(".git/HEAD", "rightOnly", null, 1),
+      leftKind: null,
+      rightKind: "file",
+    };
+    expect(rowKey(gitFile)).toBe("f:.git");
+    expect(rowKey(gitFolder)).toBe("d:.git");
+    expect(folderSelectionKeys([gitFile, gitFolder])).toEqual([
+      "f:.git",
+      "d:.git",
+    ]);
+    expect(countFolderEntries([gitFile, gitFolder], "all", "all")).toBe(2);
     const rows = folderRows(
-      [
-        mismatch,
-        {
-          ...entry("folder/child.txt", "leftOnly", 1, null),
-          leftRelative: "folder/child.txt",
-        },
-      ],
+      [gitFile, gitFolder, head],
       "all",
       true,
       new Set(),
       "name",
       false,
     );
-    expect(rows.map((row) => row.path)).toEqual([
-      "folder",
-      "folder/child.txt",
-      "folder",
+    const byKey = new Map(rows.map((row) => [row.key, row]));
+    expect([...byKey.keys()].sort()).toEqual([
+      "d:.git",
+      "f:.git",
+      "f:.git/HEAD",
     ]);
-    const mismatchRows = rows.filter((row) => row.path === "folder");
-    expect(mismatchRows).toHaveLength(2);
-    expect(
-      mismatchRows.map((row) => ({
-        side: row.displaySide,
-        status: row.displayEntry?.status,
-        leftKind: row.displayEntry?.leftKind,
-        rightKind: row.displayEntry?.rightKind,
-        branch: row.branch,
-      })),
-    ).toEqual([
-      {
-        side: "left",
-        status: "leftOnly",
-        leftKind: "directory",
-        rightKind: null,
-        branch: true,
-      },
-      {
-        side: "right",
-        status: "rightOnly",
-        leftKind: null,
-        rightKind: "file",
-        branch: false,
-      },
-    ]);
-    expect(mismatchRows[0]?.selectionKey).not.toBe(
-      mismatchRows[1]?.selectionKey,
-    );
-    expect(mismatchRows.every((row) => row.counterpartBlocked)).toBe(true);
-    expect(canCopy(mismatchRows[0]!.displayEntry!, "right", true)).toBe(false);
+    const folderRow = byKey.get("d:.git");
+    const fileRow = byKey.get("f:.git");
+    expect(folderRow?.entry).toBe(gitFolder);
+    expect(fileRow?.entry).toBe(gitFile);
+    expect(folderRow?.branch).toBe(true);
+    expect(folderRow?.rightBranch).toBe(true);
+    expect(fileRow?.branch).toBe(false);
+    expect(fileRow?.rightBranch).toBe(false);
+    expect(fileRow?.leftBranch).toBe(false);
+    expect(byKey.get("f:.git/HEAD")?.depth).toBe(1);
     expect(
       folderRows(
-        [mismatch],
+        [gitFile, gitFolder, head],
         "all",
-        false,
-        new Set(),
+        true,
+        new Set(["d:.git"]),
         "name",
         false,
-        "files",
-      ).map((row) => row.displaySide),
-    ).toEqual(["right"]);
-    expect(
-      folderRows(
-        [mismatch],
-        "all",
-        false,
-        new Set(),
-        "name",
-        false,
-        "folders",
-      ).map((row) => row.displaySide),
-    ).toEqual(["left"]);
-    expect(folderSelectionKeys([mismatch])).toEqual([
-      "folder\u0000left",
-      "folder\u0000right",
-    ]);
-    expect(countFolderEntries([mismatch], "all", "all")).toBe(2);
-    expect(countFolderEntries([mismatch], "leftOnly", "all")).toBe(1);
+      ).map((row) => row.key),
+    ).not.toContain("f:.git/HEAD");
+    expect(canCopy(gitFile, "right")).toBe(true);
+    expect(canCopy(gitFolder, "left")).toBe(true);
   });
   it("excludes folder subtrees without hiding a same-name file", () => {
-    const mismatch: FolderEntry = {
-      ...entry("hello", "typeMismatch", 1, 0),
+    const folder: FolderEntry = {
+      ...entry("hello", "rightOnly", null, 0),
       isDirectory: true,
-      leftKind: "file",
+      leftKind: null,
       rightKind: "directory",
     };
+    const file: FolderEntry = entry("hello", "leftOnly", 1, null);
     const child: FolderEntry = {
       ...entry("hello/child.txt", "rightOnly", null, 1),
       rightKind: "file",
@@ -332,7 +303,7 @@ describe("folder presentation", () => {
     const sibling = entry("hello-world.txt", "leftOnly", 1, null);
     const excludedDirectories = new Set(["hello"]);
     const rows = folderRows(
-      [mismatch, child, sibling],
+      [folder, file, child, sibling],
       "all",
       true,
       new Set(),
@@ -342,37 +313,19 @@ describe("folder presentation", () => {
       new Set(),
       excludedDirectories,
     );
-    expect(
-      rows.map((row) => [
-        row.path,
-        row.displaySide,
-        row.displayEntry?.isDirectory,
-      ]),
-    ).toEqual([
-      ["hello", "left", false],
-      ["hello-world.txt", null, false],
+    expect(rows.map((row) => [row.key, row.path])).toEqual([
+      ["f:hello", "hello"],
+      ["f:hello-world.txt", "hello-world.txt"],
     ]);
     expect(
       countFolderEntries(
-        [mismatch, child, sibling],
+        [folder, file, child, sibling],
         "all",
         "all",
         new Set(),
         excludedDirectories,
       ),
     ).toBe(2);
-    expect(
-      folderRows(
-        [mismatch],
-        "all",
-        true,
-        new Set(),
-        "name",
-        false,
-        "all",
-        new Set(["hello"]),
-      ).map((row) => row.displaySide),
-    ).toEqual(["right"]);
   });
   it("checks actual copy direction and rejects same/error sources", () => {
     expect(canCopy(entry("a", "rightOnly", null), "left")).toBe(true);
@@ -402,9 +355,7 @@ describe("folder presentation", () => {
         large,
         "differences",
         true,
-        new Set(
-          large.filter((row) => row.isDirectory).map((row) => row.relative),
-        ),
+        new Set(large.filter((row) => row.isDirectory).map(rowKey)),
         "name",
         false,
       ),

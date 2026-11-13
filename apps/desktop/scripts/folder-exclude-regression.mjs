@@ -94,9 +94,10 @@ try {
   const helloRows = list.locator('.folder-row[data-relative="hello"]');
   await helloRows.first().waitFor();
   assert.equal(await helloRows.count(), 2);
-  const helloFolder = list.locator(
-    '.folder-row[data-relative="hello"][data-display-side="right"]',
-  );
+  const helloFile = list.locator('.folder-row[data-row-key="f:hello"]');
+  const helloFolder = list.locator('.folder-row[data-row-key="d:hello"]');
+  assert.equal(await helloFile.getAttribute("data-status"), "leftOnly");
+  assert.equal(await helloFolder.getAttribute("data-status"), "rightOnly");
 
   await helloFolder.locator(".folder-side").nth(1).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Exclude", exact: true }).click();

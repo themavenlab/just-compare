@@ -94,7 +94,6 @@ export function targetRelativeFor(
 
 export interface FolderNode {
   key: string;
-  selectionKey: string;
   path: string;
   name: string;
   depth: number;
@@ -102,76 +101,18 @@ export interface FolderNode {
   leftBranch: boolean;
   rightBranch: boolean;
   entry: FolderEntry | null;
-  displayEntry: FolderEntry | null;
-  counterpartBlocked: boolean;
-  displaySide: "left" | "right" | null;
   guides: boolean[];
   lastSibling: boolean;
 }
 
-interface DisplayEntry {
-  key: string;
-  selectionKey: string;
-  source: FolderEntry;
-  entry: FolderEntry;
-  counterpartBlocked: boolean;
-  side: "left" | "right" | null;
-}
-
-function displayEntries(entries: FolderEntry[]): DisplayEntry[] {
-  return entries.flatMap<DisplayEntry>((source) => {
-    if (
-      source.status !== "typeMismatch" ||
-      source.leftKind === null ||
-      source.rightKind === null ||
-      source.leftKind === source.rightKind
-    ) {
-      return [
-        {
-          key: source.relative,
-          selectionKey: source.relative,
-          source,
-          entry: source,
-          counterpartBlocked: false,
-          side: null,
-        },
-      ];
-    }
-    return (["left", "right"] as const).map((side) => {
-      const left = side === "left";
-      const entry: FolderEntry = {
-        ...source,
-        status: left ? "leftOnly" : "rightOnly",
-        leftSize: left ? source.leftSize : null,
-        rightSize: left ? null : source.rightSize,
-        leftModified: left ? (source.leftModified ?? null) : null,
-        rightModified: left ? null : (source.rightModified ?? null),
-        leftRelative: left ? (source.leftRelative ?? null) : null,
-        rightRelative: left ? null : (source.rightRelative ?? null),
-        leftKind: left ? source.leftKind : null,
-        rightKind: left ? null : source.rightKind,
-        detail: null,
-        error: null,
-        newer: null,
-        newerMixed: false,
-        isDirectory:
-          (left ? source.leftKind : source.rightKind) === "directory",
-      };
-      const selectionKey = `${source.relative}\0${side}`;
-      return {
-        key: selectionKey,
-        selectionKey,
-        source,
-        entry,
-        counterpartBlocked: true,
-        side,
-      };
-    });
-  });
+// A file and a folder may share a relative path, so the kind is part of the
+// identity. Selection, expansion, and React keys all use this value.
+export function rowKey(entry: FolderEntry) {
+  return `${entry.isDirectory ? "d" : "f"}:${entry.relative}`;
 }
 
 export function folderSelectionKeys(entries: FolderEntry[]) {
-  return displayEntries(entries).map(({ selectionKey }) => selectionKey);
+  return entries.map(rowKey);
 }
 
 function excludedByKind(
@@ -199,8 +140,8 @@ export function countFolderEntries(
   excludedFiles: ReadonlySet<string> = new Set(),
   excludedDirectories: ReadonlySet<string> = new Set(),
 ) {
-  return displayEntries(entries).filter(
-    ({ entry }) =>
+  return entries.filter(
+    (entry) =>
       !excludedByKind(entry, excludedFiles, excludedDirectories) &&
       matchesFilter(entry, filter) &&
       matchesKindFilter(entry, kindFilter),
@@ -264,18 +205,8 @@ export function matchesKindFilter(
   if (filter === "folders") return entry.isDirectory;
   return entry.leftKind === "file" || entry.rightKind === "file";
 }
-export function canCopy(
-  entry: FolderEntry,
-  destination: "left" | "right",
-  counterpartBlocked = false,
-) {
-  if (
-    counterpartBlocked ||
-    entry.status === "error" ||
-    entry.status === "same" ||
-    entry.status === "typeMismatch"
-  )
-    return false;
+export function canCopy(entry: FolderEntry, destination: "left" | "right") {
+  if (entry.status === "error" || entry.status === "same") return false;
   return destination === "right"
     ? entry.status !== "rightOnly"
     : entry.status !== "leftOnly";
@@ -292,59 +223,52 @@ export function folderRows(
   excludedDirectories: ReadonlySet<string> = new Set(),
 ): FolderNode[] {
   const compare = (a: FolderNode, b: FolderNode) => {
-    const aFolder = a.branch || a.displayEntry?.isDirectory === true;
-    const bFolder = b.branch || b.displayEntry?.isDirectory === true;
+    const aFolder = a.branch || a.entry?.isDirectory === true;
+    const bFolder = b.branch || b.entry?.isDirectory === true;
     if (aFolder !== bFolder) return aFolder ? -1 : 1;
     let order: number;
     if (sort === "name")
       order = a.name.localeCompare(b.name, undefined, { numeric: true });
     else if (sort === "status")
-      order = (a.displayEntry?.status ?? "").localeCompare(
-        b.displayEntry?.status ?? "",
-      );
+      order = (a.entry?.status ?? "").localeCompare(b.entry?.status ?? "");
     else {
-      const av = a.displayEntry?.[sort] ?? -1;
-      const bv = b.displayEntry?.[sort] ?? -1;
+      const av = a.entry?.[sort] ?? -1;
+      const bv = b.entry?.[sort] ?? -1;
       order = av - bv;
     }
     return (descending ? -order : order) || a.key.localeCompare(b.key);
   };
-  const records = displayEntries(entries).filter(
-    ({ entry }) => !excludedByKind(entry, excludedFiles, excludedDirectories),
+  const records = entries.filter(
+    (entry) => !excludedByKind(entry, excludedFiles, excludedDirectories),
   );
   const filtered = records.filter(
-    ({ entry }) =>
+    (entry) =>
       matchesFilter(entry, filter) && matchesKindFilter(entry, kindFilter),
   );
   if (!tree)
     return filtered
-      .map((record) => ({
-        key: record.key,
-        selectionKey: record.selectionKey,
-        path: record.entry.relative,
-        name: record.entry.relative,
+      .map((entry) => ({
+        key: rowKey(entry),
+        path: entry.relative,
+        name: entry.relative,
         depth: 0,
         branch: false,
         leftBranch: false,
         rightBranch: false,
-        entry: record.source,
-        displayEntry: record.entry,
-        counterpartBlocked: record.counterpartBlocked,
-        displaySide: record.side,
+        entry,
         guides: [],
         lastSibling: true,
       }))
       .sort(compare);
-  const actual = new Map<string, DisplayEntry[]>();
-  for (const record of records) {
-    const path = record.entry.relative;
-    const pathRecords = actual.get(path) ?? [];
-    pathRecords.push(record);
-    actual.set(path, pathRecords);
+  const actual = new Map<string, FolderEntry[]>();
+  for (const entry of records) {
+    const pathEntries = actual.get(entry.relative) ?? [];
+    pathEntries.push(entry);
+    actual.set(entry.relative, pathEntries);
   }
   const leftBranches = new Set<string>();
   const rightBranches = new Set<string>();
-  for (const { entry } of records) {
+  for (const entry of records) {
     for (const [relative, kind, branches] of [
       [
         entry.leftRelative ?? (entry.leftSize !== null ? entry.relative : null),
@@ -372,60 +296,62 @@ export function folderRows(
     }
   }
   const nodes = new Map<string, FolderNode>();
+  const directoryKey = (path: string) => `d:${path}`;
   for (const record of filtered) {
-    const segments = record.entry.relative.split("/");
+    const segments = record.relative.split("/");
     for (let index = 0; index < segments.length; index++) {
       const path = segments.slice(0, index + 1).join("/");
       const isLeaf = index === segments.length - 1;
-      const actualRecord = isLeaf
-        ? record
-        : actual.get(path)?.find(({ entry }) => entry.isDirectory);
-      const key = actualRecord?.key ?? path;
-      if (!nodes.has(key)) {
-        const leftBranch =
-          isLeaf && record.counterpartBlocked
-            ? record.entry.leftKind === "directory" && leftBranches.has(path)
-            : leftBranches.has(path);
-        const rightBranch =
-          isLeaf && record.counterpartBlocked
-            ? record.entry.rightKind === "directory" && rightBranches.has(path)
-            : rightBranches.has(path);
-        nodes.set(key, {
-          key,
-          selectionKey: actualRecord?.selectionKey ?? path,
+      if (isLeaf) {
+        nodes.set(rowKey(record), {
+          key: rowKey(record),
           path,
           name: segments[index] ?? path,
           depth: index,
-          branch: leftBranch || rightBranch,
-          leftBranch,
-          rightBranch,
-          entry: actualRecord?.source ?? null,
-          displayEntry: actualRecord?.entry ?? null,
-          counterpartBlocked: actualRecord?.counterpartBlocked ?? false,
-          displaySide: actualRecord?.side ?? null,
+          branch: record.isDirectory,
+          leftBranch: record.leftKind === "directory",
+          rightBranch: record.rightKind === "directory",
+          entry: record,
           guides: [],
           lastSibling: true,
         });
+        continue;
       }
+      const key = directoryKey(path);
+      if (nodes.has(key)) continue;
+      const leftBranch = leftBranches.has(path);
+      const rightBranch = rightBranches.has(path);
+      const directory = actual.get(path)?.find((entry) => entry.isDirectory);
+      nodes.set(key, {
+        key,
+        path,
+        name: segments[index] ?? path,
+        depth: index,
+        branch: leftBranch || rightBranch,
+        leftBranch,
+        rightBranch,
+        entry: directory ?? null,
+        guides: [],
+        lastSibling: true,
+      });
     }
   }
   const children = new Map<string, FolderNode[]>();
   for (const node of nodes.values()) {
-    const parent = node.path.includes("/")
-      ? node.path.slice(0, node.path.lastIndexOf("/"))
-      : "";
+    const slash = node.path.lastIndexOf("/");
+    const parent = slash < 0 ? "" : directoryKey(node.path.slice(0, slash));
     const group = children.get(parent) ?? [];
     group.push(node);
     children.set(parent, group);
   }
   const result: FolderNode[] = [];
-  const visit = (parent: string, guides: boolean[]) => {
-    const siblings = (children.get(parent) ?? []).sort(compare);
+  const visit = (parentKey: string, guides: boolean[]) => {
+    const siblings = (children.get(parentKey) ?? []).sort(compare);
     for (const [index, node] of siblings.entries()) {
       const lastSibling = index === siblings.length - 1;
       result.push({ ...node, guides, lastSibling });
-      if (node.branch && !collapsed.has(node.path))
-        visit(node.path, [...guides, !lastSibling]);
+      if (node.branch && !collapsed.has(node.key))
+        visit(node.key, [...guides, !lastSibling]);
     }
   };
   visit("", []);

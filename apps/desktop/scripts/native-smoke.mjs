@@ -692,22 +692,37 @@ try {
     options,
     jobId: "type-mismatch-test",
   });
-  const folderLeft = mismatchRows.find((row) => row.relative === "folder-left");
-  assert.equal(folderLeft.status, "typeMismatch");
-  assert.equal(folderLeft.leftKind, "directory");
-  assert.equal(folderLeft.rightKind, "file");
-  assert.equal(folderLeft.error, null);
-  const folderRight = mismatchRows.find(
+  const folderLeftRows = mismatchRows.filter(
+    (row) => row.relative === "folder-left",
+  );
+  assert.equal(folderLeftRows.length, 2);
+  const folderLeftDirectory = folderLeftRows.find(
+    (row) => row.leftKind === "directory",
+  );
+  assert.equal(folderLeftDirectory.status, "leftOnly");
+  assert.equal(folderLeftDirectory.rightKind, null);
+  assert.equal(folderLeftDirectory.error, null);
+  const folderLeftFile = folderLeftRows.find((row) => row.rightKind === "file");
+  assert.equal(folderLeftFile.status, "rightOnly");
+  assert.equal(folderLeftFile.leftKind, null);
+  assert.equal(folderLeftFile.error, null);
+  const folderRightRows = mismatchRows.filter(
     (row) => row.relative === "folder-right",
   );
-  assert.equal(folderRight.status, "typeMismatch");
-  assert.equal(folderRight.leftKind, "file");
-  assert.equal(folderRight.rightKind, "directory");
-  assert.equal(folderRight.error, null);
+  assert.equal(folderRightRows.length, 2);
+  const folderRightDirectory = folderRightRows.find(
+    (row) => row.rightKind === "directory",
+  );
+  assert.equal(folderRightDirectory.status, "rightOnly");
+  assert.equal(folderRightDirectory.error, null);
   assert.equal(
     mismatchRows.find((row) => row.relative === "folder-right/child.txt")
       .status,
     "rightOnly",
+  );
+  assert.equal(
+    mismatchRows.some((row) => row.status === "typeMismatch"),
+    false,
   );
   await assert.rejects(
     call("preview_sync", {
@@ -717,7 +732,7 @@ try {
       mode: "update",
     }),
     /collision/,
-    "A display mismatch must not make unsafe synchronization executable.",
+    "A same-name file and folder must not make unsafe synchronization executable.",
   );
   await assert.rejects(
     call("execute_sync", { id: plan.id, jobId: "consumed-test" }),
@@ -1048,13 +1063,13 @@ try {
   assert.equal(
     await folderMismatchRows.count(),
     2,
-    "A file/folder conflict is displayed as two side-only rows.",
+    "A same-name file and folder are displayed as two independent rows.",
   );
   const folderMismatchFolder = folderList.locator(
-    '.folder-row[data-relative="type-mismatch-folder"][data-display-side="left"]',
+    '.folder-row[data-row-key="d:type-mismatch-folder"]',
   );
   const folderMismatchFile = folderList.locator(
-    '.folder-row[data-relative="type-mismatch-folder"][data-display-side="right"]',
+    '.folder-row[data-row-key="f:type-mismatch-folder"]',
   );
   assert.equal(
     await folderMismatchFolder.getAttribute("data-status"),
@@ -1080,22 +1095,12 @@ try {
       .getAttribute("class"),
     /file-icon/,
   );
-  assert.equal(
-    await folderMismatchRows.locator(".type-mismatch-note").count(),
-    0,
-  );
-  assert.equal(
-    await folderMismatchRows
-      .locator(".row-hover-actions button:not(:disabled)")
-      .count(),
-    0,
-  );
   const reverseMismatchRows = folderList.locator(
     '.folder-row[data-relative="type-mismatch-file"]',
   );
   assert.equal(await reverseMismatchRows.count(), 2);
-  const reverseMismatchFolder = reverseMismatchRows.locator(
-    '[data-display-side="right"]',
+  const reverseMismatchFolder = folderList.locator(
+    '.folder-row[data-row-key="d:type-mismatch-file"]',
   );
   await reverseMismatchFolder
     .locator(".folder-side")
@@ -1111,7 +1116,7 @@ try {
   assert.equal(
     await folderList.locator('.folder-row[data-status="error"]').count(),
     errorsBeforeMismatchScan,
-    "A readable type mismatch does not create a comparison error.",
+    "A same-name file and folder does not create a comparison error.",
   );
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await page.getByRole("menuitem", { name: "Files only", exact: true }).click();
@@ -1123,12 +1128,17 @@ try {
   );
   assert.equal(
     await folderList
-      .locator(
-        '.folder-row[data-relative="type-mismatch-folder"][data-display-side="right"]',
-      )
+      .locator('.folder-row[data-row-key="d:type-mismatch-folder"]')
+      .count(),
+    0,
+    "Files-only filtering hides the folder row of a same-name pair.",
+  );
+  assert.equal(
+    await folderList
+      .locator('.folder-row[data-row-key="f:type-mismatch-folder"]')
       .count(),
     1,
-    "Files-only filtering retains mixed-kind rows with a file side.",
+    "Files-only filtering retains the file row of a same-name pair.",
   );
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await page
@@ -1141,12 +1151,10 @@ try {
   );
   assert.equal(
     await folderList
-      .locator(
-        '.folder-row[data-relative="type-mismatch-folder"][data-display-side="left"]',
-      )
+      .locator('.folder-row[data-row-key="d:type-mismatch-folder"]')
       .count(),
     1,
-    "Folders-only filtering retains mixed-kind rows with a folder side.",
+    "Folders-only filtering retains the folder row of a same-name pair.",
   );
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await page
