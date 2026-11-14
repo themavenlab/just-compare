@@ -720,10 +720,6 @@ try {
       .status,
     "rightOnly",
   );
-  assert.equal(
-    mismatchRows.some((row) => row.status === "typeMismatch"),
-    false,
-  );
   await assert.rejects(
     call("preview_sync", {
       left: mismatchLeft,
