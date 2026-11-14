@@ -39,6 +39,65 @@ const entry = (
 });
 
 describe("folder presentation", () => {
+  it("tones a paired folder by its descendants without changing its status", () => {
+    const folder = (relative: string, status = "same"): FolderEntry => ({
+      ...entry(relative, status, null, null),
+      isDirectory: true,
+      leftKind: "directory",
+      rightKind: "directory",
+      leftSize: 0,
+      rightSize: 0,
+    });
+    const rows = [
+      folder("tree"),
+      folder("tree/clean"),
+      entry("tree/clean/same.txt", "same", 1, 1),
+      folder("tree/changed"),
+      entry("tree/changed/edit.txt", "different", 1, 2),
+      folder("empty-equal"),
+      entry("empty-equal/same.txt", "same", 1, 1),
+    ];
+    const toneOf = (path: string) =>
+      folderRows(rows, "all", true, new Set(), "name", false).find(
+        (node) => node.path === path,
+      )?.tone;
+    expect(toneOf("tree")).toBe("different");
+    expect(toneOf("tree/clean")).toBe("same");
+    expect(toneOf("tree/changed")).toBe("different");
+    expect(toneOf("empty-equal")).toBe("same");
+    expect(
+      folderRows(rows, "all", true, new Set(), "name", false).find(
+        (node) => node.path === "tree/changed/edit.txt",
+      )?.tone,
+    ).toBe("different");
+  });
+
+  it("tones an unimportant changed file without changing its status", () => {
+    const minor = {
+      ...entry("notes.log", "different", 1, 2),
+      importance: "unimportant",
+    };
+    const rows = [minor, entry("main.txt", "different", 1, 2)];
+    const byPath = (flat: boolean) =>
+      Object.fromEntries(
+        folderRows(rows, "all", !flat, new Set(), "name", false).map((node) => [
+          node.path,
+          { tone: node.tone, status: node.entry?.status },
+        ]),
+      );
+    for (const flat of [true, false]) {
+      const result = byPath(flat);
+      expect(result["notes.log"]).toEqual({
+        tone: "unimportant",
+        status: "different",
+      });
+      expect(result["main.txt"]).toEqual({
+        tone: "different",
+        status: "different",
+      });
+    }
+  });
+
   it("implements every screenshot difference predicate without guessing newer timestamps", () => {
     const rows = [
       entry("equal", "same"),

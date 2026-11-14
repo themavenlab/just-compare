@@ -103,6 +103,29 @@ export interface FolderNode {
   entry: FolderEntry | null;
   guides: boolean[];
   lastSibling: boolean;
+  // Display-only: a paired folder inherits "different" from any changed descendant.
+  tone: string | null;
+}
+
+const changedStatuses = new Set(["different", "leftOnly", "rightOnly"]);
+
+function folderTones(entries: FolderEntry[]) {
+  const tones = new Map<string, string>();
+  for (const entry of entries) {
+    if (!changedStatuses.has(entry.status)) continue;
+    const parts = entry.relative.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      tones.set(parts.slice(0, index).join("/"), "different");
+    }
+  }
+  return tones;
+}
+
+function toneFor(entry: FolderEntry) {
+  if (changedStatuses.has(entry.status) && entry.importance === "unimportant") {
+    return "unimportant";
+  }
+  return entry.status;
 }
 
 // A file and a folder may share a relative path, so the kind is part of the
@@ -258,6 +281,7 @@ export function folderRows(
         entry,
         guides: [],
         lastSibling: true,
+        tone: toneFor(entry),
       }))
       .sort(compare);
   const actual = new Map<string, FolderEntry[]>();
@@ -266,6 +290,7 @@ export function folderRows(
     pathEntries.push(entry);
     actual.set(entry.relative, pathEntries);
   }
+  const tones = folderTones(records);
   const leftBranches = new Set<string>();
   const rightBranches = new Set<string>();
   for (const entry of records) {
@@ -314,6 +339,12 @@ export function folderRows(
           entry: record,
           guides: [],
           lastSibling: true,
+          tone:
+            record.isDirectory &&
+            record.status === "same" &&
+            tones.has(record.relative)
+              ? "different"
+              : toneFor(record),
         });
         continue;
       }
@@ -333,6 +364,10 @@ export function folderRows(
         entry: directory ?? null,
         guides: [],
         lastSibling: true,
+        tone:
+          directory?.status === "same" && tones.has(path)
+            ? "different"
+            : (directory?.status ?? null),
       });
     }
   }

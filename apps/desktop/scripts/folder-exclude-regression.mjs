@@ -98,6 +98,26 @@ try {
   const helloFolder = list.locator('.folder-row[data-row-key="d:hello"]');
   assert.equal(await helloFile.getAttribute("data-status"), "leftOnly");
   assert.equal(await helloFolder.getAttribute("data-status"), "rightOnly");
+  assert.equal(await helloFile.getAttribute("data-tone"), "leftOnly");
+  const tint = (cell) =>
+    cell.evaluate((node) => getComputedStyle(node).backgroundColor);
+  const resolvedRemoved = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor =
+      "color-mix(in srgb, var(--removed) 70%, transparent)";
+    document.body.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return color;
+  });
+  assert.equal(
+    await tint(helloFile.locator(".folder-side").nth(0)),
+    resolvedRemoved,
+  );
+  assert.equal(
+    await tint(helloFile.locator(".folder-side").nth(1)),
+    "rgba(0, 0, 0, 0)",
+  );
 
   await helloFolder.locator(".folder-side").nth(1).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Exclude", exact: true }).click();

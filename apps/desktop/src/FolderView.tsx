@@ -283,6 +283,15 @@ export function FolderView({
           </div>
         ))}
       </div>
+      <ul className="folder-tone-legend" aria-label="Row colour key">
+        <li data-tone="leftOnly">Left only</li>
+        <li data-tone="rightOnly">Right only</li>
+        <li data-tone="different">Different</li>
+        <li data-tone="unimportant">Unimportant</li>
+        <li data-tone="error">
+          <Icon name="error" className="error-icon" /> Error
+        </li>
+      </ul>
       <div
         className="folder-tree"
         role="region"
@@ -418,6 +427,7 @@ export function FolderView({
               <div
                 className={`paired-folder-row folder-row ${index % 2 ? "alternate-row" : ""} ${focused === node.key ? "focused-row" : ""} ${selected.includes(node.key) ? "selected-folder-row" : ""}`}
                 data-status={entry?.status ?? "ancestor"}
+                data-tone={node.tone ?? "ancestor"}
                 data-relative={node.path}
                 data-row-key={node.key}
                 id={`${id}-${index}`}
@@ -447,7 +457,8 @@ export function FolderView({
                       : entry?.rightRelative) ?? node.path;
                   return (
                     <div
-                      className={`folder-side-columns folder-side ${entry?.status ?? ""} ${missing ? "missing" : ""}`}
+                      className={`folder-side-columns folder-side ${node.tone ?? ""} ${missing ? "missing" : ""}`}
+                      data-pane={pane}
                       key={pane}
                       aria-label={`${pane === "left" ? "Left" : "Right"}: ${node.path}${kind ? ` (${kind})` : ""}`}
                       onClick={(event) => {
@@ -568,6 +579,9 @@ export function FolderView({
                               ? relative.split("/").at(-1)
                               : relative}
                         </span>
+                        {entry?.status === "error" && (
+                          <span className="sr-only"> (error)</span>
+                        )}
                       </span>
                       <span className="file-size">
                         {missing || sideIsDirectory

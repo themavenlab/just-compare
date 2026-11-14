@@ -21,9 +21,9 @@
   --warning: #b86e00;
   --success: #187544;
   --selected: #245db4;
-  --file-different: #a8262a;
-  --file-left-only: #245db4;
-  --file-right-only: #7041a6;
+  --file-modified: #7a5600;
+  --file-removed: #a8262a;
+  --file-added: #1e6b3a;
   --file-error: #8a5200;
   --radius: 6px;
   --radius-lg: 10px;
@@ -56,9 +56,9 @@
   --warning: #ffc266;
   --success: #6fd3a0;
   --selected: #8db8ff;
-  --file-different: #ff9b9b;
-  --file-left-only: #8db8ff;
-  --file-right-only: #c5a7ff;
+  --file-modified: #ffd28a;
+  --file-removed: #ff9b9b;
+  --file-added: #8fd9a8;
   --file-error: #ffd28a;
   --shadow-sm: 0 1px 2px #0006;
   --shadow-md: 0 8px 24px #0009;
@@ -416,9 +416,9 @@ textarea.rules {
   border-color: var(--accent);
 }
 .cm-copy-gutter button.copy-arrow.single-line-copy {
-  color: var(--file-right-only);
+  color: var(--file-added);
   background: var(--added);
-  border-color: var(--file-right-only);
+  border-color: var(--file-added);
 }
 .cm-copy-gutter button.copy-arrow:focus-visible {
   outline-offset: -1px;
@@ -626,17 +626,17 @@ th {
 .folder-file.different,
 .file-status.different,
 .folder-legend .different {
-  color: var(--file-different);
+  color: var(--file-modified);
 }
 .folder-file.leftOnly,
 .file-status.leftOnly,
 .folder-legend .leftOnly {
-  color: var(--file-left-only);
+  color: var(--file-removed);
 }
 .folder-file.rightOnly,
 .file-status.rightOnly,
 .folder-legend .rightOnly {
-  color: var(--file-right-only);
+  color: var(--file-added);
 }
 .folder-file.error,
 .file-status.error,
@@ -1372,13 +1372,52 @@ body,
   color: var(--muted);
 }
 .folder-side.different {
-  color: var(--file-different);
+  color: var(--file-modified);
 }
 .folder-side.leftOnly {
-  color: var(--file-left-only);
+  color: var(--file-removed);
 }
 .folder-side.rightOnly {
-  color: var(--file-right-only);
+  color: var(--file-added);
+}
+.folder-tone-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  list-style: none;
+  color: var(--muted);
+}
+.folder-tone-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.folder-tone-legend li[data-tone="leftOnly"]::before,
+.folder-tone-legend li[data-tone="rightOnly"]::before,
+.folder-tone-legend li[data-tone="different"]::before,
+.folder-tone-legend li[data-tone="unimportant"]::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+}
+.folder-tone-legend li[data-tone="leftOnly"]::before {
+  background: color-mix(in srgb, var(--removed) 70%, transparent);
+}
+.folder-tone-legend li[data-tone="rightOnly"]::before {
+  background: color-mix(in srgb, var(--added) 70%, transparent);
+}
+.folder-tone-legend li[data-tone="different"]::before {
+  background: var(--changed);
+}
+.folder-tone-legend li[data-tone="unimportant"]::before {
+  background: color-mix(in srgb, var(--changed) 35%, transparent);
+}
+.folder-tone-legend li[data-tone="error"] {
+  color: var(--file-error);
 }
 .folder-side.error {
   color: var(--file-error);
@@ -1943,9 +1982,9 @@ body,
   min-height: 0;
   margin-inline-end: 4px;
   padding: 0;
-  color: var(--file-right-only);
+  color: var(--file-added);
   background: var(--added);
-  border-color: var(--file-right-only);
+  border-color: var(--file-added);
   font-weight: 700;
   line-height: 18px;
   vertical-align: baseline;
@@ -3118,25 +3157,26 @@ input::placeholder {
 .paired-folder-row.alternate-row {
   background: var(--surface-alt);
 }
-.paired-folder-row[data-status="different"] {
-  background: color-mix(in srgb, var(--removed) 55%, transparent);
+.paired-folder-row .folder-side[data-pane="left"].leftOnly {
+  background: color-mix(in srgb, var(--removed) 70%, transparent);
 }
-.paired-folder-row[data-status="leftOnly"] {
-  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
-}
-.paired-folder-row[data-status="rightOnly"] {
+.paired-folder-row .folder-side[data-pane="right"].rightOnly {
   background: color-mix(in srgb, var(--added) 70%, transparent);
 }
-.paired-folder-row[data-status="error"] {
+.paired-folder-row .folder-side.different {
   background: var(--changed);
 }
-.paired-folder-row.paired-folder-row.selected-folder-row {
+.paired-folder-row .folder-side.unimportant {
+  background: color-mix(in srgb, var(--changed) 35%, transparent);
+}
+.paired-folder-row.paired-folder-row.selected-folder-row .folder-side {
   background: var(--selection-row);
 }
-.paired-folder-row.focused-row {
-  background: var(--accent-soft);
+.paired-folder-row.focused-row .folder-side {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
-.paired-folder-row.selected-folder-row.focused-row {
+.paired-folder-row.paired-folder-row.selected-folder-row.focused-row
+  .folder-side {
   background: var(--selection-row);
 }
 .folder-side {
@@ -3379,7 +3419,7 @@ input::placeholder {
 }
 .session-kind[data-kind="merge"] {
   background: var(--added);
-  color: var(--file-right-only);
+  color: var(--file-added);
 }
 .workbench-shell .session-item > .icon-button {
   flex-shrink: 0;
@@ -3504,9 +3544,9 @@ input::placeholder {
     --removed: Canvas;
     --danger: CanvasText;
     --selected: Highlight;
-    --file-different: CanvasText;
-    --file-left-only: CanvasText;
-    --file-right-only: CanvasText;
+    --file-modified: CanvasText;
+    --file-removed: CanvasText;
+    --file-added: CanvasText;
     --file-error: CanvasText;
   }
   button:disabled,
