@@ -1,4 +1,4 @@
-use compare_fs::{Document, FolderOptions};
+use compare_fs::{Document, FolderOptions, FolderStatus};
 use compare_merge::MergeBlock;
 use compare_text::{compare, CompareOptions, DiffKind};
 use std::path::Path;
@@ -30,9 +30,9 @@ fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
       let mut different = false;
       let mut errors = false;
       for entry in entries {
-        different |= entry.status != "same";
-        errors |= entry.status == "error";
-        println!("{}\t{}", entry.status, entry.relative);
+        different |= entry.status != FolderStatus::Same;
+        errors |= entry.status == FolderStatus::Error;
+        println!("{}\t{}", entry.status.as_str(), entry.relative);
         if let Some(detail) = entry.detail {
           eprintln!("{detail}");
         }

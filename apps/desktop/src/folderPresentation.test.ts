@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FolderEntry } from "./api";
+import type { FolderEntry, FolderStatus } from "./api";
 import {
   canCopy,
   countFolderEntries,
@@ -24,7 +24,7 @@ import {
 
 const entry = (
   relative: string,
-  status = "different",
+  status: FolderStatus = "different",
   leftSize: number | null = 2,
   rightSize: number | null = 1,
 ): FolderEntry => ({
@@ -36,11 +36,23 @@ const entry = (
   isDirectory: false,
   leftKind: leftSize === null ? null : "file",
   rightKind: rightSize === null ? null : "file",
+  leftModified: null,
+  rightModified: null,
+  leftRelative: null,
+  rightRelative: null,
+  newer: null,
+  newerMixed: false,
+  error: null,
+  importance:
+    status === "same" ? "equal" : status === "error" ? "unknown" : "important",
 });
 
 describe("folder presentation", () => {
   it("tones a paired folder by its descendants without changing its status", () => {
-    const folder = (relative: string, status = "same"): FolderEntry => ({
+    const folder = (
+      relative: string,
+      status: FolderStatus = "same",
+    ): FolderEntry => ({
       ...entry(relative, status, null, null),
       isDirectory: true,
       leftKind: "directory",
@@ -73,7 +85,7 @@ describe("folder presentation", () => {
   });
 
   it("tones an unimportant changed file without changing its status", () => {
-    const minor = {
+    const minor: FolderEntry = {
       ...entry("notes.log", "different", 1, 2),
       importance: "unimportant",
     };

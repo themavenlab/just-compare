@@ -56,6 +56,29 @@ pub enum FolderEntryKind {
   Directory,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderStatus {
+  Same,
+  Different,
+  LeftOnly,
+  RightOnly,
+  Error,
+}
+
+impl FolderStatus {
+  /// The wire name used by IPC and CLI output, identical to the serde form.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Same => "same",
+      Self::Different => "different",
+      Self::LeftOnly => "leftOnly",
+      Self::RightOnly => "rightOnly",
+      Self::Error => "error",
+    }
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntry {
@@ -64,7 +87,7 @@ pub struct FolderEntry {
   pub right_relative: Option<String>,
   pub left_kind: Option<FolderEntryKind>,
   pub right_kind: Option<FolderEntryKind>,
-  pub status: String,
+  pub status: FolderStatus,
   pub left_size: Option<u64>,
   pub right_size: Option<u64>,
   pub left_modified: Option<u64>,
@@ -471,7 +494,7 @@ fn scan_entry(
   options: &FolderOptions,
 ) -> FolderEntry {
   let status = if detail.is_some() {
-    "error"
+    FolderStatus::Error
   } else {
     match (l, r) {
       (Some(l), Some(r)) => {
@@ -481,14 +504,14 @@ fn scan_entry(
           Criterion::Modified => l.size == r.size && l.modified == r.modified,
         };
         if equal {
-          "same"
+          FolderStatus::Same
         } else {
-          "different"
+          FolderStatus::Different
         }
       }
-      (Some(_), None) => "leftOnly",
-      (None, Some(_)) => "rightOnly",
-      _ => "error",
+      (Some(_), None) => FolderStatus::LeftOnly,
+      (None, Some(_)) => FolderStatus::RightOnly,
+      _ => FolderStatus::Error,
     }
   };
   FolderEntry {
@@ -509,7 +532,7 @@ fn scan_entry(
         FolderEntryKind::File
       }
     }),
-    status: status.into(),
+    status,
     left_size: l.map(|s| s.size),
     right_size: r.map(|s| s.size),
     left_modified: l.and_then(|s| folder_rules::modified_ms(s.modified)),
@@ -521,11 +544,13 @@ fn scan_entry(
     },
     newer_mixed: false,
     importance: match status {
-      "same" => ComparisonImportance::Equal,
-      "error" => ComparisonImportance::Unknown,
+      FolderStatus::Same => ComparisonImportance::Equal,
+      FolderStatus::Error => ComparisonImportance::Unknown,
       _ => ComparisonImportance::Important,
     },
-    error: (status == "error").then(|| detail.clone()).flatten(),
+    error: (status == FolderStatus::Error)
+      .then(|| detail.clone())
+      .flatten(),
     detail,
     is_directory: l.is_some_and(|s| s.hash == "directory")
       || r.is_some_and(|s| s.hash == "directory"),
@@ -925,6 +950,25 @@ fn excluded_from_plan(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn folder_status_wire_names_match_serde_and_as_str() {
+    let cases = [
+      (FolderStatus::Same, "same"),
+      (FolderStatus::Different, "different"),
+      (FolderStatus::LeftOnly, "leftOnly"),
+      (FolderStatus::RightOnly, "rightOnly"),
+      (FolderStatus::Error, "error"),
+    ];
+    for (status, wire) in cases {
+      assert_eq!(status.as_str(), wire);
+      assert_eq!(serde_json::to_value(status).unwrap(), wire);
+      let parsed: FolderStatus = serde_json::from_value(wire.into()).unwrap();
+      assert_eq!(parsed, status);
+    }
+    assert!(serde_json::from_value::<FolderStatus>("typeMismatch".into()).is_err());
+  }
+
   #[test]
   fn relative_folder_path_maps_only_files_beneath_either_root() {
     let root = tempfile::tempdir().unwrap();
@@ -1022,7 +1066,7 @@ mod tests {
     assert_eq!(fs::read(b.join("one")).unwrap(), b"changed");
     assert_eq!(
       scan_pair(&a, &b, &FolderOptions::default(), &flag, |_| {}).unwrap()[0].status,
-      "same"
+      FolderStatus::Same
     );
     assert!(Plan::preview(&a, &a, FolderOptions::default(), SyncMode::Update, &flag).is_err());
   }
@@ -1066,7 +1110,7 @@ mod tests {
     let rows = scan_pair(&left, &right, &options, &flag, |_| {}).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "hello");
-    assert_eq!(rows[0].status, "leftOnly");
+    assert_eq!(rows[0].status, FolderStatus::LeftOnly);
     assert_eq!(rows[0].left_kind, Some(FolderEntryKind::File));
     assert_eq!(rows[0].right_kind, None);
     let error = match Plan::preview(&left, &right, options, SyncMode::Update, &flag) {
@@ -1172,28 +1216,28 @@ mod tests {
       .collect();
     assert_eq!(collision_rows.len(), 2);
     let collision_folder = collision_rows.iter().find(|row| row.is_directory).unwrap();
-    assert_eq!(collision_folder.status, "leftOnly");
+    assert_eq!(collision_folder.status, FolderStatus::LeftOnly);
     assert_eq!(collision_folder.left_kind, Some(FolderEntryKind::Directory));
     assert_eq!(collision_folder.right_kind, None);
     let collision_file = collision_rows.iter().find(|row| !row.is_directory).unwrap();
-    assert_eq!(collision_file.status, "rightOnly");
+    assert_eq!(collision_file.status, FolderStatus::RightOnly);
     assert_eq!(collision_file.right_kind, Some(FolderEntryKind::File));
-    assert!(rows.iter().all(|row| row.status != "typeMismatch"));
     assert!(rows.iter().all(|row| row.error.is_none()));
     let reverse_rows: Vec<_> = rows
       .iter()
       .filter(|row| row.relative == "reverse")
       .collect();
     assert_eq!(reverse_rows.len(), 2);
+    assert!(reverse_rows.iter().any(
+      |row| row.status == FolderStatus::LeftOnly && row.left_kind == Some(FolderEntryKind::File)
+    ));
     assert!(reverse_rows
       .iter()
-      .any(|row| row.status == "leftOnly" && row.left_kind == Some(FolderEntryKind::File)));
-    assert!(reverse_rows
-      .iter()
-      .any(|row| row.status == "rightOnly" && row.right_kind == Some(FolderEntryKind::Directory)));
+      .any(|row| row.status == FolderStatus::RightOnly
+        && row.right_kind == Some(FolderEntryKind::Directory)));
     assert!(rows
       .iter()
-      .any(|row| { row.relative == "reverse/child" && row.status == "rightOnly" }));
+      .any(|row| { row.relative == "reverse/child" && row.status == FolderStatus::RightOnly }));
   }
 
   #[test]

@@ -983,7 +983,7 @@ fn scan_with_selection(
           FolderEntryKind::File
         }
       }),
-      status: "error".into(),
+      status: FolderStatus::Error,
       left_size: lm.map(|m| m.len()),
       right_size: rm.map(|m| m.len()),
       left_modified: lm.and_then(|m| m.modified().ok()).and_then(modified_ms),
@@ -1020,7 +1020,11 @@ fn scan_with_selection(
         return Err(FileError(errors.join("; ")));
       }
       let (Some(lm), Some(rm)) = (lm, rm) else {
-        row.status = if l.is_some() { "leftOnly" } else { "rightOnly" }.into();
+        row.status = if l.is_some() {
+          FolderStatus::LeftOnly
+        } else {
+          FolderStatus::RightOnly
+        };
         if single_side {
           row.detail = Some("Not compared: choose the other folder root.".into());
           return Ok(ComparisonImportance::Unknown);
@@ -1077,28 +1081,26 @@ fn scan_with_selection(
         content
       };
       row.status = if importance == ComparisonImportance::Important {
-        "different"
+        FolderStatus::Different
       } else {
-        "same"
-      }
-      .into();
+        FolderStatus::Same
+      };
       Ok(importance)
     })();
     match result {
       Ok(importance) => {
         row.importance = importance;
-        if row.status == "error" {
+        if row.status == FolderStatus::Error {
           row.status = if importance == ComparisonImportance::Important {
-            "different"
+            FolderStatus::Different
           } else {
-            "same"
-          }
-          .into();
+            FolderStatus::Same
+          };
         }
       }
       Err(error) => {
         cancel(cancelled)?;
-        row.status = "error".into();
+        row.status = FolderStatus::Error;
         row.error = Some(error.to_string());
         row.detail = row.error.clone();
       }
@@ -1130,21 +1132,21 @@ fn aggregate_directories(rows: &mut [FolderEntry]) {
     let Some(&parent_index) = by_name.get(parent) else {
       continue;
     };
-    let child_status = rows[index].status.clone();
+    let child_status = rows[index].status;
     let child_importance = rows[index].importance;
     let child_newer = rows[index].newer;
     let child_mixed = rows[index].newer_mixed;
     let parent = &mut rows[parent_index];
-    if child_status == "error" {
-      parent.status = "error".into();
+    if child_status == FolderStatus::Error {
+      parent.status = FolderStatus::Error;
       parent.importance = ComparisonImportance::Unknown;
       if parent.error.is_none() {
         parent.error = Some("One or more descendants could not be compared.".into());
         parent.detail = parent.error.clone();
       }
-    } else if parent.status != "error" {
-      if parent.status == "same" && child_status != "same" {
-        parent.status = "different".into();
+    } else if parent.status != FolderStatus::Error {
+      if parent.status == FolderStatus::Same && child_status != FolderStatus::Same {
+        parent.status = FolderStatus::Different;
       }
       if child_importance == ComparisonImportance::Important {
         parent.importance = ComparisonImportance::Important;
@@ -1246,7 +1248,7 @@ mod tests {
     let fixture = Fixture::new();
     fixture.files(b"one", b"two");
     let rows = fixture.scan(&FolderRules::default());
-    assert_eq!(rows[0].status, "different");
+    assert_eq!(rows[0].status, FolderStatus::Different);
     assert_eq!(rows[0].importance, ComparisonImportance::Important);
     let rows = scan_pair_with_rules(
       &fixture.left,
@@ -1261,7 +1263,7 @@ mod tests {
       |_| {},
     )
     .unwrap();
-    assert_eq!(rows[0].status, "different");
+    assert_eq!(rows[0].status, FolderStatus::Different);
     assert_eq!(
       scan_pair(
         &fixture.left,
@@ -1276,7 +1278,7 @@ mod tests {
       )
       .unwrap()[0]
         .status,
-      "same"
+      FolderStatus::Same
     );
   }
 
@@ -1295,13 +1297,16 @@ mod tests {
       ..Default::default()
     };
     let rows = fixture.scan(&rules);
-    assert_eq!(rows[0].status, "same");
+    assert_eq!(rows[0].status, FolderStatus::Same);
     assert_eq!(rows[0].importance, ComparisonImportance::Unimportant);
     fixture.files(b"Hello 123\r\n", b"goodbye 456\n");
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     fixture.files(b"\xff", b"\xff");
-    assert_eq!(fixture.scan(&rules)[0].status, "error");
-    assert_eq!(fixture.scan(&FolderRules::default())[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Error);
+    assert_eq!(
+      fixture.scan(&FolderRules::default())[0].status,
+      FolderStatus::Same
+    );
   }
 
   #[test]
@@ -1322,7 +1327,7 @@ mod tests {
       ComparisonImportance::Unimportant
     );
     rules.quick_test_policy = QuickTestPolicy::RequireAll;
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     rules.quick_test_policy = QuickTestPolicy::Skip;
     assert_eq!(
       fixture.scan(&rules)[0].importance,
@@ -1337,7 +1342,7 @@ mod tests {
     rules.compare_size = true;
     fixture.files(b"HELLO ", b"hello");
     rules.text_rules.ignore_whitespace = true;
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
   }
 
   #[test]
@@ -1351,21 +1356,21 @@ mod tests {
       content: ContentMethod::None,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     rules.compare_modified = true;
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     rules.ignore_dst = true;
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     rules.ignore_dst = false;
     rules.content = ContentMethod::Binary;
     // Content, rather than an equal size quick test, is authoritative.
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     rules.quick_test_policy = QuickTestPolicy::Skip;
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     fixture.files(b"same", b"same");
     fixture.times(base, base + 3_600_000);
     // A failed timestamp quick check falls back to exact content in skip mode.
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
   }
 
   #[test]
@@ -1392,7 +1397,7 @@ mod tests {
           QuickTestPolicy::Skip => quick_same || content_same,
           QuickTestPolicy::RequireAll => quick_same && content_same,
         };
-        assert_eq!(fixture.scan(&rules)[0].status == "same", equal);
+        assert_eq!(fixture.scan(&rules)[0].status == FolderStatus::Same, equal);
       }
     }
     fixture.files(b"same", b"same");
@@ -1402,9 +1407,9 @@ mod tests {
       quick_test_policy: QuickTestPolicy::RequireAll,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     rules.quick_test_policy = QuickTestPolicy::Override;
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
   }
 
   #[test]
@@ -1454,22 +1459,22 @@ mod tests {
       timestamp_tolerance_ms: 1500,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     rules.timestamp_tolerance_ms = 1499;
     let row = &fixture.scan(&rules)[0];
-    assert_eq!(row.status, "different");
+    assert_eq!(row.status, FolderStatus::Different);
     assert_eq!(row.newer, Some(FolderSide::Left));
     assert_eq!(row.left_modified, Some(base + 1500));
     assert_eq!(row.right_modified, Some(base));
     fixture.times(base, base + 90 * 60_000);
     rules.timezone_offset_minutes = -90;
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     fixture.times(base, base + 150 * 60_000);
     assert_eq!(fixture.scan(&rules)[0].newer, Some(FolderSide::Right));
     rules.ignore_dst = true;
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     fixture.times(base, base + 30 * 60_000);
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     assert!(modified_ms(UNIX_EPOCH - Duration::from_millis(1)).is_none());
     if let Some(time) = UNIX_EPOCH.checked_add(Duration::from_millis(JS_SAFE_INTEGER + 1)) {
       assert!(modified_ms(time).is_none());
@@ -1490,32 +1495,38 @@ mod tests {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].left_relative.as_deref(), Some("File.txt"));
     assert_eq!(rows[0].right_relative.as_deref(), Some("file.bin"));
-    assert_eq!(rows[0].status, "same");
+    assert_eq!(rows[0].status, FolderStatus::Same);
     let sensitive = FolderRules {
       compare_filename_case: true,
       ..rules.clone()
     };
-    assert_eq!(fixture.scan(&sensitive)[0].status, "different");
+    assert_eq!(fixture.scan(&sensitive)[0].status, FolderStatus::Different);
     fs::write(fixture.left.join("file.bin"), b"x").unwrap();
     let rows = fixture.scan(&rules);
     assert_eq!(rows.len(), 2);
     assert!(rows
       .iter()
-      .any(|r| r.relative == "file.bin" && r.status == "same"));
+      .any(|r| r.relative == "file.bin" && r.status == FolderStatus::Same));
     assert!(rows
       .iter()
-      .any(|r| r.relative == "File.txt" && r.status == "leftOnly"));
+      .any(|r| r.relative == "File.txt" && r.status == FolderStatus::LeftOnly));
     fs::write(fixture.right.join("file.other"), b"x").unwrap();
     fs::write(fixture.right.join("file.third"), b"x").unwrap();
     let rows = fixture.scan(&rules);
     assert_eq!(rows.len(), 4);
-    assert_eq!(rows.iter().filter(|r| r.status == "rightOnly").count(), 2);
+    assert_eq!(
+      rows
+        .iter()
+        .filter(|r| r.status == FolderStatus::RightOnly)
+        .count(),
+      2
+    );
     fs::create_dir(fixture.right.join("sub")).unwrap();
     fs::write(fixture.right.join("sub").join("File.txt"), b"x").unwrap();
     assert!(fixture
       .scan(&rules)
       .iter()
-      .any(|r| r.relative == "sub/File.txt" && r.status == "rightOnly"));
+      .any(|r| r.relative == "sub/File.txt" && r.status == FolderStatus::RightOnly));
   }
 
   #[test]
@@ -1531,7 +1542,7 @@ mod tests {
     assert_eq!(rows.len(), 2);
     assert!(rows
       .iter()
-      .all(|r| r.status == "error" && r.error.as_ref().unwrap().contains("non-ASCII")));
+      .all(|r| r.status == FolderStatus::Error && r.error.as_ref().unwrap().contains("non-ASCII")));
   }
 
   #[test]
@@ -1542,8 +1553,16 @@ mod tests {
     fs::write(fixture.left.join("nested").join("child"), b"child").unwrap();
     let cancelled = AtomicBool::new(false);
     for (left, right, status) in [
-      (fixture.left.as_path(), Path::new(""), "leftOnly"),
-      (Path::new(""), fixture.right.as_path(), "rightOnly"),
+      (
+        fixture.left.as_path(),
+        Path::new(""),
+        FolderStatus::LeftOnly,
+      ),
+      (
+        Path::new(""),
+        fixture.right.as_path(),
+        FolderStatus::RightOnly,
+      ),
     ] {
       let rows = scan_pair_with_rules(
         left,
@@ -1597,7 +1616,7 @@ mod tests {
         .find(|row| row.relative == "file")
         .unwrap()
         .status,
-      "different"
+      FolderStatus::Different
     );
   }
 
@@ -1615,7 +1634,7 @@ mod tests {
       content: ContentMethod::Crc,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     fixture.files(b"", b"");
     assert_eq!(
       crc(&path, &fs::metadata(&path).unwrap(), &cancelled).unwrap(),
@@ -1623,16 +1642,16 @@ mod tests {
     );
     let mut bytes = vec![0u8; 128 * 1024 + 1];
     fixture.files(&bytes, &bytes);
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     *bytes.last_mut().unwrap() = 1;
     fs::write(fixture.right.join("file"), &bytes).unwrap();
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     let legacy = FolderRules {
       content: ContentMethod::None,
       quick_test: QuickTest::Crc,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&legacy)[0].status, "different");
+    assert_eq!(fixture.scan(&legacy)[0].status, FolderStatus::Different);
     let old = fs::metadata(&path).unwrap();
     fs::write(&path, b"changed").unwrap();
     assert!(crc(&path, &old, &cancelled).is_err());
@@ -1664,12 +1683,12 @@ mod tests {
     };
     let rows = fixture.scan(&rules);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].status, "same");
+    assert_eq!(rows[0].status, FolderStatus::Same);
     assert_ne!(rows[0].left_relative, rows[0].right_relative);
     rules.align_case = true;
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     rules.compare_filename_case = true;
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     rules.compare_filename_case = false;
     rules.align_case = false;
     fs::write(fixture.right.join("\u{e9}.txt"), b"x").unwrap();
@@ -1677,8 +1696,8 @@ mod tests {
     assert_eq!(rows.len(), 2);
     assert!(rows
       .iter()
-      .any(|row| row.left_relative == row.right_relative && row.status == "same"));
-    assert!(rows.iter().any(|row| row.status == "rightOnly"));
+      .any(|row| row.left_relative == row.right_relative && row.status == FolderStatus::Same));
+    assert!(rows.iter().any(|row| row.status == FolderStatus::RightOnly));
     assert_ne!(
       alignment_key("\u{fb01}.txt", &rules),
       alignment_key("fi.txt", &rules)
@@ -1712,24 +1731,27 @@ mod tests {
       ..Default::default()
     };
     let rows = fixture.scan(&rules);
-    assert_eq!(rows[0].status, "same");
+    assert_eq!(rows[0].status, FolderStatus::Same);
     assert!(rows[0].detail.as_ref().unwrap().contains("1.2.3.4"));
     crate::windows_metadata::tests::write_versioned_fixture(&right, [1, 2, 3, 5]);
-    assert_eq!(fixture.scan(&rules)[0].status, "different");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     let override_rules = FolderRules {
       compare_size: true,
       content: ContentMethod::Crc,
       quick_test_policy: QuickTestPolicy::Skip,
       ..rules.clone()
     };
-    assert_eq!(fixture.scan(&override_rules)[0].status, "different");
+    assert_eq!(
+      fixture.scan(&override_rules)[0].status,
+      FolderStatus::Different
+    );
     crate::windows_metadata::tests::write_versioned_fixture_versions(
       &right,
       [1, 2, 3, 4],
       [5, 6, 7, 8],
     );
     let rows = fixture.scan(&rules);
-    assert_eq!(rows[0].status, "different");
+    assert_eq!(rows[0].status, FolderStatus::Different);
     assert!(rows[0]
       .detail
       .as_ref()
@@ -1737,13 +1759,13 @@ mod tests {
       .contains("product versions: left 1.2.3.4 / right 5.6.7.8"));
     fs::write(&right, b"invalid executable").unwrap();
     let rows = fixture.scan(&rules);
-    assert_eq!(rows[0].status, "error");
+    assert_eq!(rows[0].status, FolderStatus::Error);
     assert!(rows[0].error.as_ref().unwrap().contains("version"));
     fixture.files(b"plain", b"plain");
     assert!(fixture
       .scan(&rules)
       .iter()
-      .any(|row| row.relative == "file" && row.status == "same"));
+      .any(|row| row.relative == "file" && row.status == FolderStatus::Same));
   }
 
   #[test]
@@ -1763,10 +1785,13 @@ mod tests {
       ..Default::default()
     };
     let rows = fixture.scan(&rules);
-    assert_eq!(rows[0].status, "error");
+    assert_eq!(rows[0].status, FolderStatus::Error);
     assert_eq!(rows[0].importance, ComparisonImportance::Unknown);
     assert!(rows[0].error.as_ref().unwrap().contains("1 MiB"));
-    assert_eq!(fixture.scan(&FolderRules::default())[0].status, "same");
+    assert_eq!(
+      fixture.scan(&FolderRules::default())[0].status,
+      FolderStatus::Same
+    );
     for root in [&fixture.left, &fixture.right] {
       fs::File::options()
         .write(true)
@@ -1775,13 +1800,16 @@ mod tests {
         .set_len(MAX_FILE_BYTES + 1)
         .unwrap();
     }
-    assert_eq!(fixture.scan(&FolderRules::default())[0].status, "error");
+    assert_eq!(
+      fixture.scan(&FolderRules::default())[0].status,
+      FolderStatus::Error
+    );
     let rules = FolderRules {
       content: ContentMethod::None,
       compare_size: true,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
   }
 
   #[test]
@@ -1885,7 +1913,7 @@ mod tests {
       .iter()
       .find(|row| row.relative == ".git" && !row.is_directory)
       .expect("file row for .git");
-    assert_eq!(file.status, "leftOnly");
+    assert_eq!(file.status, FolderStatus::LeftOnly);
     assert_eq!(file.left_kind, Some(FolderEntryKind::File));
     assert_eq!(file.right_kind, None);
     assert!(file.right_relative.is_none());
@@ -1895,7 +1923,7 @@ mod tests {
       .iter()
       .find(|row| row.relative == ".git" && row.is_directory)
       .expect("folder row for .git");
-    assert_eq!(folder.status, "rightOnly");
+    assert_eq!(folder.status, FolderStatus::RightOnly);
     assert_eq!(folder.left_kind, None);
     assert_eq!(folder.right_kind, Some(FolderEntryKind::Directory));
     assert!(folder.left_relative.is_none());
@@ -1905,8 +1933,7 @@ mod tests {
       .iter()
       .find(|row| row.relative == ".git/HEAD")
       .expect("child row under the folder");
-    assert_eq!(child.status, "rightOnly");
-    assert!(!rows.iter().any(|row| row.status == "typeMismatch"));
+    assert_eq!(child.status, FolderStatus::RightOnly);
   }
 
   #[test]
@@ -1929,9 +1956,9 @@ mod tests {
       ..Default::default()
     });
     fs::set_permissions(&path, permissions).unwrap();
-    assert_eq!(result[0].status, "different");
+    assert_eq!(result[0].status, FolderStatus::Different);
     #[cfg(windows)]
-    assert_eq!(attributes_result[0].status, "different");
+    assert_eq!(attributes_result[0].status, FolderStatus::Different);
     fs::create_dir(fixture.left.join("collision")).unwrap();
     fs::write(fixture.right.join("collision"), b"x").unwrap();
     fs::write(fixture.left.join("reverse"), b"x").unwrap();
@@ -1943,7 +1970,7 @@ mod tests {
       .iter()
       .find(|row| row.relative == "collision" && row.is_directory)
       .unwrap();
-    assert_eq!(collision_folder.status, "leftOnly");
+    assert_eq!(collision_folder.status, FolderStatus::LeftOnly);
     assert_eq!(collision_folder.left_kind, Some(FolderEntryKind::Directory));
     assert_eq!(collision_folder.right_kind, None);
     assert_eq!(collision_folder.importance, ComparisonImportance::Important);
@@ -1952,7 +1979,7 @@ mod tests {
       .iter()
       .find(|row| row.relative == "collision" && !row.is_directory)
       .unwrap();
-    assert_eq!(collision_file.status, "rightOnly");
+    assert_eq!(collision_file.status, FolderStatus::RightOnly);
     assert_eq!(collision_file.left_kind, None);
     assert_eq!(collision_file.right_kind, Some(FolderEntryKind::File));
     assert!(collision_file.error.is_none());
@@ -1960,22 +1987,21 @@ mod tests {
       .iter()
       .find(|row| row.relative == "reverse" && !row.is_directory)
       .unwrap();
-    assert_eq!(reverse_file.status, "leftOnly");
+    assert_eq!(reverse_file.status, FolderStatus::LeftOnly);
     assert_eq!(reverse_file.left_kind, Some(FolderEntryKind::File));
     assert!(reverse_file.error.is_none());
     let reverse_folder = rows
       .iter()
       .find(|row| row.relative == "reverse" && row.is_directory)
       .unwrap();
-    assert_eq!(reverse_folder.status, "rightOnly");
+    assert_eq!(reverse_folder.status, FolderStatus::RightOnly);
     assert_eq!(reverse_folder.right_kind, Some(FolderEntryKind::Directory));
     assert!(reverse_folder.error.is_none());
     let child = rows
       .iter()
       .find(|row| row.relative == "reverse/child")
       .unwrap();
-    assert_eq!(child.status, "rightOnly");
-    assert!(!rows.iter().any(|row| row.status == "typeMismatch"));
+    assert_eq!(child.status, FolderStatus::RightOnly);
     let refreshed = refresh_selection(
       &fixture.left,
       &fixture.right,
@@ -1991,16 +2017,16 @@ mod tests {
       .iter()
       .find(|row| row.relative == "collision" && row.is_directory)
       .unwrap();
-    assert_eq!(refreshed_folder.status, "leftOnly");
+    assert_eq!(refreshed_folder.status, FolderStatus::LeftOnly);
     assert!(refreshed_folder.error.is_none());
     let refreshed_file = refreshed
       .iter()
       .find(|row| row.relative == "collision" && !row.is_directory)
       .unwrap();
-    assert_eq!(refreshed_file.status, "rightOnly");
+    assert_eq!(refreshed_file.status, FolderStatus::RightOnly);
     assert!(refreshed_file.error.is_none());
     let row = rows.iter().find(|r| r.relative == "only").unwrap();
-    assert_eq!(row.status, "leftOnly");
+    assert_eq!(row.status, FolderStatus::LeftOnly);
     assert!(row.right_relative.is_none());
     assert!(row.right_modified.is_none());
   }
@@ -2144,7 +2170,7 @@ mod tests {
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "hello");
-    assert_eq!(rows[0].status, "leftOnly");
+    assert_eq!(rows[0].status, FolderStatus::LeftOnly);
     assert_eq!(rows[0].left_kind, Some(FolderEntryKind::File));
     assert_eq!(rows[0].right_kind, None);
   }
@@ -2196,7 +2222,7 @@ mod tests {
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "node_modules");
-    assert_eq!(rows[0].status, "leftOnly");
+    assert_eq!(rows[0].status, FolderStatus::LeftOnly);
     assert_eq!(rows[0].left_kind, Some(FolderEntryKind::File));
     assert_eq!(rows[0].right_kind, None);
   }
@@ -2210,7 +2236,7 @@ mod tests {
       compare_size: true,
       ..Default::default()
     };
-    assert_eq!(fixture.scan(&rules)[0].status, "same");
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     let flag = AtomicBool::new(false);
     let plan = Plan::preview(
       &fixture.left,
@@ -2252,7 +2278,7 @@ mod tests {
     assert!(fixture
       .scan(&rules)
       .iter()
-      .any(|row| row.relative == "large" && row.status == "error"));
+      .any(|row| row.relative == "large" && row.status == FolderStatus::Error));
     let rows = scan_selected_with_rules(
       &fixture.left,
       &fixture.right,
@@ -2265,7 +2291,7 @@ mod tests {
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "file");
-    assert_eq!(rows[0].status, "same");
+    assert_eq!(rows[0].status, FolderStatus::Same);
   }
 
   #[test]
@@ -2393,11 +2419,11 @@ mod tests {
     );
     let rows = fixture.scan(&FolderRules::default());
     let nested = rows.iter().find(|r| r.relative == "parent/nested").unwrap();
-    assert_eq!(nested.status, "different");
+    assert_eq!(nested.status, FolderStatus::Different);
     assert_eq!(nested.newer, Some(FolderSide::Left));
     assert!(!nested.newer_mixed);
     let parent = rows.iter().find(|r| r.relative == "parent").unwrap();
-    assert_eq!(parent.status, "different");
+    assert_eq!(parent.status, FolderStatus::Different);
     assert!(parent.newer.is_none());
     assert!(parent.newer_mixed);
     let value = serde_json::to_value(parent).unwrap();
@@ -2414,7 +2440,7 @@ mod tests {
     let rows = fixture.scan(&FolderRules::default());
     assert_eq!(
       rows.iter().find(|r| r.relative == "parent").unwrap().status,
-      "different"
+      FolderStatus::Different
     );
     fs::File::create(fixture.right.join("parent").join("large"))
       .unwrap()
@@ -2429,7 +2455,7 @@ mod tests {
       ..Default::default()
     });
     let parent = rows.iter().find(|r| r.relative == "parent").unwrap();
-    assert_eq!(parent.status, "error");
+    assert_eq!(parent.status, FolderStatus::Error);
     assert_eq!(parent.importance, ComparisonImportance::Unknown);
     assert!(parent.error.as_ref().unwrap().contains("descendants"));
     assert!(rows
@@ -2538,14 +2564,14 @@ mod tests {
     assert!(!refreshed.iter().any(|r| r.relative.ends_with("/old")));
     assert!(refreshed
       .iter()
-      .any(|r| r.relative == "parent/selected/new" && r.status == "leftOnly"));
+      .any(|r| r.relative == "parent/selected/new" && r.status == FolderStatus::LeftOnly));
     assert_eq!(
       refreshed
         .iter()
         .find(|r| r.relative == "parent")
         .unwrap()
         .status,
-      "different"
+      FolderStatus::Different
     );
     assert_eq!(
       refreshed.iter().find(|r| r.relative == "untouched"),
@@ -2575,7 +2601,7 @@ mod tests {
         .find(|r| r.relative == "parent")
         .unwrap()
         .status,
-      "same"
+      FolderStatus::Same
     );
   }
 

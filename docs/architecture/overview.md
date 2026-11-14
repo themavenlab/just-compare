@@ -68,7 +68,7 @@ React UI  ──>  Tauri IPC Commands  ──>  Rust Domain Engine  ──>  Fil
 
 ## IPC and Transport Conventions
 
-- **Typed Contracts:** Requests, responses, events, and errors have explicit schemas defined and validated at the Rust boundary.
+- **Typed Contracts:** Requests, responses, events, and errors have explicit schemas defined and validated at the Rust boundary. Folder scans return typed `FolderStatus` (`same`, `different`, `leftOnly`, `rightOnly`, `error`) and `ComparisonImportance` (`equal`, `unimportant`, `important`, `unknown`) values, with nullable fields consistently present across rows.
 - **Asynchronous Execution:** Heavy comparison and scan operations run asynchronously off the UI thread and carry stable operation IDs.
 - **Streaming & Cancellation:** Long-running operations support cooperative cancellation via `cancel_job`. Cancelling an operation is never reported as a success.
 - **Document EOL Policy Restoration:** `compare_text` optionally accepts `documents: { left, right }` containing opaque document handles. Rust restores each associated editor draft's line endings with the document's Save policy before comparing, while callers without handles compare original strings exactly.

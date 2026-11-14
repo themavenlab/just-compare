@@ -94,23 +94,27 @@ export const defaults: Settings = {
   unimportantPatterns: [],
   formats: [],
 };
+export type FolderStatus =
+  "same" | "different" | "leftOnly" | "rightOnly" | "error";
+export type ComparisonImportance =
+  "equal" | "unimportant" | "important" | "unknown";
 export interface FolderEntry {
   relative: string;
-  status: string;
+  status: FolderStatus;
   leftSize: number | null;
   rightSize: number | null;
   detail: string | null;
   isDirectory: boolean;
   leftKind: FolderEntryKind | null;
   rightKind: FolderEntryKind | null;
-  leftModified?: number | null;
-  rightModified?: number | null;
-  leftRelative?: string | null;
-  rightRelative?: string | null;
-  newer?: "left" | "right" | null;
-  newerMixed?: boolean;
-  error?: string | null;
-  importance?: string;
+  leftModified: number | null;
+  rightModified: number | null;
+  leftRelative: string | null;
+  rightRelative: string | null;
+  newer: "left" | "right" | null;
+  newerMixed: boolean;
+  error: string | null;
+  importance: ComparisonImportance;
 }
 export type FolderEntryKind = "file" | "directory";
 export interface Preview {
@@ -140,13 +144,17 @@ export type LocalActionRequest =
   | { kind: "createDirectory"; parent: string; name: string }
   | { kind: "setReadOnly"; sources: string[]; readonly: boolean }
   | { kind: "touch"; sources: string[]; modifiedMs: number };
+export type FileAction =
+  | { kind: "copy" | "move" | "recycle" | "rename" | "createDirectory" }
+  | { kind: "setReadOnly"; readonly: boolean }
+  | { kind: "touch"; modifiedMs: number };
 export interface LocalOperation {
-  action: { kind: string; readonly?: boolean; modifiedMs?: number };
+  action: FileAction;
   source: string | null;
   destination: string | null;
   entryCount: number;
   entries: {
-    action: { kind: string };
+    action: FileAction;
     source: string | null;
     destination: string | null;
     directory: boolean;
