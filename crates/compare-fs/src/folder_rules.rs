@@ -253,8 +253,8 @@ fn collect(
   let mut stack = vec![(root.to_path_buf(), String::new())];
   while let Some((directory, directory_name)) = stack.pop() {
     cancel(cancelled)?;
-    let children = match checked_path(&directory, false).and_then(|_| Ok(fs::read_dir(&directory)?))
-    {
+    // Roots are validated once by the caller; the walk never descends into links.
+    let children = match fs::read_dir(&directory) {
       Ok(children) => children,
       Err(error) if !directory_name.is_empty() => {
         if let Some(item) = items.get_mut(&directory_name) {
@@ -263,7 +263,7 @@ fn collect(
         continue;
       }
       Err(error) => {
-        return Err(error.context(format!(
+        return Err(FileError::from(error).context(format!(
           "Could not read the {} folder \"{}\"",
           side_label(side),
           crate::display_path(root)
@@ -291,7 +291,8 @@ fn collect(
       }
       let glob_excludes_directory =
         !options.exclude.is_empty() && filters.matches_directory_pattern(&relative);
-      let metadata = fs::symlink_metadata(&path);
+      // DirEntry::metadata does not follow links.
+      let metadata = child.metadata();
       if let Ok(metadata) = &metadata {
         if (glob_excludes_directory && metadata.is_dir())
           || (filters.files.contains(&relative) && metadata.is_file())
@@ -459,7 +460,10 @@ fn stable(metadata: &fs::Metadata, after: &fs::Metadata) -> Result<(), FileError
 }
 
 fn open(path: &Path, metadata: &fs::Metadata, limit: u64) -> Result<fs::File, FileError> {
-  checked_path(path, false)?;
+  let current = fs::symlink_metadata(path)?;
+  if current.is_symlink() || !current.is_file() {
+    return Err(FileError("File changed while comparing.".into()));
+  }
   if metadata.len() > limit {
     return Err(FileError(if limit == TEXT_LIMIT {
       "Rules-based text comparison requires each input to be at most 1 MiB.".into()
@@ -1351,6 +1355,20 @@ mod tests {
       rows.iter().all(|row| !row.relative.starts_with("link/")),
       "link targets must not be listed: {rows:?}"
     );
+  }
+
+  #[test]
+  fn open_refuses_a_link_that_replaced_a_file_after_the_scan() {
+    let fixture = Fixture::new();
+    let parent = fixture.left.parent().unwrap().to_path_buf();
+    let target = parent.join("target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("inside.txt"), b"contents").unwrap();
+    let scanned = fs::metadata(target.join("inside.txt")).unwrap();
+    let swapped = parent.join("swapped");
+    make_directory_link(&target, &swapped).unwrap();
+    let error = open(&swapped, &scanned, TEXT_LIMIT).unwrap_err();
+    assert_eq!(error.0, "File changed while comparing.");
   }
 
   #[cfg(windows)]
