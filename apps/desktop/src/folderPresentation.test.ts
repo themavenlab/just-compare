@@ -14,6 +14,7 @@ import {
   rowKey,
   targetRelativeFor,
   toggleFolderErrorFilter,
+  withoutLinkedSource,
 } from "./folderPresentation";
 import {
   plainPath,
@@ -405,6 +406,19 @@ describe("folder presentation", () => {
     expect(canCopy(entry("a", "leftOnly", 1, null), "left")).toBe(false);
     expect(canCopy(entry("a", "same"), "right")).toBe(false);
     expect(canCopy(entry("a", "error"), "left")).toBe(false);
+  });
+  it("drops linked sources from transfers on the copied side only", () => {
+    const link: FolderEntry = {
+      ...entry("docs", "leftOnly", 0, null),
+      leftKind: "link",
+      rightKind: null,
+    };
+    const file = entry("a.txt", "leftOnly", 1, null);
+    const kept = withoutLinkedSource([link, file], "left");
+    expect(kept.entries).toEqual([file]);
+    expect(kept.skipped).toBe(1);
+    expect(withoutLinkedSource([link, file], "right").skipped).toBe(0);
+    expect(withoutLinkedSource([link], "left").entries).toEqual([]);
   });
   it("flattens 10,000 real entries and collapses only visible hierarchy", () => {
     const large: FolderEntry[] = [];

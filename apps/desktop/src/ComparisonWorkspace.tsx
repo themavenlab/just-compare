@@ -37,6 +37,7 @@ import {
   matchesName,
   targetRelativeFor,
   toggleFolderErrorFilter,
+  withoutLinkedSource,
 } from "./folderPresentation";
 import { FolderRulesDialog } from "./FolderRulesDialog";
 import { LineInspector } from "./LineInspector";
@@ -3004,7 +3005,17 @@ export function ComparisonWorkspace({
   }
   async function prepareFolderAction() {
     if (!folderDialog) return;
-    const { action, entries, side } = folderDialog;
+    const { action, side } = folderDialog;
+    const transfersEntries =
+      action === "copySide" ||
+      action === "moveSide" ||
+      action === "copyFolder" ||
+      action === "moveFolder";
+    const { entries, skipped: skippedLinks } = transfersEntries
+      ? withoutLinkedSource(folderDialog.entries, side)
+      : { entries: folderDialog.entries, skipped: 0 };
+    if (transfersEntries && folderDialog.entries.length > 0 && !entries.length)
+      throw new Error("Links are not copied.");
     if (action === "copyFilename") {
       const values = await Promise.all(
         entries.map(async (entry) => {
@@ -3183,7 +3194,9 @@ export function ComparisonWorkspace({
     const { total, failures } = await executeLocalPlan(result);
     await scan();
     setNotice(
-      `Completed ${total - failures.length} of ${total} local actions.`,
+      `Completed ${total - failures.length} of ${total} local actions.${
+        skippedLinks ? ` Links are not copied; ${skippedLinks} skipped.` : ""
+      }`,
     );
     if (failures.length) throw new Error(failures.join("\n"));
   }

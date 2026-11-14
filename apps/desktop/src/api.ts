@@ -116,7 +116,7 @@ export interface FolderEntry {
   error: string | null;
   importance: ComparisonImportance;
 }
-export type FolderEntryKind = "file" | "directory";
+export type FolderEntryKind = "file" | "directory" | "link";
 export interface Preview {
   id: string;
   operations: { relative: string; action: string }[];

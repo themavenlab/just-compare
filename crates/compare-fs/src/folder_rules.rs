@@ -206,7 +206,23 @@ fn time_difference(left: SystemTime, right: SystemTime, rules: &FolderRules) -> 
 
 struct Item {
   metadata: Option<fs::Metadata>,
+  /// Set for symbolic links and junctions. Their targets are never listed or compared.
+  link_target: Option<String>,
   error: Option<String>,
+}
+
+impl Item {
+  fn is_dir(&self) -> bool {
+    self.link_target.is_none() && self.metadata.as_ref().is_some_and(|m| m.is_dir())
+  }
+
+  fn is_file(&self) -> bool {
+    self.link_target.is_none() && self.metadata.as_ref().is_some_and(|m| m.is_file())
+  }
+
+  fn is_link(&self) -> bool {
+    self.link_target.is_some()
+  }
 }
 
 fn side_label(side: FolderSide) -> &'static str {
@@ -275,15 +291,8 @@ fn collect(
       }
       let glob_excludes_directory =
         !options.exclude.is_empty() && filters.matches_directory_pattern(&relative);
-      let metadata = if glob_excludes_directory
-        || filters.files.contains(&relative)
-        || filters.directories.contains(&relative)
-      {
-        Some(checked_path(&path, false).and_then(|_| Ok(fs::symlink_metadata(&path)?)))
-      } else {
-        None
-      };
-      if let Some(Ok(metadata)) = &metadata {
+      let metadata = fs::symlink_metadata(&path);
+      if let Ok(metadata) = &metadata {
         if (glob_excludes_directory && metadata.is_dir())
           || (filters.files.contains(&relative) && metadata.is_file())
           || (filters.directories.contains(&relative) && metadata.is_dir())
@@ -296,11 +305,19 @@ fn collect(
           "Folder exceeds the 10,000-entry prototype limit.".into(),
         ));
       }
-      let metadata = match metadata {
-        Some(metadata) => metadata,
-        None => checked_path(&path, false).and_then(|_| Ok(fs::symlink_metadata(&path)?)),
-      };
       let item = match metadata {
+        Ok(metadata) if metadata.is_symlink() => match fs::read_link(&path) {
+          Ok(target) => Item {
+            metadata: Some(metadata),
+            link_target: Some(target.to_string_lossy().into_owned()),
+            error: None,
+          },
+          Err(error) => Item {
+            metadata: Some(metadata),
+            link_target: Some(String::new()),
+            error: Some(format!("Could not read the link target: {error}")),
+          },
+        },
         Ok(metadata) if metadata.is_file() || metadata.is_dir() => {
           if metadata.is_dir() {
             stack.push((path, relative.clone()));
@@ -308,15 +325,18 @@ fn collect(
           let error = metadata.modified().err().map(|e| e.to_string());
           Item {
             metadata: Some(metadata),
+            link_target: None,
             error,
           }
         }
         Ok(_) => Item {
           metadata: None,
+          link_target: None,
           error: Some("Only regular files and directories are supported.".into()),
         },
         Err(error) => Item {
           metadata: None,
+          link_target: None,
           error: Some(error.to_string()),
         },
       };
@@ -360,10 +380,11 @@ fn pair_names(
   let mut pairs = Vec::new();
   let mut unmatched_left = BTreeMap::<_, Vec<_>>::new();
   let mut unmatched_right = BTreeMap::<_, Vec<_>>::new();
-  let is_dir = |item: &Item| item.metadata.as_ref().is_some_and(|m| m.is_dir());
+  // A link pairs only with a link; a link beside a same-named file or folder stays separate.
+  let same_kind = |a: &Item, b: &Item| a.is_dir() == b.is_dir() && a.is_link() == b.is_link();
   for (name, item) in left {
     match right.get(name) {
-      Some(other) if is_dir(item) == is_dir(other) => {
+      Some(other) if same_kind(item, other) => {
         pairs.push((Some(name.clone()), Some(name.clone())));
       }
       // A file and a folder with the same name are separate rows.
@@ -372,7 +393,7 @@ fn pair_names(
         if (rules.align_case
           || rules.align_extensions
           || rules.text_rules.unicode_normalization)
-          && item.metadata.as_ref().is_some_and(|m| m.is_file()) =>
+          && item.is_file() =>
       {
         unmatched_left
           .entry(alignment_key(name, rules))
@@ -384,13 +405,13 @@ fn pair_names(
   }
   for (name, item) in right {
     match left.get(name) {
-      Some(other) if is_dir(item) == is_dir(other) => continue,
+      Some(other) if same_kind(item, other) => continue,
       Some(_) => pairs.push((None, Some(name.clone()))),
       None
         if (rules.align_case
           || rules.align_extensions
           || rules.text_rules.unicode_normalization)
-          && item.metadata.as_ref().is_some_and(|m| m.is_file()) =>
+          && item.is_file() =>
       {
         unmatched_right
           .entry(alignment_key(name, rules))
@@ -419,7 +440,7 @@ fn pair_names(
       let directory = [(&pair.0, left), (&pair.1, right)]
         .into_iter()
         .find_map(|(name, map)| name.as_ref().and_then(|n| map.get(n)))
-        .is_some_and(is_dir);
+        .is_some_and(Item::is_dir);
       (name, !directory)
     };
     key(a).cmp(&key(b))
@@ -949,8 +970,7 @@ fn scan_with_selection(
       .as_ref()
       .and_then(|name| a.get(name))
       .or_else(|| rn.as_ref().and_then(|name| b.get(name)))
-      .and_then(|item| item.metadata.as_ref())
-      .is_some_and(|m| m.is_dir());
+      .is_some_and(Item::is_dir);
     if !(refresh && is_directory)
       && selected.is_some_and(|selected| {
         ![ln.as_deref(), rn.as_deref()]
@@ -965,24 +985,25 @@ fn scan_with_selection(
     let r = rn.as_ref().and_then(|name| b.get(name));
     let lm = l.and_then(|item| item.metadata.as_ref());
     let rm = r.and_then(|item| item.metadata.as_ref());
+    let kind = |item: Option<&Item>| {
+      item.and_then(|item| {
+        item.metadata.as_ref().map(|_| {
+          if item.is_link() {
+            FolderEntryKind::Link
+          } else if item.is_dir() {
+            FolderEntryKind::Directory
+          } else {
+            FolderEntryKind::File
+          }
+        })
+      })
+    };
     let mut row = FolderEntry {
       relative: ln.as_ref().or(rn.as_ref()).unwrap().clone(),
       left_relative: ln.clone(),
       right_relative: rn.clone(),
-      left_kind: lm.map(|metadata| {
-        if metadata.is_dir() {
-          FolderEntryKind::Directory
-        } else {
-          FolderEntryKind::File
-        }
-      }),
-      right_kind: rm.map(|metadata| {
-        if metadata.is_dir() {
-          FolderEntryKind::Directory
-        } else {
-          FolderEntryKind::File
-        }
-      }),
+      left_kind: kind(l),
+      right_kind: kind(r),
       status: FolderStatus::Error,
       left_size: lm.map(|m| m.len()),
       right_size: rm.map(|m| m.len()),
@@ -993,8 +1014,7 @@ fn scan_with_selection(
       importance: ComparisonImportance::Unknown,
       error: None,
       detail: None,
-      is_directory: lm.is_some_and(|metadata| metadata.is_dir())
-        || rm.is_some_and(|metadata| metadata.is_dir()),
+      is_directory: l.is_some_and(Item::is_dir) || r.is_some_and(Item::is_dir),
     };
     let result = (|| -> Result<ComparisonImportance, FileError> {
       if !single_side
@@ -1019,6 +1039,19 @@ fn scan_with_selection(
       if !errors.is_empty() {
         return Err(FileError(errors.join("; ")));
       }
+      let link_targets = (
+        l.and_then(|item| item.link_target.as_deref()),
+        r.and_then(|item| item.link_target.as_deref()),
+      );
+      match link_targets {
+        (Some(left), Some(right)) => {
+          row.detail = Some(format!("Link targets: left \"{left}\"; right \"{right}\""));
+        }
+        (Some(target), None) | (None, Some(target)) => {
+          row.detail = Some(format!("Link to \"{target}\""));
+        }
+        (None, None) => {}
+      }
       let (Some(lm), Some(rm)) = (lm, rm) else {
         row.status = if l.is_some() {
           FolderStatus::LeftOnly
@@ -1031,6 +1064,20 @@ fn scan_with_selection(
         }
         return Ok(ComparisonImportance::Important);
       };
+      if let (Some(left), Some(right)) = link_targets {
+        // Links are compared by target text only; their targets are never read.
+        let same = left == right;
+        row.status = if same {
+          FolderStatus::Same
+        } else {
+          FolderStatus::Different
+        };
+        return Ok(if same {
+          ComparisonImportance::Equal
+        } else {
+          ComparisonImportance::Important
+        });
+      }
       let difference = time_difference(lm.modified()?, rm.modified()?, rules);
       if !lm.is_dir() && difference.abs() > i128::from(rules.timestamp_tolerance_ms) {
         row.newer = Some(if difference > 0 {
@@ -1280,6 +1327,50 @@ mod tests {
         .status,
       FolderStatus::Same
     );
+  }
+
+  #[test]
+  fn links_compare_targets_and_are_never_traversed() {
+    let fixture = Fixture::new();
+    let parent = fixture.left.parent().unwrap().to_path_buf();
+    let target = parent.join("target");
+    let other = parent.join("other");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(&other).unwrap();
+    fs::write(target.join("inside.txt"), b"contents").unwrap();
+    make_directory_link(&target, &fixture.left.join("link")).unwrap();
+    make_directory_link(&target, &fixture.right.join("link")).unwrap();
+    make_directory_link(&other, &fixture.right.join("moved")).unwrap();
+    make_directory_link(&target, &fixture.left.join("moved")).unwrap();
+    let rows = fixture.scan(&FolderRules::default());
+    let row = |name: &str| rows.iter().find(|row| row.relative == name).unwrap();
+    assert_eq!(row("link").left_kind, Some(FolderEntryKind::Link));
+    assert_eq!(row("link").status, FolderStatus::Same);
+    assert_eq!(row("moved").status, FolderStatus::Different);
+    assert!(
+      rows.iter().all(|row| !row.relative.starts_with("link/")),
+      "link targets must not be listed: {rows:?}"
+    );
+  }
+
+  #[cfg(windows)]
+  fn make_directory_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    let status = std::process::Command::new("cmd")
+      .args(["/C", "mklink", "/J"])
+      .arg(link)
+      .arg(target)
+      .stdout(std::process::Stdio::null())
+      .status()?;
+    if status.success() {
+      Ok(())
+    } else {
+      Err(std::io::Error::other("mklink /J failed"))
+    }
+  }
+
+  #[cfg(unix)]
+  fn make_directory_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
   }
 
   #[test]

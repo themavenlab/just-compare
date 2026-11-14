@@ -560,15 +560,17 @@ export function FolderView({
                         ) : null}
                         {!missing && (
                           <Icon
-                            className={`entry-icon ${entry?.status === "error" ? "error-icon" : sideIsDirectory ? "folder-icon" : "file-icon"}`}
+                            className={`entry-icon ${entry?.status === "error" ? "error-icon" : kind === "link" ? "link-icon" : sideIsDirectory ? "folder-icon" : "file-icon"}`}
                             name={
                               entry?.status === "error"
                                 ? "error"
-                                : sideIsDirectory
-                                  ? tree && !collapsed.has(node.key)
-                                    ? "openFolder"
-                                    : "folder"
-                                  : "file"
+                                : kind === "link"
+                                  ? "link"
+                                  : sideIsDirectory
+                                    ? tree && !collapsed.has(node.key)
+                                      ? "openFolder"
+                                      : "folder"
+                                    : "file"
                             }
                           />
                         )}

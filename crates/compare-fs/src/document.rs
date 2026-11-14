@@ -37,16 +37,10 @@ pub fn checked_path(path: &Path, allow_missing_leaf: bool) -> Result<PathBuf, Fi
   }
   for ancestor in path.ancestors() {
     match fs::symlink_metadata(ancestor) {
+      // On Windows std reports symlinks and junctions (name-surrogate reparse
+      // points) as symlinks. Cloud placeholders carry a reparse attribute too,
+      // but they are ordinary files and must not be rejected here.
       Ok(metadata) => {
-        #[cfg(windows)]
-        {
-          use std::os::windows::fs::MetadataExt;
-          if metadata.file_attributes() & 0x400 != 0 {
-            return Err(FileError(
-              "Reparse points and junctions are not followed.".into(),
-            ));
-          }
-        }
         if metadata.file_type().is_symlink() {
           return Err(FileError("Symbolic links are not followed.".into()));
         }

@@ -91,6 +91,11 @@ export const iconPaths = {
     strokeLinejoin: "round",
     paths: ["M8 1 15 14H1ZM8 5v4m0 2v1"],
   },
+  link: line(
+    "M6.5 9.5 9.5 6.5",
+    "M7 4.5 8.2 3.3a2.5 2.5 0 0 1 3.5 3.5L10.5 8",
+    "M9 11.5l-1.2 1.2a2.5 2.5 0 0 1-3.5-3.5L5.5 8",
+  ),
   home: line("M2 7.5 8 2.5l6 5", "M3.5 6.5v7h9v-7M6.5 13.5v-4h3v4"),
   all: line("M3 4h10M3 8h10M3 12h10"),
   differences: line("M3.5 6h9M3.5 10h9M10 3 6 13"),

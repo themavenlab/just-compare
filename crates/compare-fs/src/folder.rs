@@ -54,6 +54,8 @@ impl Default for FolderOptions {
 pub enum FolderEntryKind {
   File,
   Directory,
+  /// A symbolic link or junction, recorded by its target and never followed.
+  Link,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

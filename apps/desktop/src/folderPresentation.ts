@@ -1,5 +1,15 @@
 import type { FolderEntry } from "./api";
 
+export function withoutLinkedSource(
+  entries: FolderEntry[],
+  side: "left" | "right",
+): { entries: FolderEntry[]; skipped: number } {
+  const kept = entries.filter(
+    (entry) => (side === "left" ? entry.leftKind : entry.rightKind) !== "link",
+  );
+  return { entries: kept, skipped: entries.length - kept.length };
+}
+
 export type FolderSort =
   | "name"
   | "status"
