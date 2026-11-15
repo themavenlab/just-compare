@@ -204,9 +204,9 @@ export const defaultFolderRules: FolderRules = {
   compareArchive: false,
   compareSystem: false,
   compareHidden: false,
-  content: "binary",
-  quickTest: "none",
-  quickTestPolicy: "requireAll",
+  content: "none",
+  quickTest: "modified",
+  quickTestPolicy: "override",
   textRules: {
     ignoreCase: false,
     ignoreWhitespace: false,

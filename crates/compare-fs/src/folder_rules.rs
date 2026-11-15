@@ -76,8 +76,7 @@ pub struct FolderTextRules {
 
 /// Independent of the legacy `FolderOptions::criterion`. Size/time quick tests
 /// obey the content precedence policy; name/attribute checks remain independent.
-/// Defaults compare exact bytes without a quick test.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderRules {
   pub compare_size: bool,
@@ -102,6 +101,33 @@ pub struct FolderRules {
   pub quick_test_policy: QuickTestPolicy,
   pub text_rules: FolderTextRules,
   pub executable_version: bool,
+}
+
+/// Must match the desktop `defaultFolderRules`: a size/modified quick test
+/// with a 2 s tolerance and no content reads.
+impl Default for FolderRules {
+  fn default() -> Self {
+    Self {
+      compare_size: false,
+      compare_modified: false,
+      timestamp_tolerance_ms: 2000,
+      timezone_offset_minutes: 0,
+      ignore_dst: false,
+      compare_filename_case: false,
+      align_case: false,
+      align_extensions: false,
+      compare_readonly: false,
+      compare_archive: false,
+      compare_system: false,
+      compare_hidden: false,
+      compare_attributes: false,
+      content: ContentMethod::None,
+      quick_test: QuickTest::Modified,
+      quick_test_policy: QuickTestPolicy::Override,
+      text_rules: FolderTextRules::default(),
+      executable_version: false,
+    }
+  }
 }
 
 impl FolderRules {
@@ -1222,6 +1248,16 @@ fn aggregate_directories(rows: &mut [FolderEntry]) {
 mod tests {
   use super::*;
 
+  /// Exact byte comparison, no quick test, zero timestamp tolerance: the pre-Phase 3 default.
+  fn binary_rules() -> FolderRules {
+    FolderRules {
+      content: ContentMethod::Binary,
+      quick_test: QuickTest::None,
+      timestamp_tolerance_ms: 0,
+      ..Default::default()
+    }
+  }
+
   struct Fixture {
     _directory: tempfile::TempDir,
     left: PathBuf,
@@ -1295,10 +1331,17 @@ mod tests {
   }
 
   #[test]
-  fn defaults_compare_exact_bytes_and_legacy_criterion_is_not_reused() {
+  fn defaults_use_metadata_quick_test_and_legacy_criterion_is_not_reused() {
     let fixture = Fixture::new();
     fixture.files(b"one", b"two");
-    let rows = fixture.scan(&FolderRules::default());
+    let base = 1_700_000_000_000;
+    fixture.times(base, base);
+    // Same size and equal mtime: the default quick test passes without reading content.
+    assert_eq!(
+      fixture.scan(&FolderRules::default())[0].status,
+      FolderStatus::Same
+    );
+    let rows = fixture.scan(&binary_rules());
     assert_eq!(rows[0].status, FolderStatus::Different);
     assert_eq!(rows[0].importance, ComparisonImportance::Important);
     let rows = scan_pair_with_rules(
@@ -1309,7 +1352,7 @@ mod tests {
         exclude: vec![],
         ..Default::default()
       },
-      &FolderRules::default(),
+      &binary_rules(),
       &AtomicBool::new(false),
       |_| {},
     )
@@ -1463,6 +1506,7 @@ mod tests {
     let mut rules = FolderRules {
       compare_size: true,
       content: ContentMethod::None,
+      quick_test: QuickTest::None,
       ..Default::default()
     };
     assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
@@ -1499,7 +1543,7 @@ mod tests {
         let rules = FolderRules {
           compare_size: true,
           quick_test_policy: policy,
-          ..Default::default()
+          ..binary_rules()
         };
         let equal = match policy {
           QuickTestPolicy::Override => content_same,
@@ -1514,7 +1558,7 @@ mod tests {
     let mut rules = FolderRules {
       compare_modified: true,
       quick_test_policy: QuickTestPolicy::RequireAll,
-      ..Default::default()
+      ..binary_rules()
     };
     assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
     rules.quick_test_policy = QuickTestPolicy::Override;
@@ -1898,7 +1942,7 @@ mod tests {
     assert_eq!(rows[0].importance, ComparisonImportance::Unknown);
     assert!(rows[0].error.as_ref().unwrap().contains("1 MiB"));
     assert_eq!(
-      fixture.scan(&FolderRules::default())[0].status,
+      fixture.scan(&binary_rules())[0].status,
       FolderStatus::Same
     );
     for root in [&fixture.left, &fixture.right] {
@@ -1910,7 +1954,7 @@ mod tests {
         .unwrap();
     }
     assert_eq!(
-      fixture.scan(&FolderRules::default())[0].status,
+      fixture.scan(&binary_rules())[0].status,
       FolderStatus::Error
     );
     let rules = FolderRules {
@@ -2173,6 +2217,7 @@ mod tests {
     for rules in [
       FolderRules {
         content: ContentMethod::None,
+        quick_test: QuickTest::None,
         ..Default::default()
       },
       FolderRules {
@@ -2209,8 +2254,11 @@ mod tests {
   #[test]
   fn serialization_defaults_unknown_fields_and_entry_shapes_are_stable() {
     let rules: FolderRules = serde_json::from_str("{}").unwrap();
-    assert_eq!(rules.content, ContentMethod::Binary);
-    assert_eq!(rules.quick_test, QuickTest::None);
+    assert_eq!(rules, FolderRules::default());
+    assert_eq!(rules.content, ContentMethod::None);
+    assert_eq!(rules.quick_test, QuickTest::Modified);
+    assert_eq!(rules.quick_test_policy, QuickTestPolicy::Override);
+    assert_eq!(rules.timestamp_tolerance_ms, 2000);
     assert!(serde_json::from_str::<FolderRules>(r#"{"misspelled":true}"#).is_err());
     assert!(serde_json::from_str::<FolderRules>(r#"{"textRules":{"misspelled":true}}"#).is_err());
     let fixture = Fixture::new();
@@ -2526,7 +2574,7 @@ mod tests {
         .modified()
         .unwrap()
     );
-    let rows = fixture.scan(&FolderRules::default());
+    let rows = fixture.scan(&binary_rules());
     let nested = rows.iter().find(|r| r.relative == "parent/nested").unwrap();
     assert_eq!(nested.status, FolderStatus::Different);
     assert_eq!(nested.newer, Some(FolderSide::Left));
