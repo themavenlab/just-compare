@@ -168,7 +168,7 @@ export function FolderRulesDialog({
               does not identify its originating timezone.
             </p>
             {check("compareFilenameCase", "Compare filename case")}
-            {check("alignCase", "Align uniquely matching ASCII-case filenames")}
+            {check("alignCase", "Align uniquely matching ASCII-case names")}
             {check(
               "alignExtensions",
               "Align filenames with different extensions",

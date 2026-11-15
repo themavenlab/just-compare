@@ -198,7 +198,7 @@ export const defaultFolderRules: FolderRules = {
   timezoneOffsetMinutes: 0,
   ignoreDst: false,
   compareFilenameCase: false,
-  alignCase: false,
+  alignCase: true,
   alignExtensions: false,
   compareReadonly: false,
   compareArchive: false,

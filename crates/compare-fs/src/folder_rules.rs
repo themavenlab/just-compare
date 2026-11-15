@@ -114,7 +114,7 @@ impl Default for FolderRules {
       timezone_offset_minutes: 0,
       ignore_dst: false,
       compare_filename_case: false,
-      align_case: false,
+      align_case: true,
       align_extensions: false,
       compare_readonly: false,
       compare_archive: false,
@@ -240,10 +240,6 @@ struct Item {
 impl Item {
   fn is_dir(&self) -> bool {
     self.link_target.is_none() && self.metadata.as_ref().is_some_and(|m| m.is_dir())
-  }
-
-  fn is_file(&self) -> bool {
-    self.link_target.is_none() && self.metadata.as_ref().is_some_and(|m| m.is_file())
   }
 
   fn is_link(&self) -> bool {
@@ -374,9 +370,22 @@ fn collect(
   Ok(items)
 }
 
-fn alignment_key(name: &str, rules: &FolderRules) -> (String, String) {
-  let (parent, filename) = name.rsplit_once('/').unwrap_or(("", name));
-  let filename = if rules.align_extensions {
+fn split_name(name: &str) -> (&str, &str) {
+  name.rsplit_once('/').unwrap_or(("", name))
+}
+
+fn join_name(parent: &str, file: &str) -> String {
+  if parent.is_empty() {
+    file.to_owned()
+  } else {
+    format!("{parent}/{file}")
+  }
+}
+
+fn alignment_key(name: &str, directory: bool, rules: &FolderRules) -> (String, String) {
+  let (parent, filename) = split_name(name);
+  // Folder names have no extension to ignore.
+  let filename = if rules.align_extensions && !directory {
     Path::new(filename)
       .file_stem()
       .and_then(|s| s.to_str())
@@ -399,80 +408,220 @@ fn alignment_key(name: &str, rules: &FolderRules) -> (String, String) {
   )
 }
 
+/// One row of a folder comparison. `relative` is the left-side spelling of the
+/// path, so every row under an aligned folder shares its folder's tree node.
+struct NamePair {
+  left: Option<String>,
+  right: Option<String>,
+  relative: String,
+  /// Set when the name cannot be aligned because it differs only by Unicode case.
+  case_fold_unsupported: bool,
+}
+
+impl NamePair {
+  fn both(left: &str, right: &str, relative: &str) -> Self {
+    Self {
+      left: Some(left.to_owned()),
+      right: Some(right.to_owned()),
+      relative: relative.to_owned(),
+      case_fold_unsupported: false,
+    }
+  }
+
+  fn left_only(left: &str) -> Self {
+    Self {
+      left: Some(left.to_owned()),
+      right: None,
+      relative: left.to_owned(),
+      case_fold_unsupported: false,
+    }
+  }
+
+  fn right_only(right: &str, relative: String) -> Self {
+    Self {
+      left: None,
+      right: Some(right.to_owned()),
+      relative,
+      case_fold_unsupported: false,
+    }
+  }
+}
+
+/// The left-side spelling of a right-side path, mapping each parent folder through its pairing.
+fn left_form(right_name: &str, right_to_left: &BTreeMap<String, String>) -> String {
+  let (parent, file) = split_name(right_name);
+  match right_to_left.get(parent) {
+    Some(left_parent) => join_name(left_parent, file),
+    None => right_name.to_owned(),
+  }
+}
+
+/// Pairs the entries of each folder depth in turn. Folders are paired before
+/// their children, so a child's expected right-side path follows its folder's pairing.
 fn pair_names(
   left: &BTreeMap<String, Item>,
   right: &BTreeMap<String, Item>,
   rules: &FolderRules,
-) -> Vec<(Option<String>, Option<String>)> {
-  let mut pairs = Vec::new();
-  let mut unmatched_left = BTreeMap::<_, Vec<_>>::new();
-  let mut unmatched_right = BTreeMap::<_, Vec<_>>::new();
+) -> Vec<NamePair> {
+  let aligning =
+    rules.align_case || rules.align_extensions || rules.text_rules.unicode_normalization;
+  let eligible = |item: &Item| {
+    if item.is_link() {
+      false
+    } else if item.is_dir() {
+      rules.align_case || rules.text_rules.unicode_normalization
+    } else {
+      aligning
+    }
+  };
   // A link pairs only with a link; a link beside a same-named file or folder stays separate.
   let same_kind = |a: &Item, b: &Item| a.is_dir() == b.is_dir() && a.is_link() == b.is_link();
-  for (name, item) in left {
-    match right.get(name) {
-      Some(other) if same_kind(item, other) => {
-        pairs.push((Some(name.clone()), Some(name.clone())));
+  let depth = |name: &str| name.matches('/').count();
+  let mut left_by_depth = BTreeMap::<usize, Vec<&str>>::new();
+  for name in left.keys() {
+    left_by_depth.entry(depth(name)).or_default().push(name);
+  }
+  let mut right_by_depth = BTreeMap::<usize, Vec<&str>>::new();
+  for name in right.keys() {
+    right_by_depth.entry(depth(name)).or_default().push(name);
+  }
+  let depths: BTreeSet<usize> = left_by_depth
+    .keys()
+    .chain(right_by_depth.keys())
+    .copied()
+    .collect();
+  // Paired folders, in both directions; the root folders pair with each other.
+  let mut left_to_right = BTreeMap::from([(String::new(), String::new())]);
+  let mut right_to_left = BTreeMap::from([(String::new(), String::new())]);
+  let mut claimed_right = BTreeSet::new();
+  let mut pairs = Vec::new();
+  for depth in depths {
+    let mut unmatched_left = BTreeMap::<(String, String, bool), Vec<&str>>::new();
+    for &name in left_by_depth.get(&depth).into_iter().flatten() {
+      let item = &left[name];
+      let (parent, file) = split_name(name);
+      let Some(target_parent) = left_to_right.get(parent).cloned() else {
+        pairs.push(NamePair::left_only(name));
+        continue;
+      };
+      let target = join_name(&target_parent, file);
+      match right.get(&target) {
+        Some(other) => {
+          claimed_right.insert(target.clone());
+          if same_kind(item, other) {
+            if item.is_dir() {
+              left_to_right.insert(name.to_owned(), target.clone());
+              right_to_left.insert(target.clone(), name.to_owned());
+            }
+            pairs.push(NamePair::both(name, &target, name));
+          } else {
+            // A file and a folder with the same name are separate rows.
+            pairs.push(NamePair::left_only(name));
+            pairs.push(NamePair::right_only(
+              &target,
+              left_form(&target, &right_to_left),
+            ));
+          }
+        }
+        None if eligible(item) => {
+          let (_, key) = alignment_key(&target, item.is_dir(), rules);
+          unmatched_left
+            .entry((target_parent, key, item.is_dir()))
+            .or_default()
+            .push(name);
+        }
+        None => pairs.push(NamePair::left_only(name)),
       }
-      // A file and a folder with the same name are separate rows.
-      Some(_) => pairs.push((Some(name.clone()), None)),
-      None
-        if (rules.align_case
-          || rules.align_extensions
-          || rules.text_rules.unicode_normalization)
-          && item.is_file() =>
-      {
-        unmatched_left
-          .entry(alignment_key(name, rules))
-          .or_default()
-          .push(name.clone());
+    }
+    let mut unmatched_right = BTreeMap::<(String, String, bool), Vec<&str>>::new();
+    for &name in right_by_depth.get(&depth).into_iter().flatten() {
+      if claimed_right.contains(name) {
+        continue;
       }
-      None => pairs.push((Some(name.clone()), None)),
+      let item = &right[name];
+      let (parent, _) = split_name(name);
+      if !right_to_left.contains_key(parent) || !eligible(item) {
+        pairs.push(NamePair::right_only(name, left_form(name, &right_to_left)));
+        continue;
+      }
+      let (_, key) = alignment_key(name, item.is_dir(), rules);
+      unmatched_right
+        .entry((parent.to_owned(), key, item.is_dir()))
+        .or_default()
+        .push(name);
+    }
+    for (key, names) in unmatched_left {
+      let others = unmatched_right.remove(&key).unwrap_or_default();
+      match (names.as_slice(), others.as_slice()) {
+        ([left_name], [right_name]) => {
+          if left[*left_name].is_dir() {
+            left_to_right.insert((*left_name).to_owned(), (*right_name).to_owned());
+            right_to_left.insert((*right_name).to_owned(), (*left_name).to_owned());
+          }
+          pairs.push(NamePair::both(left_name, right_name, left_name));
+        }
+        _ => {
+          pairs.extend(names.into_iter().map(NamePair::left_only));
+          pairs.extend(
+            others
+              .into_iter()
+              .map(|name| NamePair::right_only(name, left_form(name, &right_to_left))),
+          );
+        }
+      }
+    }
+    for names in unmatched_right.into_values() {
+      pairs.extend(
+        names
+          .into_iter()
+          .map(|name| NamePair::right_only(name, left_form(name, &right_to_left))),
+      );
     }
   }
-  for (name, item) in right {
-    match left.get(name) {
-      Some(other) if same_kind(item, other) => continue,
-      Some(_) => pairs.push((None, Some(name.clone()))),
-      None
-        if (rules.align_case
-          || rules.align_extensions
-          || rules.text_rules.unicode_normalization)
-          && item.is_file() =>
-      {
-        unmatched_right
-          .entry(alignment_key(name, rules))
-          .or_default()
-          .push(name.clone());
-      }
-      None => pairs.push((None, Some(name.clone()))),
-    }
-  }
-  for (key, names) in unmatched_left {
-    let others = unmatched_right.remove(&key).unwrap_or_default();
-    if names.len() == 1 && others.len() == 1 {
-      pairs.push((Some(names[0].clone()), Some(others[0].clone())));
-    } else {
-      pairs.extend(names.into_iter().map(|name| (Some(name), None)));
-      pairs.extend(others.into_iter().map(|name| (None, Some(name))));
-    }
-  }
-  for names in unmatched_right.into_values() {
-    pairs.extend(names.into_iter().map(|name| (None, Some(name))));
+  if rules.align_case {
+    flag_case_only_orphans(&mut pairs);
   }
   // Same-name rows sort folder-first so a file row never precedes its folder.
   pairs.sort_by(|a, b| {
-    let key = |pair: &(Option<String>, Option<String>)| {
-      let name = pair.0.as_ref().or(pair.1.as_ref()).cloned();
-      let directory = [(&pair.0, left), (&pair.1, right)]
+    let directory = |pair: &NamePair| {
+      [(&pair.left, left), (&pair.right, right)]
         .into_iter()
         .find_map(|(name, map)| name.as_ref().and_then(|n| map.get(n)))
-        .is_some_and(Item::is_dir);
-      (name, !directory)
+        .is_some_and(Item::is_dir)
     };
-    key(a).cmp(&key(b))
+    (&a.relative, !directory(a)).cmp(&(&b.relative, !directory(b)))
   });
   pairs
+}
+
+/// Unpaired names that differ only by Unicode case cannot be aligned by the ASCII
+/// rules, so they are reported as unsupported rather than silently listed as orphans.
+fn flag_case_only_orphans(pairs: &mut [NamePair]) {
+  let mut sides = BTreeMap::<(String, String), (bool, bool, bool)>::new();
+  for pair in pairs
+    .iter()
+    .filter(|pair| pair.left.is_some() != pair.right.is_some())
+  {
+    let (parent, file) = split_name(&pair.relative);
+    let entry = sides
+      .entry((parent.to_owned(), file.to_lowercase()))
+      .or_default();
+    entry.0 |= pair.left.is_some();
+    entry.1 |= pair.right.is_some();
+    entry.2 |= !file.is_ascii();
+  }
+  for pair in pairs
+    .iter_mut()
+    .filter(|pair| pair.left.is_some() != pair.right.is_some())
+  {
+    let (parent, file) = split_name(&pair.relative);
+    if sides
+      .get(&(parent.to_owned(), file.to_lowercase()))
+      .is_some_and(|(left, right, non_ascii)| *left && *right && *non_ascii)
+    {
+      pair.case_fold_unsupported = true;
+    }
+  }
 }
 
 fn stable(metadata: &fs::Metadata, after: &fs::Metadata) -> Result<(), FileError> {
@@ -982,11 +1131,21 @@ fn scan_with_selection(
       &mut |count| progress(a.len() + count),
     )?
   };
+  let pairs = pair_names(&a, &b, rules);
   if let Some(selected) = selected {
     if !refresh
-      && selected
-        .iter()
-        .any(|name| !a.contains_key(name) && !b.contains_key(name))
+      && selected.iter().any(|name| {
+        !pairs.iter().any(|pair| {
+          [
+            pair.left.as_ref(),
+            pair.right.as_ref(),
+            Some(&pair.relative),
+          ]
+          .into_iter()
+          .flatten()
+          .any(|candidate| candidate == name)
+        })
+      })
     {
       return Err(FileError(
         "Selected row is missing or excluded; rescan before comparing contents.".into(),
@@ -994,7 +1153,13 @@ fn scan_with_selection(
     }
   }
   let mut rows = Vec::new();
-  for (ln, rn) in pair_names(&a, &b, rules) {
+  for NamePair {
+    left: ln,
+    right: rn,
+    relative,
+    case_fold_unsupported,
+  } in pairs
+  {
     cancel(cancelled)?;
     let is_directory = ln
       .as_ref()
@@ -1003,7 +1168,7 @@ fn scan_with_selection(
       .is_some_and(Item::is_dir);
     if !(refresh && is_directory)
       && selected.is_some_and(|selected| {
-        ![ln.as_deref(), rn.as_deref()]
+        ![ln.as_deref(), rn.as_deref(), Some(relative.as_str())]
           .into_iter()
           .flatten()
           .any(|name| selected_name(name, selected))
@@ -1029,7 +1194,7 @@ fn scan_with_selection(
       })
     };
     let mut row = FolderEntry {
-      relative: ln.as_ref().or(rn.as_ref()).unwrap().clone(),
+      relative: relative.clone(),
       left_relative: ln.clone(),
       right_relative: rn.clone(),
       left_kind: kind(l),
@@ -1047,15 +1212,7 @@ fn scan_with_selection(
       is_directory: l.is_some_and(Item::is_dir) || r.is_some_and(Item::is_dir),
     };
     let result = (|| -> Result<ComparisonImportance, FileError> {
-      if !single_side
-        && rules.align_case
-        && ln != rn
-        && (ln.is_none() || rn.is_none())
-        && [ln.as_deref(), rn.as_deref()]
-          .into_iter()
-          .flatten()
-          .any(|name| !name.rsplit('/').next().unwrap_or(name).is_ascii())
-      {
+      if !single_side && case_fold_unsupported {
         return Err(FileError("Capability unavailable: non-ASCII case folding is not supported; Unicode normalization does not imply case folding.".into()));
       }
       let errors: Vec<_> = [("Left", l), ("Right", r)]
@@ -1699,6 +1856,87 @@ mod tests {
   }
 
   #[test]
+  fn folder_case_alignment_pairs_the_folder_and_its_children_under_one_node() {
+    assert!(FolderRules::default().align_case);
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.left.join("Docs")).unwrap();
+    fs::create_dir(fixture.right.join("docs")).unwrap();
+    fs::write(fixture.left.join("Docs").join("a.txt"), b"x").unwrap();
+    fs::write(fixture.right.join("docs").join("a.txt"), b"x").unwrap();
+    fs::write(fixture.right.join("docs").join("extra.txt"), b"x").unwrap();
+    let rows = fixture.scan(&FolderRules::default());
+    let folder = rows.iter().find(|r| r.relative == "Docs").unwrap();
+    assert!(folder.is_directory);
+    assert_eq!(folder.left_relative.as_deref(), Some("Docs"));
+    assert_eq!(folder.right_relative.as_deref(), Some("docs"));
+    let same = rows.iter().find(|r| r.relative == "Docs/a.txt").unwrap();
+    assert_eq!(same.status, FolderStatus::Same);
+    assert_eq!(same.right_relative.as_deref(), Some("docs/a.txt"));
+    let extra = rows
+      .iter()
+      .find(|r| r.relative == "Docs/extra.txt")
+      .unwrap();
+    assert_eq!(extra.status, FolderStatus::RightOnly);
+    assert_eq!(extra.left_relative, None);
+    assert_eq!(extra.right_relative.as_deref(), Some("docs/extra.txt"));
+    assert!(rows.iter().all(|r| !r.relative.starts_with("docs/")));
+  }
+
+  fn synthetic_dir() -> Item {
+    Item {
+      metadata: Some(fs::metadata(".").unwrap()),
+      link_target: None,
+      error: None,
+    }
+  }
+
+  #[test]
+  fn ambiguous_folder_case_alignment_is_not_paired() {
+    let rules = FolderRules::default();
+    let left = BTreeMap::from([
+      ("Docs".to_owned(), synthetic_dir()),
+      ("DOCS".to_owned(), synthetic_dir()),
+    ]);
+    let right = BTreeMap::from([("docs".to_owned(), synthetic_dir())]);
+    let pairs = pair_names(&left, &right, &rules);
+    assert_eq!(pairs.len(), 3);
+    assert!(pairs
+      .iter()
+      .all(|pair| pair.left.is_none() || pair.right.is_none()));
+    assert_eq!(pairs.iter().filter(|pair| pair.left.is_some()).count(), 2);
+    assert!(pairs
+      .iter()
+      .any(|pair| pair.right.as_deref() == Some("docs") && pair.relative == "docs"));
+
+    let unique_left = BTreeMap::from([("Docs".to_owned(), synthetic_dir())]);
+    let pairs = pair_names(&unique_left, &right, &rules);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].left.as_deref(), Some("Docs"));
+    assert_eq!(pairs[0].right.as_deref(), Some("docs"));
+  }
+
+  #[test]
+  fn non_ascii_orphans_error_only_when_a_case_only_counterpart_exists() {
+    let fixture = Fixture::new();
+    fs::write(fixture.left.join("\u{c4}.txt"), b"x").unwrap();
+    fs::write(fixture.right.join("\u{e4}.txt"), b"x").unwrap();
+    fs::write(fixture.left.join("\u{e9}.log"), b"x").unwrap();
+    fs::write(fixture.right.join("plain.txt"), b"x").unwrap();
+    let rows = fixture.scan(&FolderRules::default());
+    let unsupported: Vec<_> = rows
+      .iter()
+      .filter(|r| r.status == FolderStatus::Error)
+      .map(|r| r.relative.as_str())
+      .collect();
+    assert_eq!(unsupported.len(), 2);
+    assert!(unsupported.contains(&"\u{c4}.txt"));
+    assert!(unsupported.contains(&"\u{e4}.txt"));
+    let lone = rows.iter().find(|r| r.relative == "\u{e9}.log").unwrap();
+    assert_eq!(lone.status, FolderStatus::LeftOnly);
+    assert!(lone.error.is_none());
+  }
+
+  #[test]
   fn single_root_listing_is_explicitly_uncompared_and_still_validated() {
     let fixture = Fixture::new();
     fixture.files(b"left", b"right");
@@ -1852,21 +2090,38 @@ mod tests {
       .any(|row| row.left_relative == row.right_relative && row.status == FolderStatus::Same));
     assert!(rows.iter().any(|row| row.status == FolderStatus::RightOnly));
     assert_ne!(
-      alignment_key("\u{fb01}.txt", &rules),
-      alignment_key("fi.txt", &rules)
+      alignment_key("\u{fb01}.txt", false, &rules),
+      alignment_key("fi.txt", false, &rules)
     );
     assert_ne!(
-      alignment_key("\u{c4}.txt", &rules),
-      alignment_key("\u{e4}.txt", &rules)
+      alignment_key("\u{c4}.txt", false, &rules),
+      alignment_key("\u{e4}.txt", false, &rules)
     );
     assert_ne!(
-      alignment_key("a/\u{e9}.txt", &rules),
-      alignment_key("b/e\u{301}.txt", &rules)
+      alignment_key("a/\u{e9}.txt", false, &rules),
+      alignment_key("b/e\u{301}.txt", false, &rules)
     );
     rules.align_extensions = true;
     assert_eq!(
-      alignment_key("\u{e9}.txt", &rules),
-      alignment_key("e\u{301}.bin", &rules)
+      alignment_key("\u{e9}.txt", false, &rules),
+      alignment_key("e\u{301}.bin", false, &rules)
+    );
+  }
+
+  #[test]
+  fn folder_names_align_without_extension_stripping() {
+    let rules = FolderRules {
+      align_case: true,
+      align_extensions: true,
+      ..Default::default()
+    };
+    assert_eq!(
+      alignment_key("Docs.v1", true, &rules),
+      ("".into(), "docs.v1".into())
+    );
+    assert_eq!(
+      alignment_key("Docs.v1", false, &rules),
+      ("".into(), "docs".into())
     );
   }
 
@@ -1941,10 +2196,7 @@ mod tests {
     assert_eq!(rows[0].status, FolderStatus::Error);
     assert_eq!(rows[0].importance, ComparisonImportance::Unknown);
     assert!(rows[0].error.as_ref().unwrap().contains("1 MiB"));
-    assert_eq!(
-      fixture.scan(&binary_rules())[0].status,
-      FolderStatus::Same
-    );
+    assert_eq!(fixture.scan(&binary_rules())[0].status, FolderStatus::Same);
     for root in [&fixture.left, &fixture.right] {
       fs::File::options()
         .write(true)
@@ -1953,10 +2205,7 @@ mod tests {
         .set_len(MAX_FILE_BYTES + 1)
         .unwrap();
     }
-    assert_eq!(
-      fixture.scan(&binary_rules())[0].status,
-      FolderStatus::Error
-    );
+    assert_eq!(fixture.scan(&binary_rules())[0].status, FolderStatus::Error);
     let rules = FolderRules {
       content: ContentMethod::None,
       compare_size: true,
