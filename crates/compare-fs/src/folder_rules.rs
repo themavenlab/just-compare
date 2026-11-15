@@ -2,6 +2,9 @@
 //! exact-path, content-hashed snapshots and never consume these display results.
 use super::*;
 use compare_text::{CompareOptions, DiffKind, UnimportantRule, WorkControl};
+use rayon::prelude::*;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
 
@@ -254,12 +257,39 @@ fn side_label(side: FolderSide) -> &'static str {
   }
 }
 
+/// Combined walk progress for both sides. The count and the callback share one lock,
+/// so the callback always receives a monotonic total even when the walks run concurrently.
+struct ScanProgress<F> {
+  count: AtomicUsize,
+  report: Mutex<F>,
+}
+
+impl<F: FnMut(usize)> ScanProgress<F> {
+  fn new(report: F) -> Self {
+    Self {
+      count: AtomicUsize::new(0),
+      report: Mutex::new(report),
+    }
+  }
+
+  fn advance(&self) {
+    let mut report = self.report.lock().unwrap_or_else(PoisonError::into_inner);
+    let total = self.count.fetch_add(1, Ordering::Relaxed) + 1;
+    report(total);
+  }
+
+  fn finish(&self, total: usize) {
+    let mut report = self.report.lock().unwrap_or_else(PoisonError::into_inner);
+    report(total);
+  }
+}
+
 fn collect(
   root: &Path,
   side: FolderSide,
   options: &FolderOptions,
   cancelled: &AtomicBool,
-  progress: &mut impl FnMut(usize),
+  on_item: &(dyn Fn() + Sync),
 ) -> Result<BTreeMap<String, Item>, FileError> {
   if !root.is_dir() {
     return Err(
@@ -364,7 +394,7 @@ fn collect(
         },
       };
       items.insert(relative, item);
-      progress(items.len());
+      on_item();
     }
   }
   Ok(items)
@@ -1080,7 +1110,7 @@ fn scan_with_selection(
   selected: Option<&[String]>,
   refresh: bool,
   cancelled: &AtomicBool,
-  mut progress: impl FnMut(usize) + Send,
+  progress: impl FnMut(usize) + Send,
 ) -> Result<Vec<FolderEntry>, FileError> {
   rules.validate()?;
   cancel(cancelled)?;
@@ -1115,22 +1145,19 @@ fn scan_with_selection(
   } else {
     roots(left, right)?
   };
-  let a = if left.as_os_str().is_empty() {
-    BTreeMap::new()
-  } else {
-    collect(&left, FolderSide::Left, options, cancelled, &mut progress)?
+  let progress = ScanProgress::new(progress);
+  let walk = |root: &Path, side: FolderSide| {
+    if root.as_os_str().is_empty() {
+      Ok(BTreeMap::new())
+    } else {
+      collect(root, side, options, cancelled, &|| progress.advance())
+    }
   };
-  let b = if right.as_os_str().is_empty() {
-    BTreeMap::new()
-  } else {
-    collect(
-      &right,
-      FolderSide::Right,
-      options,
-      cancelled,
-      &mut |count| progress(a.len() + count),
-    )?
-  };
+  let (a, b) = rayon::join(
+    || walk(&left, FolderSide::Left),
+    || walk(&right, FolderSide::Right),
+  );
+  let (a, b) = (a?, b?);
   let pairs = pair_names(&a, &b, rules);
   if let Some(selected) = selected {
     if !refresh
@@ -1152,199 +1179,214 @@ fn scan_with_selection(
       ));
     }
   }
-  let mut rows = Vec::new();
-  for NamePair {
-    left: ln,
-    right: rn,
-    relative,
-    case_fold_unsupported,
-  } in pairs
-  {
+  let mut jobs = Vec::new();
+  for pair in pairs {
     cancel(cancelled)?;
-    let is_directory = ln
+    let is_directory = pair
+      .left
       .as_ref()
       .and_then(|name| a.get(name))
-      .or_else(|| rn.as_ref().and_then(|name| b.get(name)))
+      .or_else(|| pair.right.as_ref().and_then(|name| b.get(name)))
       .is_some_and(Item::is_dir);
     if !(refresh && is_directory)
       && selected.is_some_and(|selected| {
-        ![ln.as_deref(), rn.as_deref(), Some(relative.as_str())]
-          .into_iter()
-          .flatten()
-          .any(|name| selected_name(name, selected))
+        ![
+          pair.left.as_deref(),
+          pair.right.as_deref(),
+          Some(pair.relative.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|name| selected_name(name, selected))
       })
     {
       continue;
     }
-    let l = ln.as_ref().and_then(|name| a.get(name));
-    let r = rn.as_ref().and_then(|name| b.get(name));
-    let lm = l.and_then(|item| item.metadata.as_ref());
-    let rm = r.and_then(|item| item.metadata.as_ref());
-    let kind = |item: Option<&Item>| {
-      item.and_then(|item| {
-        item.metadata.as_ref().map(|_| {
-          if item.is_link() {
-            FolderEntryKind::Link
-          } else if item.is_dir() {
-            FolderEntryKind::Directory
-          } else {
-            FolderEntryKind::File
-          }
-        })
-      })
-    };
-    let mut row = FolderEntry {
-      relative: relative.clone(),
-      left_relative: ln.clone(),
-      right_relative: rn.clone(),
-      left_kind: kind(l),
-      right_kind: kind(r),
-      status: FolderStatus::Error,
-      left_size: lm.map(|m| m.len()),
-      right_size: rm.map(|m| m.len()),
-      left_modified: lm.and_then(|m| m.modified().ok()).and_then(modified_ms),
-      right_modified: rm.and_then(|m| m.modified().ok()).and_then(modified_ms),
-      newer: None,
-      newer_mixed: false,
-      importance: ComparisonImportance::Unknown,
-      error: None,
-      detail: None,
-      is_directory: l.is_some_and(Item::is_dir) || r.is_some_and(Item::is_dir),
-    };
-    let result = (|| -> Result<ComparisonImportance, FileError> {
-      if !single_side && case_fold_unsupported {
-        return Err(FileError("Capability unavailable: non-ASCII case folding is not supported; Unicode normalization does not imply case folding.".into()));
-      }
-      let errors: Vec<_> = [("Left", l), ("Right", r)]
-        .into_iter()
-        .filter_map(|(side, item)| {
-          item
-            .and_then(|item| item.error.as_ref())
-            .map(|error| format!("{side}: {error}"))
-        })
-        .collect();
-      if !errors.is_empty() {
-        return Err(FileError(errors.join("; ")));
-      }
-      let link_targets = (
-        l.and_then(|item| item.link_target.as_deref()),
-        r.and_then(|item| item.link_target.as_deref()),
-      );
-      match link_targets {
-        (Some(left), Some(right)) => {
-          row.detail = Some(format!("Link targets: left \"{left}\"; right \"{right}\""));
-        }
-        (Some(target), None) | (None, Some(target)) => {
-          row.detail = Some(format!("Link to \"{target}\""));
-        }
-        (None, None) => {}
-      }
-      let (Some(lm), Some(rm)) = (lm, rm) else {
-        row.status = if l.is_some() {
-          FolderStatus::LeftOnly
-        } else {
-          FolderStatus::RightOnly
-        };
-        if single_side {
-          row.detail = Some("Not compared: choose the other folder root.".into());
-          return Ok(ComparisonImportance::Unknown);
-        }
-        return Ok(ComparisonImportance::Important);
-      };
-      if let (Some(left), Some(right)) = link_targets {
-        // Links are compared by target text only; their targets are never read.
-        let same = left == right;
-        row.status = if same {
-          FolderStatus::Same
-        } else {
-          FolderStatus::Different
-        };
-        return Ok(if same {
-          ComparisonImportance::Equal
-        } else {
-          ComparisonImportance::Important
-        });
-      }
-      let difference = time_difference(lm.modified()?, rm.modified()?, rules);
-      if !lm.is_dir() && difference.abs() > i128::from(rules.timestamp_tolerance_ms) {
-        row.newer = Some(if difference > 0 {
-          FolderSide::Left
-        } else {
-          FolderSide::Right
-        });
-      }
-      // Directory timestamps/sizes are not meaningful file-content tests.
-      let mut metadata_different = (rules.compare_filename_case && ln != rn)
-        || (rules.compare_readonly && lm.permissions().readonly() != rm.permissions().readonly())
-        || (rules.compare_attributes && attributes(lm) != attributes(rm))
-        || ((attributes(lm) ^ attributes(rm)) & selected_attribute_mask(rules) != 0);
-      if rules.executable_version && !lm.is_dir() {
-        let left_path = left.join(ln.as_ref().unwrap());
-        let right_path = right.join(rn.as_ref().unwrap());
-        if executable(&left_path) || executable(&right_path) {
-          let left = version(&left_path, lm, cancelled)?;
-          let right = version(&right_path, rm, cancelled)?;
-          metadata_different |= left != right;
-          let display = |v: [u16; 4]| v.map(|part| part.to_string()).join(".");
-          row.detail = Some(format!(
-            "File versions: left {} / right {}; product versions: left {} / right {}",
-            display(left.file),
-            display(right.file),
-            display(left.product),
-            display(right.product),
-          ));
-        }
-      }
-      let content = if lm.is_dir() {
-        ComparisonImportance::Equal
-      } else {
-        ContentComparison {
-          left: &left.join(ln.as_ref().unwrap()),
-          right: &right.join(rn.as_ref().unwrap()),
-          lm,
-          rm,
-          rules,
-          compiled: &compiled,
-          cancelled,
-        }
-        .compare()?
-      };
-      let importance = if metadata_different {
-        ComparisonImportance::Important
-      } else {
-        content
-      };
-      row.status = if importance == ComparisonImportance::Important {
-        FolderStatus::Different
-      } else {
-        FolderStatus::Same
-      };
-      Ok(importance)
-    })();
-    match result {
-      Ok(importance) => {
-        row.importance = importance;
-        if row.status == FolderStatus::Error {
-          row.status = if importance == ComparisonImportance::Important {
-            FolderStatus::Different
-          } else {
-            FolderStatus::Same
-          };
-        }
-      }
-      Err(error) => {
-        cancel(cancelled)?;
-        row.status = FolderStatus::Error;
-        row.error = Some(error.to_string());
-        row.detail = row.error.clone();
-      }
-    }
-    rows.push(row);
+    jobs.push(pair);
   }
+  // Rows are evaluated in parallel; `collect` keeps them in pair order.
+  let mut rows = jobs
+        .into_par_iter()
+        .map(
+            |NamePair {
+                 left: ln,
+                 right: rn,
+                 relative,
+                 case_fold_unsupported,
+             }|
+             -> Result<FolderEntry, FileError> {
+                cancel(cancelled)?;
+                let l = ln.as_ref().and_then(|name| a.get(name));
+        let r = rn.as_ref().and_then(|name| b.get(name));
+        let lm = l.and_then(|item| item.metadata.as_ref());
+        let rm = r.and_then(|item| item.metadata.as_ref());
+        let kind = |item: Option<&Item>| {
+            item.and_then(|item| {
+                item.metadata.as_ref().map(|_| {
+                    if item.is_link() {
+                        FolderEntryKind::Link
+                    } else if item.is_dir() {
+                        FolderEntryKind::Directory
+                    } else {
+                        FolderEntryKind::File
+                    }
+                })
+            })
+        };
+        let mut row = FolderEntry {
+            relative: relative.clone(),
+            left_relative: ln.clone(),
+            right_relative: rn.clone(),
+            left_kind: kind(l),
+            right_kind: kind(r),
+            status: FolderStatus::Error,
+            left_size: lm.map(|m| m.len()),
+            right_size: rm.map(|m| m.len()),
+            left_modified: lm.and_then(|m| m.modified().ok()).and_then(modified_ms),
+            right_modified: rm.and_then(|m| m.modified().ok()).and_then(modified_ms),
+            newer: None,
+            newer_mixed: false,
+            importance: ComparisonImportance::Unknown,
+            error: None,
+            detail: None,
+            is_directory: l.is_some_and(Item::is_dir) || r.is_some_and(Item::is_dir),
+        };
+        let result = (|| -> Result<ComparisonImportance, FileError> {
+            if !single_side && case_fold_unsupported {
+                return Err(FileError("Capability unavailable: non-ASCII case folding is not supported; Unicode normalization does not imply case folding.".into()));
+            }
+            let errors: Vec<_> = [("Left", l), ("Right", r)]
+                .into_iter()
+                .filter_map(|(side, item)| {
+                    item.and_then(|item| item.error.as_ref())
+                        .map(|error| format!("{side}: {error}"))
+                })
+                .collect();
+            if !errors.is_empty() {
+                return Err(FileError(errors.join("; ")));
+            }
+            let link_targets = (
+                l.and_then(|item| item.link_target.as_deref()),
+                r.and_then(|item| item.link_target.as_deref()),
+            );
+            match link_targets {
+                (Some(left), Some(right)) => {
+                    row.detail = Some(format!("Link targets: left \"{left}\"; right \"{right}\""));
+                }
+                (Some(target), None) | (None, Some(target)) => {
+                    row.detail = Some(format!("Link to \"{target}\""));
+                }
+                (None, None) => {}
+            }
+            let (Some(lm), Some(rm)) = (lm, rm) else {
+                row.status = if l.is_some() {
+                    FolderStatus::LeftOnly
+                } else {
+                    FolderStatus::RightOnly
+                };
+                if single_side {
+                    row.detail = Some("Not compared: choose the other folder root.".into());
+                    return Ok(ComparisonImportance::Unknown);
+                }
+                return Ok(ComparisonImportance::Important);
+            };
+            if let (Some(left), Some(right)) = link_targets {
+                // Links are compared by target text only; their targets are never read.
+                let same = left == right;
+                row.status = if same {
+                    FolderStatus::Same
+                } else {
+                    FolderStatus::Different
+                };
+                return Ok(if same {
+                    ComparisonImportance::Equal
+                } else {
+                    ComparisonImportance::Important
+                });
+            }
+            let difference = time_difference(lm.modified()?, rm.modified()?, rules);
+            if !lm.is_dir() && difference.abs() > i128::from(rules.timestamp_tolerance_ms) {
+                row.newer = Some(if difference > 0 {
+                    FolderSide::Left
+                } else {
+                    FolderSide::Right
+                });
+            }
+            // Directory timestamps/sizes are not meaningful file-content tests.
+            let mut metadata_different = (rules.compare_filename_case && ln != rn)
+                || (rules.compare_readonly
+                    && lm.permissions().readonly() != rm.permissions().readonly())
+                || (rules.compare_attributes && attributes(lm) != attributes(rm))
+                || ((attributes(lm) ^ attributes(rm)) & selected_attribute_mask(rules) != 0);
+            if rules.executable_version && !lm.is_dir() {
+                let left_path = left.join(ln.as_ref().unwrap());
+                let right_path = right.join(rn.as_ref().unwrap());
+                if executable(&left_path) || executable(&right_path) {
+                    let left = version(&left_path, lm, cancelled)?;
+                    let right = version(&right_path, rm, cancelled)?;
+                    metadata_different |= left != right;
+                    let display = |v: [u16; 4]| v.map(|part| part.to_string()).join(".");
+                    row.detail = Some(format!(
+                        "File versions: left {} / right {}; product versions: left {} / right {}",
+                        display(left.file),
+                        display(right.file),
+                        display(left.product),
+                        display(right.product),
+                    ));
+                }
+            }
+            let content = if lm.is_dir() {
+                ComparisonImportance::Equal
+            } else {
+                ContentComparison {
+                    left: &left.join(ln.as_ref().unwrap()),
+                    right: &right.join(rn.as_ref().unwrap()),
+                    lm,
+                    rm,
+                    rules,
+                    compiled: &compiled,
+                    cancelled,
+                }
+                .compare()?
+            };
+            let importance = if metadata_different {
+                ComparisonImportance::Important
+            } else {
+                content
+            };
+            row.status = if importance == ComparisonImportance::Important {
+                FolderStatus::Different
+            } else {
+                FolderStatus::Same
+            };
+            Ok(importance)
+        })();
+        match result {
+            Ok(importance) => {
+                row.importance = importance;
+                if row.status == FolderStatus::Error {
+                    row.status = if importance == ComparisonImportance::Important {
+                        FolderStatus::Different
+                    } else {
+                        FolderStatus::Same
+                    };
+                }
+            }
+            Err(error) => {
+                cancel(cancelled)?;
+                row.status = FolderStatus::Error;
+                row.error = Some(error.to_string());
+                row.detail = row.error.clone();
+            }
+        }
+        Ok(row)
+            }
+        )
+        .collect::<Result<Vec<_>, FileError>>()?;
   if !refresh {
     aggregate_directories(&mut rows);
   }
-  progress(a.len() + b.len());
+  progress.finish(a.len() + b.len());
   Ok(rows)
 }
 
@@ -1465,6 +1507,30 @@ mod tests {
           .unwrap();
       }
     }
+  }
+
+  #[test]
+  fn cancelling_a_parallel_scan_stops_it_with_an_error() {
+    let fixture = Fixture::new();
+    for index in 0..2_000 {
+      fs::write(fixture.left.join(format!("file-{index:04}")), b"left").unwrap();
+      fs::write(fixture.right.join(format!("file-{index:04}")), b"right").unwrap();
+    }
+    let cancelled = AtomicBool::new(false);
+    let error = scan_pair_with_rules(
+      &fixture.left,
+      &fixture.right,
+      &FolderOptions::default(),
+      &binary_rules(),
+      &cancelled,
+      |count| {
+        if count >= 100 {
+          cancelled.store(true, Ordering::Relaxed);
+        }
+      },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error}");
   }
 
   #[test]
