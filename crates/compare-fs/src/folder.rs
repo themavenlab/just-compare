@@ -7,15 +7,15 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const MAX_ENTRIES: usize = 10_000;
+pub const MAX_FOLDER_ENTRIES: usize = 250_000;
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 #[path = "folder_rules.rs"]
 mod folder_rules;
 pub use folder_rules::{
   refresh_selection, scan_pair_with_rules, scan_selected_with_rules, validate_folder_configuration,
-  ComparisonImportance, ContentMethod, FolderRules, FolderSide, FolderTextRules, QuickTest,
-  QuickTestPolicy,
+  ComparisonImportance, ContentMethod, FolderRules, FolderScan, FolderSide, FolderTextRules,
+  QuickTest, QuickTestPolicy,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -242,10 +242,10 @@ pub(super) fn exclusion_filters(options: &FolderOptions) -> Result<ExclusionFilt
     .exclude_files
     .len()
     .saturating_add(options.exclude_directories.len())
-    > MAX_ENTRIES
+    > MAX_FOLDER_ENTRIES
   {
     return Err(FileError(
-      "At most 10,000 exact exclusions are supported.".into(),
+      "At most 250,000 exact exclusions are supported.".into(),
     ));
   }
   let mut builder = GlobSetBuilder::new();
@@ -343,10 +343,8 @@ fn scan_internal(
         continue;
       }
       count += 1;
-      if count > MAX_ENTRIES {
-        return Err(FileError(
-          "Folder exceeds the 10,000-entry prototype limit.".into(),
-        ));
+      if count > MAX_FOLDER_ENTRIES {
+        return Err(FileError("Folder exceeds the 250,000-entry limit.".into()));
       }
       if count % 100 == 0 {
         progress(count);
@@ -586,7 +584,7 @@ pub struct Plan {
 
 impl Plan {
   pub fn select(&mut self, names: &[String]) -> Result<(), FileError> {
-    if names.len() > MAX_ENTRIES
+    if names.len() > MAX_FOLDER_ENTRIES
       || names
         .iter()
         .any(|name| !self.operations.iter().any(|op| &op.relative == name))

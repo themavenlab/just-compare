@@ -11,7 +11,7 @@ For bugs, feature requests or private security reports, use **Help > Report a bu
 - Public distribution is not yet verified. See the [release guide](../engineering/release.md) for Windows support targets and gates.
 - Compare is read-only; copying into an editor changes its draft, not the source. Saving, synchronization and local file actions require explicit intent.
 - Try file operations on disposable copies first. Read the [data-safety limitations](../engineering/data-safety.md#implemented-local-backend).
-- Text inputs are bounded to 1 MiB/20,000 lines per side; folder scans to 10,000 entries per root and 100 MiB per file. Specialized binary/image/document comparison, archives and remote providers are not part of this release.
+- Text inputs are bounded to 1 MiB/20,000 lines per side; folder scans to 250,000 entries per root and 100 MiB per file. A larger tree shows the first 250,000 entries with a status-bar warning, and Sync is disabled for that scan. Specialized binary/image/document comparison, archives and remote providers are not part of this release.
 - Settings, history and optional recovery drafts stay on the device; see the [privacy policy](../../PRIVACY.md).
 
 ---

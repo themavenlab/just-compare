@@ -14,11 +14,12 @@
 //! Touch accepts nonnegative Unix milliseconds and regular files only.
 //! Overwrite merges preserve destination-only entries and existing destination
 //! permissions. Previews expose every affected entry for all actions. Source and
-//! destination trees share the 10000-entry budget; each file is limited to 100 MiB.
+//! destination trees share the 250000-entry budget; each file is limited to 100 MiB.
 //! CopyTo/MoveTo accept exact file or directory targets. Non-nested batches retain
 //! independent operation outcomes, reject overlapping operation footprints, and
 //! share the same entry budget; they do not promise transactional execution.
 
+use crate::folder::MAX_FOLDER_ENTRIES;
 use crate::{checked_path, display_path, FileError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -29,7 +30,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
-const MAX_ENTRIES: usize = 10_000;
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -431,8 +431,8 @@ fn snapshot_tree(
   while let Some(relative) = pending.pop() {
     check_cancel(cancelled)?;
     *count += 1;
-    if *count > MAX_ENTRIES {
-      return Err(failure("Selection exceeds the 10000-entry action limit."));
+    if *count > MAX_FOLDER_ENTRIES {
+      return Err(failure("Selection exceeds the 250,000-entry action limit."));
     }
     let path = tree_path(root, &relative);
     let snapshot = entry_snapshot(&path, cancelled)?;
@@ -444,8 +444,8 @@ fn snapshot_tree(
         if child.file_name().to_str().is_none() {
           return Err(failure("Non-Unicode names are unsupported."));
         }
-        if tree.len() + pending.len() + 1 >= MAX_ENTRIES {
-          return Err(failure("Selection exceeds the 10000-entry action limit."));
+        if tree.len() + pending.len() + 1 >= MAX_FOLDER_ENTRIES {
+          return Err(failure("Selection exceeds the 250,000-entry action limit."));
         }
         pending.push(relative.join(child.file_name()));
       }
@@ -459,8 +459,8 @@ fn selected_paths(sources: Vec<PathBuf>) -> Result<Vec<PathBuf>, FileError> {
   if sources.is_empty() {
     return Err(failure("Select at least one entry."));
   }
-  if sources.len() > MAX_ENTRIES {
-    return Err(failure("Selection exceeds the 10000-entry action limit."));
+  if sources.len() > MAX_FOLDER_ENTRIES {
+    return Err(failure("Selection exceeds the 250,000-entry action limit."));
   }
   let mut paths = Vec::new();
   for source in sources {
@@ -632,8 +632,8 @@ impl FileActionPlan {
     check_cancel(cancelled)?;
     let request = match request {
       FileActionRequest::Batch { requests } => {
-        if requests.is_empty() || requests.len() > MAX_ENTRIES {
-          return Err(failure("Batch requires 1 to 10000 non-nested requests."));
+        if requests.is_empty() || requests.len() > MAX_FOLDER_ENTRIES {
+          return Err(failure("Batch requires 1 to 250000 non-nested requests."));
         }
         let mut approved: Vec<ApprovedOperation> = Vec::new();
         let mut count = 0;
@@ -646,8 +646,8 @@ impl FileActionPlan {
           for next in plan.approved {
             count +=
               next.source.len().max(1) + next.destination.len() + next.missing_ancestors.len();
-            if count > MAX_ENTRIES {
-              return Err(failure("Batch exceeds the 10000-entry action limit."));
+            if count > MAX_FOLDER_ENTRIES {
+              return Err(failure("Batch exceeds the 250,000-entry action limit."));
             }
             let next_paths: Vec<_> = [
               next.operation.source.as_ref(),
@@ -955,8 +955,8 @@ impl FileActionPlan {
         })
         .transpose()?;
       count += missing_directories.len();
-      if count > MAX_ENTRIES {
-        return Err(failure("File action exceeds the 10000-entry limit."));
+      if count > MAX_FOLDER_ENTRIES {
+        return Err(failure("File action exceeds the 250,000-entry limit."));
       }
       approved.push(ApprovedOperation {
         operation: FileActionOperation {
@@ -1930,7 +1930,7 @@ mod tests {
   fn snapshots_bound_count_and_detect_permissions() {
     let (_temp, source, destination) = fixture();
     let cancel = AtomicBool::new(false);
-    let mut count = MAX_ENTRIES;
+    let mut count = MAX_FOLDER_ENTRIES;
     assert!(snapshot_tree(&source, &cancel, &mut count).is_err());
     let plan = FileActionPlan::preview(copy(source.join("a.txt"), destination), &cancel).unwrap();
     let readonly = FileActionPlan::preview(

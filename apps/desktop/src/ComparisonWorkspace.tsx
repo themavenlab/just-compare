@@ -243,6 +243,7 @@ export function ComparisonWorkspace({
   const [showWhitespace, setShowWhitespace] = useState(false);
   const [detailRow, setDetailRow] = useState<number | null>(null);
   const [folders, setFolders] = useState<FolderEntry[]>([]);
+  const [folderTruncated, setFolderTruncated] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
   const [folderStale, setFolderStale] = useState(false);
   const [pendingFolderRefresh, setPendingFolderRefresh] = useState<string[]>(
@@ -1523,7 +1524,8 @@ export function ComparisonWorkspace({
       });
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))
         return;
-      setFolders(result);
+      setFolders(result.entries);
+      setFolderTruncated(result.truncated);
       if (filter === "error") {
         selectFilter("all");
       }
@@ -1547,8 +1549,8 @@ export function ComparisonWorkspace({
       setFolderStale(false);
       setNotice(
         roots.left && roots.right
-          ? `Scan complete: ${result.length} file entries.`
-          : `Listed ${result.length} entries. Choose the other folder to compare.`,
+          ? `Scan complete: ${result.entries.length} file entries.`
+          : `Listed ${result.entries.length} entries. Choose the other folder to compare.`,
       );
       await recordHistory(
         [roots.left, roots.right],
@@ -1597,7 +1599,9 @@ export function ComparisonWorkspace({
           return;
         setFolderRoots(roots);
         setNativeFolderRoots(roots);
-        const changed = JSON.stringify(refreshed) !== JSON.stringify(folders);
+        const changed =
+          JSON.stringify(refreshed.entries) !== JSON.stringify(folders);
+        setFolderTruncated(refreshed.truncated);
         setFolderStale(changed);
         if (changed) {
           discardPreview(tab.id);
@@ -1768,7 +1772,8 @@ export function ComparisonWorkspace({
           });
           if (!isCurrentFolderGeneration(folderGeneration.current, generation))
             return;
-          setFolders(refreshed);
+          setFolders(refreshed.entries);
+          setFolderTruncated(refreshed.truncated);
         }
         const allMapped = mapped.every((path) => path !== null);
         setFolderStale(!allMapped);
@@ -1854,6 +1859,10 @@ export function ComparisonWorkspace({
   ) {
     if (syncMode !== "update" && syncMode !== "mirror")
       throw new Error("Choose Update or Mirror before creating a preview.");
+    if (folderTruncated)
+      throw new Error(
+        "Sync is unavailable because the scan is incomplete. Exclude large folders such as node_modules and scan again.",
+      );
     const roots = await normalizeFolderRoots();
     if (!(await claimPreview(tab.id))) return;
     setPreview(null);
@@ -2817,8 +2826,9 @@ export function ComparisonWorkspace({
           });
           if (!isCurrentFolderGeneration(folderGeneration.current, generation))
             return;
-          setFolders(refreshed);
-          const refreshedKeys = new Set(folderSelectionKeys(refreshed));
+          setFolders(refreshed.entries);
+          setFolderTruncated(refreshed.truncated);
+          const refreshedKeys = new Set(folderSelectionKeys(refreshed.entries));
           setSelectedFiles((prior) =>
             prior.filter((key) => refreshedKeys.has(key)),
           );
@@ -2983,8 +2993,9 @@ export function ComparisonWorkspace({
       });
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))
         return;
-      setFolders(compared);
-      const selectedResults = compared.filter((entry) =>
+      setFolders(compared.entries);
+      setFolderTruncated(compared.truncated);
+      const selectedResults = compared.entries.filter((entry) =>
         entries.some(
           (selected) =>
             selected.relative === entry.relative ||
@@ -3902,6 +3913,12 @@ export function ComparisonWorkspace({
           {notice ||
             (working ? `Working... ${progress} entries scanned` : "Ready")}
         </span>
+        {mode === "folder" && folderTruncated && (
+          <span className="folder-truncated" role="alert">
+            Showing the first 250,000 items. Exclude folders such as
+            node_modules to see everything.
+          </span>
+        )}
         {mode === "folder" && (
           <span className="folder-status-counts">
             {folderStale ? "Results stale / " : ""}
@@ -4816,7 +4833,7 @@ export function ComparisonWorkspace({
                 commands={[
                   {
                     label: "Preview update left to right",
-                    disabled: busy,
+                    disabled: busy || folderTruncated,
                     run: () =>
                       void attempt(() =>
                         createPreview("update", null, "right"),
@@ -4824,13 +4841,13 @@ export function ComparisonWorkspace({
                   },
                   {
                     label: "Preview update right to left",
-                    disabled: busy,
+                    disabled: busy || folderTruncated,
                     run: () =>
                       void attempt(() => createPreview("update", null, "left")),
                   },
                   {
                     label: "Preview mirror left to right",
-                    disabled: busy,
+                    disabled: busy || folderTruncated,
                     run: () =>
                       void attempt(() =>
                         createPreview("mirror", null, "right"),
@@ -4838,7 +4855,7 @@ export function ComparisonWorkspace({
                   },
                   {
                     label: "Preview mirror right to left",
-                    disabled: busy,
+                    disabled: busy || folderTruncated,
                     run: () =>
                       void attempt(() => createPreview("mirror", null, "left")),
                   },

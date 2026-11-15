@@ -284,13 +284,30 @@ impl<F: FnMut(usize)> ScanProgress<F> {
   }
 }
 
+const NON_UNICODE_NAME: &str = "Name is not valid Unicode; it cannot be compared or copied.";
+
+/// Rows from one scan. `truncated` means a root held more entries than
+/// `MAX_FOLDER_ENTRIES`; the rows then cover only part of that root.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderScan {
+  pub entries: Vec<FolderEntry>,
+  pub truncated: bool,
+}
+
+struct Walk {
+  items: BTreeMap<String, Item>,
+  truncated: bool,
+}
+
 fn collect(
   root: &Path,
   side: FolderSide,
   options: &FolderOptions,
   cancelled: &AtomicBool,
+  limit: usize,
   on_item: &(dyn Fn() + Sync),
-) -> Result<BTreeMap<String, Item>, FileError> {
+) -> Result<Walk, FileError> {
   if !root.is_dir() {
     return Err(
       FileError("Folder root must be a directory.".into()).context(format!(
@@ -302,8 +319,9 @@ fn collect(
   }
   let filters = exclusion_filters(options)?;
   let mut items: BTreeMap<String, Item> = BTreeMap::new();
+  let mut truncated = false;
   let mut stack = vec![(root.to_path_buf(), String::new())];
-  while let Some((directory, directory_name)) = stack.pop() {
+  'walk: while let Some((directory, directory_name)) = stack.pop() {
     cancel(cancelled)?;
     // Roots are validated once by the caller; the walk never descends into links.
     let children = match fs::read_dir(&directory) {
@@ -324,19 +342,34 @@ fn collect(
     };
     for child in children {
       cancel(cancelled)?;
-      let child = child?;
+      let child = match child {
+        Ok(child) => child,
+        Err(error) if !directory_name.is_empty() => {
+          // The failing entry cannot be named, so its directory row carries the error.
+          if let Some(item) = items.get_mut(&directory_name) {
+            item.error = Some(error.to_string());
+          }
+          continue;
+        }
+        Err(error) => {
+          return Err(FileError::from(error).context(format!(
+            "Could not read the {} folder \"{}\"",
+            side_label(side),
+            crate::display_path(root)
+          )));
+        }
+      };
       let path = child.path();
-      let relative = path
+      let relative_path = path
         .strip_prefix(root)
-        .map_err(|e| FileError(e.to_string()))?
+        .map_err(|e| FileError(e.to_string()))?;
+      let unicode_name = relative_path
         .components()
-        .map(|part| {
-          part
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| FileError("Non-Unicode paths are unsupported; scan stopped.".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?
+        .all(|part| part.as_os_str().to_str().is_some());
+      let relative = relative_path
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
         .join("/");
       if filters.patterns.is_match(&relative) {
         continue;
@@ -353,12 +386,11 @@ fn collect(
           continue;
         }
       }
-      if items.len() == MAX_ENTRIES {
-        return Err(FileError(
-          "Folder exceeds the 10,000-entry prototype limit.".into(),
-        ));
+      if items.len() >= limit {
+        truncated = true;
+        break 'walk;
       }
-      let item = match metadata {
+      let mut item = match metadata {
         Ok(metadata) if metadata.is_symlink() => match fs::read_link(&path) {
           Ok(target) => Item {
             metadata: Some(metadata),
@@ -372,7 +404,8 @@ fn collect(
           },
         },
         Ok(metadata) if metadata.is_file() || metadata.is_dir() => {
-          if metadata.is_dir() {
+          // Children of a name that cannot round-trip would get mangled paths.
+          if metadata.is_dir() && unicode_name {
             stack.push((path, relative.clone()));
           }
           let error = metadata.modified().err().map(|e| e.to_string());
@@ -393,11 +426,14 @@ fn collect(
           error: Some(error.to_string()),
         },
       };
+      if !unicode_name {
+        item.error = Some(NON_UNICODE_NAME.into());
+      }
       items.insert(relative, item);
       on_item();
     }
   }
-  Ok(items)
+  Ok(Walk { items, truncated })
 }
 
 fn split_name(name: &str) -> (&str, &str) {
@@ -942,7 +978,7 @@ pub fn scan_pair_with_rules(
   rules: &FolderRules,
   cancelled: &AtomicBool,
   progress: impl FnMut(usize) + Send,
-) -> Result<Vec<FolderEntry>, FileError> {
+) -> Result<FolderScan, FileError> {
   scan_with_selection(
     left, right, options, rules, None, false, cancelled, progress,
   )
@@ -958,7 +994,7 @@ pub fn scan_selected_with_rules(
   selected: &[String],
   cancelled: &AtomicBool,
   progress: impl FnMut(usize) + Send,
-) -> Result<Vec<FolderEntry>, FileError> {
+) -> Result<FolderScan, FileError> {
   validate_selection(selected)?;
   scan_with_selection(
     left,
@@ -973,8 +1009,10 @@ pub fn scan_selected_with_rules(
 }
 
 fn validate_selection(selected: &[String]) -> Result<(), FileError> {
-  if selected.is_empty() || selected.len() > MAX_ENTRIES {
-    return Err(FileError("Select between 1 and 10,000 folder rows.".into()));
+  if selected.is_empty() || selected.len() > MAX_FOLDER_ENTRIES {
+    return Err(FileError(
+      "Select between 1 and 250,000 folder rows.".into(),
+    ));
   }
   for name in selected {
     if name.is_empty()
@@ -1005,9 +1043,9 @@ pub fn refresh_selection(
   previous: &[FolderEntry],
   cancelled: &AtomicBool,
   progress: impl FnMut(usize) + Send,
-) -> Result<Vec<FolderEntry>, FileError> {
+) -> Result<FolderScan, FileError> {
   validate_selection(selected)?;
-  if previous.len() > MAX_ENTRIES * 2 {
+  if previous.len() > MAX_FOLDER_ENTRIES * 2 {
     return Err(FileError(
       "Previous presentation exceeds the bounded folder limit.".into(),
     ));
@@ -1052,6 +1090,7 @@ pub fn refresh_selection(
     cancelled,
     progress,
   )?;
+  let truncated = fresh.truncated;
   let mut merged: BTreeMap<(String, bool), FolderEntry> = previous
     .iter()
     .filter(|row| {
@@ -1067,7 +1106,7 @@ pub fn refresh_selection(
     })
     .map(|row| ((row.relative.clone(), row.is_directory), row.clone()))
     .collect();
-  for row in fresh {
+  for row in fresh.entries {
     if row.is_directory
       && !names.contains(&(row.relative.clone(), true))
       && !selected_name(&row.relative, &expanded)
@@ -1081,7 +1120,7 @@ pub fn refresh_selection(
     }
     merged.insert((row.relative.clone(), row.is_directory), row);
   }
-  if merged.len() > MAX_ENTRIES * 2 {
+  if merged.len() > MAX_FOLDER_ENTRIES * 2 {
     return Err(FileError(
       "Refreshed presentation exceeds the bounded folder limit.".into(),
     ));
@@ -1089,7 +1128,10 @@ pub fn refresh_selection(
   let mut rows: Vec<_> = merged.into_values().collect();
   aggregate_directories(&mut rows);
   cancel(cancelled)?;
-  Ok(rows)
+  Ok(FolderScan {
+    entries: rows,
+    truncated,
+  })
 }
 
 fn selected_name(name: &str, selected: &[String]) -> bool {
@@ -1111,8 +1153,7 @@ fn scan_with_selection(
   refresh: bool,
   cancelled: &AtomicBool,
   progress: impl FnMut(usize) + Send,
-) -> Result<Vec<FolderEntry>, FileError> {
-  rules.validate()?;
+) -> Result<FolderScan, FileError> {
   cancel(cancelled)?;
   let compiled = compile_rules(&rules.text_rules)?;
   let single_side = left.as_os_str().is_empty() || right.as_os_str().is_empty();
@@ -1148,9 +1189,14 @@ fn scan_with_selection(
   let progress = ScanProgress::new(progress);
   let walk = |root: &Path, side: FolderSide| {
     if root.as_os_str().is_empty() {
-      Ok(BTreeMap::new())
+      Ok(Walk {
+        items: BTreeMap::new(),
+        truncated: false,
+      })
     } else {
-      collect(root, side, options, cancelled, &|| progress.advance())
+      collect(root, side, options, cancelled, MAX_FOLDER_ENTRIES, &|| {
+        progress.advance()
+      })
     }
   };
   let (a, b) = rayon::join(
@@ -1158,6 +1204,8 @@ fn scan_with_selection(
     || walk(&right, FolderSide::Right),
   );
   let (a, b) = (a?, b?);
+  let truncated = a.truncated || b.truncated;
+  let (a, b) = (a.items, b.items);
   let pairs = pair_names(&a, &b, rules);
   if let Some(selected) = selected {
     if !refresh
@@ -1387,7 +1435,10 @@ fn scan_with_selection(
     aggregate_directories(&mut rows);
   }
   progress.finish(a.len() + b.len());
-  Ok(rows)
+  Ok(FolderScan {
+    entries: rows,
+    truncated,
+  })
 }
 
 fn aggregate_directories(rows: &mut [FolderEntry]) {
@@ -1495,6 +1546,7 @@ mod tests {
         |_| {},
       )
       .unwrap()
+      .entries
     }
 
     fn times(&self, left: u64, right: u64) {
@@ -1507,6 +1559,58 @@ mod tests {
           .unwrap();
       }
     }
+  }
+
+  #[test]
+  fn a_walk_stops_at_the_limit_and_reports_truncation() {
+    let fixture = Fixture::new();
+    for index in 0..50 {
+      fs::write(fixture.left.join(format!("file-{index:02}")), b"x").unwrap();
+    }
+    let walk = collect(
+      &fixture.left,
+      FolderSide::Left,
+      &FolderOptions::default(),
+      &AtomicBool::new(false),
+      20,
+      &|| {},
+    )
+    .unwrap();
+    assert!(walk.truncated);
+    assert_eq!(walk.items.len(), 20);
+
+    let complete = collect(
+      &fixture.left,
+      FolderSide::Left,
+      &FolderOptions::default(),
+      &AtomicBool::new(false),
+      50,
+      &|| {},
+    )
+    .unwrap();
+    assert!(!complete.truncated);
+    assert_eq!(complete.items.len(), 50);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_name_that_is_not_unicode_becomes_an_error_row() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = Fixture::new();
+    let name = std::ffi::OsStr::from_bytes(b"bad-\xff");
+    fs::write(fixture.left.join(name), b"x").unwrap();
+    let walk = collect(
+      &fixture.left,
+      FolderSide::Left,
+      &FolderOptions::default(),
+      &AtomicBool::new(false),
+      10,
+      &|| {},
+    )
+    .unwrap();
+    let item = walk.items.values().next().unwrap();
+    assert_eq!(item.error.as_deref(), Some(NON_UNICODE_NAME));
   }
 
   #[test]
@@ -1579,7 +1683,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert_eq!(rows[0].status, FolderStatus::Different);
     assert_eq!(
       scan_pair(
@@ -2029,7 +2134,8 @@ mod tests {
         &cancelled,
         |_| {},
       )
-      .unwrap();
+      .unwrap()
+      .entries;
       assert!(!rows.is_empty());
       assert!(rows
         .iter()
@@ -2480,7 +2586,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     let refreshed_folder = refreshed
       .iter()
       .find(|row| row.relative == "collision" && row.is_directory)
@@ -2604,6 +2711,7 @@ mod tests {
       |_| {},
     )
     .unwrap()
+    .entries
     .is_empty());
     let flag = AtomicBool::new(false);
     assert!(scan_pair_with_rules(
@@ -2639,7 +2747,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "hello");
     assert_eq!(rows[0].status, FolderStatus::LeftOnly);
@@ -2669,7 +2778,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert!(rows
       .iter()
       .all(|row| !row.relative.split('/').any(|part| part == "node_modules")));
@@ -2691,7 +2801,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "node_modules");
     assert_eq!(rows[0].status, FolderStatus::LeftOnly);
@@ -2760,7 +2871,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].relative, "file");
     assert_eq!(rows[0].status, FolderStatus::Same);
@@ -2784,7 +2896,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert_eq!(rows.len(), 2);
     assert!(rows
       .iter()
@@ -2803,7 +2916,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].left_relative.as_deref(), Some("name.txt"));
     assert_eq!(rows[0].right_relative.as_deref(), Some("name.bin"));
@@ -3032,7 +3146,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert!(!refreshed.iter().any(|r| r.relative.ends_with("/old")));
     assert!(refreshed
       .iter()
@@ -3063,7 +3178,8 @@ mod tests {
       &AtomicBool::new(false),
       |_| {},
     )
-    .unwrap();
+    .unwrap()
+    .entries;
     assert!(!deleted
       .iter()
       .any(|r| r.relative.starts_with("parent/selected")));

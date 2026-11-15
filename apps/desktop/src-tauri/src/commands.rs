@@ -749,7 +749,7 @@ pub async fn scan_folders(
   job_id: String,
   app: tauri::AppHandle,
   state: State<'_, Arc<Resources>>,
-) -> Result<Vec<compare_fs::FolderEntry>, String> {
+) -> Result<compare_fs::FolderScan, String> {
   let resources = state.inner().clone();
   let flag = begin(&resources, &job_id)?;
   let event_id = job_id.clone();
@@ -782,6 +782,10 @@ pub async fn scan_folders(
         &flag,
         &mut progress,
       )
+      .map(|entries| compare_fs::FolderScan {
+        entries,
+        truncated: false,
+      })
     }
     .map_err(|e| e.to_string());
     drop(progress);
@@ -834,7 +838,7 @@ pub async fn compare_folder_selection(
   previous: Option<Vec<compare_fs::FolderEntry>>,
   job_id: String,
   state: State<'_, Arc<Resources>>,
-) -> Result<Vec<compare_fs::FolderEntry>, String> {
+) -> Result<compare_fs::FolderScan, String> {
   let resources = state.inner().clone();
   let flag = begin(&resources, &job_id)?;
   let result = worker(move || {
@@ -949,7 +953,7 @@ pub async fn preview_sync(
       .map_err(|e| e.to_string())?;
     if let Some(names) = selected {
       if names.is_empty()
-        || names.len() > 10_000
+        || names.len() > compare_fs::MAX_FOLDER_ENTRIES
         || names.iter().any(|name| {
           name.is_empty()
             || name.starts_with('/')

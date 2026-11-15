@@ -117,6 +117,11 @@ export interface FolderEntry {
   importance: ComparisonImportance;
 }
 export type FolderEntryKind = "file" | "directory" | "link";
+export interface FolderScan {
+  entries: FolderEntry[];
+  /** True when a side hit the entry limit; the rows are a prefix of the tree. */
+  truncated: boolean;
+}
 export interface Preview {
   id: string;
   operations: { relative: string; action: string }[];
@@ -332,7 +337,7 @@ interface Commands {
       jobId: string;
       rules?: FolderRules;
     };
-    result: FolderEntry[];
+    result: FolderScan;
   };
   preview_local_action: {
     args: { request: LocalActionRequest; jobId: string };
@@ -348,7 +353,7 @@ interface Commands {
       previous?: FolderEntry[];
       jobId: string;
     };
-    result: FolderEntry[];
+    result: FolderScan;
   };
   execute_local_action: {
     args: { id: string; jobId: string };
