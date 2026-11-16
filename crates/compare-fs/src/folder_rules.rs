@@ -1,7 +1,10 @@
 //! Read-only display rules. Operation plans deliberately retain their independent
 //! exact-path, content-hashed snapshots and never consume these display results.
 use super::*;
-use compare_text::{CompareOptions, DiffKind, UnimportantRule, WorkControl};
+use compare_text::{
+  compare_with_rules, CompareError, CompareOptions, DiffKind, TextError, UnimportantRule,
+  WorkControl,
+};
 use rayon::prelude::*;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, PoisonError};
@@ -9,7 +12,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
 
 const JS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
-const TEXT_LIMIT: u64 = 1024 * 1024;
+const TEXT_LIMIT: u64 = 8 * 1024 * 1024;
+const STREAM_CHUNK: usize = 256 * 1024;
+const TEXT_FALLBACK_DETAIL: &str = "Compared as binary: file too large for text rules.";
 
 #[cfg(test)]
 thread_local! {
@@ -700,17 +705,10 @@ fn stable(metadata: &fs::Metadata, after: &fs::Metadata) -> Result<(), FileError
   Ok(())
 }
 
-fn open(path: &Path, metadata: &fs::Metadata, limit: u64) -> Result<fs::File, FileError> {
+fn open(path: &Path, metadata: &fs::Metadata) -> Result<fs::File, FileError> {
   let current = fs::symlink_metadata(path)?;
   if current.is_symlink() || !current.is_file() {
     return Err(FileError("File changed while comparing.".into()));
-  }
-  if metadata.len() > limit {
-    return Err(FileError(if limit == TEXT_LIMIT {
-      "Rules-based text comparison requires each input to be at most 1 MiB.".into()
-    } else {
-      "Binary comparison requires each input to be at most 100 MiB.".into()
-    }));
   }
   let file = fs::File::open(path)?;
   stable(metadata, &file.metadata()?)?;
@@ -730,10 +728,10 @@ fn binary(
     checked_path(right, false)?;
     return Ok(ComparisonImportance::Important);
   }
-  let mut left = open(left, lm, MAX_FILE_BYTES)?;
-  let mut right = open(right, rm, MAX_FILE_BYTES)?;
-  let mut a = [0u8; 64 * 1024];
-  let mut b = [0u8; 64 * 1024];
+  let mut left = open(left, lm)?;
+  let mut right = open(right, rm)?;
+  let mut a = vec![0u8; STREAM_CHUNK];
+  let mut b = vec![0u8; STREAM_CHUNK];
   let mut offset = 0;
   while offset < lm.len() {
     cancel(cancelled)?;
@@ -764,9 +762,9 @@ fn read_text(
   metadata: &fs::Metadata,
   cancelled: &AtomicBool,
 ) -> Result<Vec<u8>, FileError> {
-  let mut file = open(path, metadata, TEXT_LIMIT)?;
+  let mut file = open(path, metadata)?;
   let mut bytes = Vec::new();
-  let mut chunk = [0u8; 64 * 1024];
+  let mut chunk = vec![0u8; STREAM_CHUNK];
   loop {
     cancel(cancelled)?;
     let count = file.read(&mut chunk)?;
@@ -774,9 +772,7 @@ fn read_text(
       break;
     }
     if bytes.len() + count > TEXT_LIMIT as usize {
-      return Err(FileError(
-        "Rules-based text comparison requires each input to be at most 1 MiB.".into(),
-      ));
+      return Err(FileError("File changed while comparing.".into()));
     }
     bytes.extend_from_slice(&chunk[..count]);
   }
@@ -788,9 +784,9 @@ fn read_text(
 }
 
 fn crc(path: &Path, metadata: &fs::Metadata, cancelled: &AtomicBool) -> Result<u32, FileError> {
-  let mut file = open(path, metadata, MAX_FILE_BYTES)?;
+  let mut file = open(path, metadata)?;
   let mut hasher = crc32fast::Hasher::new();
-  let mut chunk = [0u8; 64 * 1024];
+  let mut chunk = vec![0u8; STREAM_CHUNK];
   let mut remaining = metadata.len();
   while remaining > 0 {
     cancel(cancelled)?;
@@ -824,7 +820,7 @@ fn version(
   cancelled: &AtomicBool,
 ) -> Result<crate::windows_metadata::ExecutableVersion, FileError> {
   cancel(cancelled)?;
-  let file = open(path, metadata, MAX_FILE_BYTES)?;
+  let file = open(path, metadata)?;
   let result = crate::windows_metadata::file_version(path)?;
   stable(metadata, &file.metadata()?)?;
   stable(metadata, &fs::metadata(path)?)?;
@@ -840,6 +836,7 @@ struct ContentComparison<'a> {
   rules: &'a FolderRules,
   compiled: &'a [UnimportantRule],
   cancelled: &'a AtomicBool,
+  fell_back_to_binary: std::cell::Cell<bool>,
 }
 
 impl ContentComparison<'_> {
@@ -857,11 +854,22 @@ impl ContentComparison<'_> {
       }
       ContentMethod::Binary => binary(self.left, self.right, self.lm, self.rm, self.cancelled),
       ContentMethod::Rules => {
+        if self.lm.len() > TEXT_LIMIT || self.rm.len() > TEXT_LIMIT {
+          return self.fall_back_to_binary();
+        }
         let a = read_text(self.left, self.lm, self.cancelled)?;
         let b = read_text(self.right, self.rm, self.cancelled)?;
-        let left = compare_text::decode(&a, None).map_err(|e| FileError(e.to_string()))?;
-        let right = compare_text::decode(&b, None).map_err(|e| FileError(e.to_string()))?;
-        let spans = compare_text::compare_with_rules(
+        let left = match compare_text::decode(&a, None) {
+          Ok(text) => text,
+          Err(TextError::InputTooLarge) => return self.fall_back_to_binary(),
+          Err(e) => return Err(FileError(e.to_string())),
+        };
+        let right = match compare_text::decode(&b, None) {
+          Ok(text) => text,
+          Err(TextError::InputTooLarge) => return self.fall_back_to_binary(),
+          Err(e) => return Err(FileError(e.to_string())),
+        };
+        let spans = match compare_with_rules(
           left.text(),
           right.text(),
           CompareOptions {
@@ -871,8 +879,11 @@ impl ContentComparison<'_> {
           },
           self.compiled,
           WorkControl::new(self.cancelled, Duration::from_secs(2)),
-        )
-        .map_err(|e| FileError(e.to_string()))?;
+        ) {
+          Ok(spans) => spans,
+          Err(CompareError::InputTooLarge) => return self.fall_back_to_binary(),
+          Err(e) => return Err(FileError(e.to_string())),
+        };
         Ok(if spans.iter().any(|span| span.kind != DiffKind::Equal) {
           ComparisonImportance::Important
         } else if a == b {
@@ -882,6 +893,11 @@ impl ContentComparison<'_> {
         })
       }
     }
+  }
+
+  fn fall_back_to_binary(&self) -> Result<ComparisonImportance, FileError> {
+    self.fell_back_to_binary.set(true);
+    binary(self.left, self.right, self.lm, self.rm, self.cancelled)
   }
 
   fn compare(&self) -> Result<ComparisonImportance, FileError> {
@@ -1386,7 +1402,7 @@ fn scan_with_selection(
             let content = if lm.is_dir() {
                 ComparisonImportance::Equal
             } else {
-                ContentComparison {
+                let comparison = ContentComparison {
                     left: &left.join(ln.as_ref().unwrap()),
                     right: &right.join(rn.as_ref().unwrap()),
                     lm,
@@ -1394,8 +1410,16 @@ fn scan_with_selection(
                     rules,
                     compiled: &compiled,
                     cancelled,
+                    fell_back_to_binary: std::cell::Cell::new(false),
+                };
+                let importance = comparison.compare()?;
+                if comparison.fell_back_to_binary.get() {
+                    row.detail = Some(match row.detail.take() {
+                        Some(detail) => format!("{detail}; {TEXT_FALLBACK_DETAIL}"),
+                        None => TEXT_FALLBACK_DETAIL.into(),
+                    });
                 }
-                .compare()?
+                importance
             };
             let importance = if metadata_different {
                 ComparisonImportance::Important
@@ -1497,6 +1521,7 @@ fn aggregate_directories(rows: &mut [FolderEntry]) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::io::{Seek, SeekFrom, Write};
 
   /// Exact byte comparison, no quick test, zero timestamp tolerance: the pre-Phase 3 default.
   fn binary_rules() -> FolderRules {
@@ -1738,7 +1763,7 @@ mod tests {
     let scanned = fs::metadata(target.join("inside.txt")).unwrap();
     let swapped = parent.join("swapped");
     make_directory_link(&target, &swapped).unwrap();
-    let error = open(&swapped, &scanned, TEXT_LIMIT).unwrap_err();
+    let error = open(&swapped, &scanned).unwrap_err();
     assert_eq!(error.0, "File changed while comparing.");
   }
 
@@ -2203,7 +2228,7 @@ mod tests {
       crc(&path, &fs::metadata(&path).unwrap(), &cancelled).unwrap(),
       0
     );
-    let mut bytes = vec![0u8; 128 * 1024 + 1];
+    let mut bytes = vec![0u8; STREAM_CHUNK * 2 + 1];
     fixture.files(&bytes, &bytes);
     assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     *bytes.last_mut().unwrap() = 1;
@@ -2219,16 +2244,60 @@ mod tests {
     fs::write(&path, b"changed").unwrap();
     assert!(crc(&path, &old, &cancelled).is_err());
     assert!(crc(&path, &fs::metadata(&path).unwrap(), &AtomicBool::new(true)).is_err());
+  }
+
+  #[test]
+  fn files_above_one_hundred_mebibytes_are_compared_without_a_cap() {
+    const LARGE: u64 = 120 * 1024 * 1024;
+    let fixture = Fixture::new();
+    fixture.files(b"", b"");
+    for root in [&fixture.left, &fixture.right] {
+      fs::File::options()
+        .write(true)
+        .open(root.join("file"))
+        .unwrap()
+        .set_len(LARGE)
+        .unwrap();
+    }
+    let left = fixture.left.join("file");
+    let right = fixture.right.join("file");
+    let cancelled = AtomicBool::new(false);
+    assert_eq!(
+      crc(&left, &fs::metadata(&left).unwrap(), &cancelled).unwrap(),
+      crc(&right, &fs::metadata(&right).unwrap(), &cancelled).unwrap()
+    );
+    assert_eq!(fixture.scan(&binary_rules())[0].status, FolderStatus::Same);
+    let rules = FolderRules {
+      content: ContentMethod::Crc,
+      ..Default::default()
+    };
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Same);
     fs::File::options()
       .write(true)
-      .open(&path)
+      .open(&right)
       .unwrap()
-      .set_len(MAX_FILE_BYTES + 1)
+      .set_len(LARGE + 1)
       .unwrap();
-    assert!(crc(&path, &fs::metadata(&path).unwrap(), &cancelled)
-      .unwrap_err()
-      .to_string()
-      .contains("100 MiB"));
+    assert_eq!(
+      fixture.scan(&binary_rules())[0].status,
+      FolderStatus::Different
+    );
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
+    fs::File::options()
+      .write(true)
+      .open(&right)
+      .unwrap()
+      .set_len(LARGE)
+      .unwrap();
+    let mut last = fs::File::options().write(true).open(&right).unwrap();
+    last.seek(SeekFrom::Start(LARGE - 1)).unwrap();
+    last.write_all(&[1]).unwrap();
+    drop(last);
+    assert_eq!(
+      fixture.scan(&binary_rules())[0].status,
+      FolderStatus::Different
+    );
+    assert_eq!(fixture.scan(&rules)[0].status, FolderStatus::Different);
   }
 
   #[test]
@@ -2349,7 +2418,7 @@ mod tests {
   }
 
   #[test]
-  fn bounded_text_errors_are_rows_and_metadata_only_does_not_read_content() {
+  fn oversized_text_falls_back_to_binary_with_a_row_detail() {
     let fixture = Fixture::new();
     fixture.files(b"", b"");
     for root in [&fixture.left, &fixture.right] {
@@ -2365,19 +2434,34 @@ mod tests {
       ..Default::default()
     };
     let rows = fixture.scan(&rules);
-    assert_eq!(rows[0].status, FolderStatus::Error);
-    assert_eq!(rows[0].importance, ComparisonImportance::Unknown);
-    assert!(rows[0].error.as_ref().unwrap().contains("1 MiB"));
-    assert_eq!(fixture.scan(&binary_rules())[0].status, FolderStatus::Same);
+    assert_eq!(rows[0].status, FolderStatus::Same);
+    assert_eq!(rows[0].error, None);
+    assert_eq!(rows[0].detail.as_deref(), Some(TEXT_FALLBACK_DETAIL));
+    let mut right = fs::File::options()
+      .write(true)
+      .open(fixture.right.join("file"))
+      .unwrap();
+    right.seek(SeekFrom::Start(TEXT_LIMIT)).unwrap();
+    right.write_all(&[1]).unwrap();
+    drop(right);
+    let rows = fixture.scan(&rules);
+    assert_eq!(rows[0].status, FolderStatus::Different);
+    assert_eq!(rows[0].detail.as_deref(), Some(TEXT_FALLBACK_DETAIL));
+    assert_eq!(
+      fixture.scan(&binary_rules())[0].status,
+      FolderStatus::Different
+    );
     for root in [&fixture.left, &fixture.right] {
       fs::File::options()
         .write(true)
         .open(root.join("file"))
         .unwrap()
-        .set_len(MAX_FILE_BYTES + 1)
+        .set_len(TEXT_LIMIT)
         .unwrap();
     }
-    assert_eq!(fixture.scan(&binary_rules())[0].status, FolderStatus::Error);
+    let rows = fixture.scan(&rules);
+    assert_eq!(rows[0].status, FolderStatus::Same);
+    assert_eq!(rows[0].detail.as_deref(), Some(TEXT_FALLBACK_DETAIL));
     let rules = FolderRules {
       content: ContentMethod::None,
       compare_size: true,
@@ -2387,9 +2471,27 @@ mod tests {
   }
 
   #[test]
+  fn text_between_the_engine_cap_and_text_limit_falls_back_to_binary() {
+    let fixture = Fixture::new();
+    let line = b"shared line of text\n";
+    let body: Vec<u8> = line.iter().copied().cycle().take(2 * 1024 * 1024).collect();
+    let mut changed = body.clone();
+    *changed.last_mut().unwrap() = b'X';
+    fixture.files(&body, &changed);
+    let rules = FolderRules {
+      content: ContentMethod::Rules,
+      ..Default::default()
+    };
+    let rows = fixture.scan(&rules);
+    assert_eq!(rows[0].status, FolderStatus::Different);
+    assert_eq!(rows[0].error, None);
+    assert_eq!(rows[0].detail.as_deref(), Some(TEXT_FALLBACK_DETAIL));
+  }
+
+  #[test]
   fn byte_streaming_checks_all_chunks_and_detects_changed_snapshots() {
     let fixture = Fixture::new();
-    let mut bytes = vec![0u8; 128 * 1024 + 1];
+    let mut bytes = vec![0u8; STREAM_CHUNK * 2 + 1];
     fixture.files(&bytes, &bytes);
     let left = fixture.left.join("file");
     let right = fixture.right.join("file");
@@ -2413,7 +2515,7 @@ mod tests {
     assert_eq!(BINARY_CHUNK_READS.with(std::cell::Cell::get), 3);
     let old = fs::metadata(&left).unwrap();
     fs::write(&left, b"changed").unwrap();
-    assert!(open(&left, &old, MAX_FILE_BYTES).is_err());
+    assert!(open(&left, &old).is_err());
   }
 
   #[test]
@@ -2861,7 +2963,7 @@ mod tests {
     assert!(fixture
       .scan(&rules)
       .iter()
-      .any(|row| row.relative == "large" && row.status == FolderStatus::Error));
+      .any(|row| row.relative == "large" && row.status == FolderStatus::Same));
     let rows = scan_selected_with_rules(
       &fixture.left,
       &fixture.right,
@@ -3017,7 +3119,7 @@ mod tests {
   }
 
   #[test]
-  fn directory_descendant_orphans_and_errors_remain_visible() {
+  fn directory_descendant_orphans_and_text_fallbacks_remain_visible() {
     let fixture = Fixture::new();
     for root in [&fixture.left, &fixture.right] {
       fs::create_dir(root.join("parent")).unwrap();
@@ -3041,12 +3143,13 @@ mod tests {
       ..Default::default()
     });
     let parent = rows.iter().find(|r| r.relative == "parent").unwrap();
-    assert_eq!(parent.status, FolderStatus::Error);
-    assert_eq!(parent.importance, ComparisonImportance::Unknown);
-    assert!(parent.error.as_ref().unwrap().contains("descendants"));
+    assert_eq!(parent.status, FolderStatus::Different);
     assert!(rows
       .iter()
-      .any(|r| r.relative == "parent/large" && r.error.as_ref().unwrap().contains("1 MiB")));
+      .any(|r| r.relative == "parent/orphan" && r.status == FolderStatus::LeftOnly));
+    let large = rows.iter().find(|r| r.relative == "parent/large").unwrap();
+    assert_eq!(large.status, FolderStatus::Same);
+    assert_eq!(large.detail.as_deref(), Some(TEXT_FALLBACK_DETAIL));
   }
 
   #[test]

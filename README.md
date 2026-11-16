@@ -20,7 +20,7 @@ The headless Rust engine preserves UTF-8 line contents, LF/CRLF/CR line endings,
 - **Merge:** Three-way merge (base, left, right), conservative automatic conflict resolution, explicit conflict choice buttons, editable output editor, stale-input invalidation, and safe atomic saving.
 - **Integration:** Headless CLI, waiting Git difftool and mergetool modes, directory comparison mode, dark/light themes, recent session history, saved sessions, and per-file-type comparison profiles.
 
-Operational limits are enforced at the engine boundary: text inputs are bounded to 1 MiB and 20,000 lines per side; folder scans to 250,000 entries per root and 100 MiB per file. A larger tree shows a partial list with a warning, and Sync is disabled for it. These are enforced protective limits, not complete feature parity or a huge-file performance promise. See the [Usage Guide](docs/product/usage.md), [Validation Evidence](docs/engineering/validation.md), and [Data Safety Contract](docs/engineering/data-safety.md#implemented-local-backend) for full details.
+Operational limits are enforced at the engine boundary: text inputs are bounded to 1 MiB and 20,000 lines per side. Files whose text compare would exceed that cap fall back to binary comparison, with a row note. Folder scans are bounded to 250,000 entries per root. A larger tree shows a partial list with a warning, and Sync is disabled for it. These are enforced protective limits, not complete feature parity or a huge-file performance promise. See the [Usage Guide](docs/product/usage.md), [Validation Evidence](docs/engineering/validation.md), and [Data Safety Contract](docs/engineering/data-safety.md#implemented-local-backend) for full details.
 
 ## Development
 
