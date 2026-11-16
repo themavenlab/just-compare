@@ -115,6 +115,14 @@ export interface FolderEntry {
   newerMixed: boolean;
   error: string | null;
   importance: ComparisonImportance;
+  counts: FolderCounts;
+}
+/** Descendant file counts beneath a directory row. Folders are not counted. */
+export interface FolderCounts {
+  different: number;
+  leftOnly: number;
+  rightOnly: number;
+  error: number;
 }
 export type FolderEntryKind = "file" | "directory" | "link";
 export interface FolderScan {

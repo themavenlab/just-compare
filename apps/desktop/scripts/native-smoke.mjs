@@ -584,6 +584,7 @@ try {
   assert.equal(rows[0].leftKind, "file");
   assert.equal(rows[0].rightKind, null);
   assert.deepEqual(Object.keys(rows[0]).sort(), [
+    "counts",
     "detail",
     "error",
     "importance",

@@ -1310,6 +1310,7 @@ fn scan_with_selection(
             right_modified: rm.and_then(|m| m.modified().ok()).and_then(modified_ms),
             newer: None,
             newer_mixed: false,
+            counts: FolderCounts::default(),
             importance: ComparisonImportance::Unknown,
             error: None,
             detail: None,
@@ -1466,8 +1467,10 @@ fn scan_with_selection(
 }
 
 fn aggregate_directories(rows: &mut [FolderEntry]) {
-  // Aggregate immediate children deepest-first so each row contributes once.
-  // Only directories can be parents; a same-name file row must not shadow its folder.
+  // Every descendant row contributes to each ancestor directory row exactly once.
+  // Status and importance come from all descendants; counts and newer/newerMixed
+  // come from descendant files only. Only a paired `same` folder is promoted to
+  // `different`; one-sided and self-errored folders keep their own status.
   let mut by_name = BTreeMap::new();
   for (index, row) in rows.iter().enumerate() {
     if row.is_directory {
@@ -1476,44 +1479,50 @@ fn aggregate_directories(rows: &mut [FolderEntry]) {
   }
   let mut order: Vec<_> = (0..rows.len()).collect();
   order.sort_by_key(|&index| std::cmp::Reverse(rows[index].relative.matches('/').count()));
+  for row in rows.iter_mut().filter(|row| row.is_directory) {
+    row.counts = FolderCounts::default();
+  }
   for index in order {
-    let Some((parent, _)) = rows[index].relative.rsplit_once('/') else {
-      continue;
-    };
-    let Some(&parent_index) = by_name.get(parent) else {
-      continue;
-    };
-    let child_status = rows[index].status;
-    let child_importance = rows[index].importance;
-    let child_newer = rows[index].newer;
-    let child_mixed = rows[index].newer_mixed;
-    let parent = &mut rows[parent_index];
-    if child_status == FolderStatus::Error {
-      parent.status = FolderStatus::Error;
-      parent.importance = ComparisonImportance::Unknown;
-      if parent.error.is_none() {
-        parent.error = Some("One or more descendants could not be compared.".into());
-        parent.detail = parent.error.clone();
-      }
-    } else if parent.status != FolderStatus::Error {
-      if parent.status == FolderStatus::Same && child_status != FolderStatus::Same {
+    let child = rows[index].clone();
+    let mut ancestor = child.relative.as_str();
+    while let Some((parent, _)) = ancestor.rsplit_once('/') {
+      ancestor = parent;
+      let Some(&parent_index) = by_name.get(parent) else {
+        continue;
+      };
+      let parent = &mut rows[parent_index];
+      if matches!(
+        child.status,
+        FolderStatus::Different | FolderStatus::LeftOnly | FolderStatus::RightOnly
+      ) && parent.status == FolderStatus::Same
+      {
         parent.status = FolderStatus::Different;
       }
-      if child_importance == ComparisonImportance::Important {
+      if child.importance == ComparisonImportance::Important {
         parent.importance = ComparisonImportance::Important;
-      } else if child_importance == ComparisonImportance::Unimportant
+      } else if child.importance == ComparisonImportance::Unimportant
         && parent.importance == ComparisonImportance::Equal
       {
         parent.importance = ComparisonImportance::Unimportant;
       }
-    }
-    if child_mixed
-      || (parent.newer.is_some() && child_newer.is_some() && parent.newer != child_newer)
-    {
-      parent.newer_mixed = true;
-      parent.newer = None;
-    } else if !parent.newer_mixed && child_newer.is_some() {
-      parent.newer = child_newer;
+      if child.is_directory {
+        continue;
+      }
+      match child.status {
+        FolderStatus::Different => parent.counts.different += 1,
+        FolderStatus::LeftOnly => parent.counts.left_only += 1,
+        FolderStatus::RightOnly => parent.counts.right_only += 1,
+        FolderStatus::Error => parent.counts.error += 1,
+        FolderStatus::Same => {}
+      }
+      if child.newer_mixed
+        || (parent.newer.is_some() && child.newer.is_some() && parent.newer != child.newer)
+      {
+        parent.newer_mixed = true;
+        parent.newer = None;
+      } else if !parent.newer_mixed && child.newer.is_some() {
+        parent.newer = child.newer;
+      }
     }
   }
 }
@@ -3119,7 +3128,130 @@ mod tests {
   }
 
   #[test]
-  fn directory_descendant_orphans_and_text_fallbacks_remain_visible() {
+  fn refreshed_selection_recomputes_directory_counts_without_double_counting() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("parent").join("sub")).unwrap();
+    }
+    fs::write(fixture.left.join("parent").join("sub").join("diff"), b"a").unwrap();
+    fs::write(fixture.right.join("parent").join("sub").join("diff"), b"b").unwrap();
+    fs::write(fixture.left.join("parent").join("left-only"), b"x").unwrap();
+    let rules = FolderRules {
+      content: ContentMethod::Rules,
+      ..Default::default()
+    };
+    let full = fixture.scan(&rules);
+    let refreshed = refresh_selection(
+      &fixture.left,
+      &fixture.right,
+      &FolderOptions::default(),
+      &rules,
+      &["parent/sub".into()],
+      &full,
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .unwrap()
+    .entries;
+    let counts_of = |rows: &[FolderEntry], relative: &str| {
+      rows.iter().find(|r| r.relative == relative).unwrap().counts
+    };
+    assert_eq!(counts_of(&refreshed, "parent"), counts_of(&full, "parent"));
+    assert_eq!(
+      counts_of(&refreshed, "parent"),
+      FolderCounts {
+        different: 1,
+        left_only: 1,
+        ..Default::default()
+      }
+    );
+  }
+
+  #[test]
+  fn directory_counts_and_status_follow_the_descendant_aggregation_rules() {
+    let fixture = Fixture::new();
+    let parent = |root: &Path| root.join("parent");
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(parent(root).join("nested")).unwrap();
+    }
+    // Differs in content at depth 2; counted once per file, not per ancestor.
+    fs::write(parent(&fixture.left).join("nested").join("diff"), b"a").unwrap();
+    fs::write(parent(&fixture.right).join("nested").join("diff"), b"b").unwrap();
+    // Left-only and right-only files at depth 1.
+    fs::write(parent(&fixture.left).join("left-only"), b"x").unwrap();
+    fs::write(parent(&fixture.right).join("right-only"), b"x").unwrap();
+    // An unreadable-as-text descendant on both sides: the file errors, the folder does not.
+    fs::write(parent(&fixture.left).join("bad"), b"\xff").unwrap();
+    fs::write(parent(&fixture.right).join("bad"), b"\xff").unwrap();
+    // An empty orphan folder is a LeftOnly descendant row and must mark the parent different.
+    fs::create_dir(parent(&fixture.left).join("orphan-dir")).unwrap();
+    // An unreadable-as-text file deep in an otherwise identical tree: ancestors stay same.
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("quiet").join("deep")).unwrap();
+      fs::write(root.join("quiet").join("deep").join("bad"), b"\xff").unwrap();
+    }
+    let rows = fixture.scan(&FolderRules {
+      content: ContentMethod::Rules,
+      ..Default::default()
+    });
+    let row = |relative: &str| rows.iter().find(|r| r.relative == relative).unwrap();
+    assert_eq!(row("quiet/deep/bad").status, FolderStatus::Error);
+    assert_eq!(row("quiet/deep").status, FolderStatus::Same);
+    assert_eq!(row("quiet").status, FolderStatus::Same);
+    assert_eq!(
+      row("quiet").counts,
+      FolderCounts {
+        error: 1,
+        ..Default::default()
+      }
+    );
+
+    let parent_row = row("parent");
+    assert_eq!(parent_row.status, FolderStatus::Different);
+    assert_eq!(
+      parent_row.counts,
+      FolderCounts {
+        different: 1,
+        left_only: 1,
+        right_only: 1,
+        error: 1,
+      }
+    );
+    assert_eq!(row("parent/nested").status, FolderStatus::Different);
+    assert_eq!(
+      row("parent/nested").counts,
+      FolderCounts {
+        different: 1,
+        ..Default::default()
+      }
+    );
+    assert_eq!(row("parent/bad").status, FolderStatus::Error);
+    assert_eq!(row("parent/orphan-dir").status, FolderStatus::LeftOnly);
+    let value = serde_json::to_value(parent_row).unwrap();
+    assert_eq!(value["counts"]["leftOnly"], 1);
+    assert_eq!(value["counts"]["rightOnly"], 1);
+  }
+
+  #[test]
+  fn one_sided_and_identical_folders_keep_their_own_status_and_fold_descendants() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.left.join("solo").join("deep")).unwrap();
+    fs::write(fixture.left.join("solo").join("deep").join("file"), b"x").unwrap();
+    // Same-name folder on both sides with identical files stays same.
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("paired")).unwrap();
+      fs::write(root.join("paired").join("file"), b"same").unwrap();
+    }
+    let rows = fixture.scan(&binary_rules());
+    let row = |relative: &str| rows.iter().find(|r| r.relative == relative).unwrap();
+    assert_eq!(row("solo").status, FolderStatus::LeftOnly);
+    assert_eq!(row("solo").counts.left_only, 1);
+    assert_eq!(row("paired").status, FolderStatus::Same);
+    assert_eq!(row("paired").counts, FolderCounts::default());
+  }
+
+  #[test]
+  fn directory_descendant_orphans_and_errors_remain_visible() {
     let fixture = Fixture::new();
     for root in [&fixture.left, &fixture.right] {
       fs::create_dir(root.join("parent")).unwrap();

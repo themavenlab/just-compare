@@ -44,6 +44,7 @@ const entry = (
   newer: null,
   newerMixed: false,
   error: null,
+  counts: { different: 0, leftOnly: 0, rightOnly: 0, error: 0 },
   importance:
     status === "same" ? "equal" : status === "error" ? "unknown" : "important",
 });

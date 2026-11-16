@@ -81,6 +81,16 @@ impl FolderStatus {
   }
 }
 
+/// Descendant file counts beneath a directory row. Files only; folders are not counted.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderCounts {
+  pub different: u64,
+  pub left_only: u64,
+  pub right_only: u64,
+  pub error: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntry {
@@ -100,6 +110,7 @@ pub struct FolderEntry {
   pub error: Option<String>,
   pub detail: Option<String>,
   pub is_directory: bool,
+  pub counts: FolderCounts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -543,6 +554,7 @@ fn scan_entry(
       _ => None,
     },
     newer_mixed: false,
+    counts: FolderCounts::default(),
     importance: match status {
       FolderStatus::Same => ComparisonImportance::Equal,
       FolderStatus::Error => ComparisonImportance::Unknown,
