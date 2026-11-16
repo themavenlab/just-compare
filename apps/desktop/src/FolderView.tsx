@@ -619,7 +619,11 @@ export function FolderView({
                             }
                             onClick={() => onAction("copySide", [entry], pane)}
                           >
-                            {pane === "left" ? "\u2192" : "\u2190"}
+                            {pane === "left" ? (
+                              <Icon name="copyRight" />
+                            ) : (
+                              <Icon name="copyLeft" />
+                            )}
                           </button>
                         </span>
                       )}

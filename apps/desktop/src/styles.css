@@ -1513,7 +1513,6 @@ body,
   position: absolute;
   right: 0;
   top: 0;
-  background: var(--surface);
 }
 .folder-side:hover .row-hover-actions,
 .folder-side:focus-within .row-hover-actions {
