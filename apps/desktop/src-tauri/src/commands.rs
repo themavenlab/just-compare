@@ -16,6 +16,7 @@ pub struct Resources {
   documents: Mutex<HashMap<String, Document>>,
   plans: Mutex<BoundedPlans<Plan>>,
   file_plans: Mutex<BoundedPlans<compare_fs::file_actions::FileActionPlan>>,
+  scans: Mutex<BoundedPlans<CachedScan>>,
   jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
   next: AtomicU64,
   pub git_accepted: AtomicBool,
@@ -56,6 +57,41 @@ impl<T> BoundedPlans<T> {
     self.insertion_order.retain(|existing| existing != id);
     self.entries.remove(id)
   }
+}
+
+/// A folder scan kept so later refreshes can recompare only the affected paths.
+struct CachedScan {
+  left_root: String,
+  right_root: String,
+  rules: compare_fs::FolderRules,
+  options: FolderOptions,
+  entries: Vec<compare_fs::FolderEntry>,
+}
+
+const SCAN_EXPIRED: &str = "Scan expired; run a full rescan.";
+
+/// Takes a cached scan out of the store so a refresh owns it exclusively. The caller must
+/// put it back with `store_cached_scan` when it is still valid.
+fn take_cached_scan(resources: &Resources, scan_id: &str) -> Result<CachedScan, String> {
+  resources
+    .scans
+    .lock()
+    .map_err(|e| e.to_string())?
+    .remove(scan_id)
+    .ok_or_else(|| SCAN_EXPIRED.to_string())
+}
+
+fn store_cached_scan(
+  resources: &Resources,
+  scan_id: String,
+  scan: CachedScan,
+) -> Result<(), String> {
+  resources
+    .scans
+    .lock()
+    .map_err(|e| e.to_string())?
+    .insert(scan_id, scan);
+  Ok(())
 }
 
 impl Resources {
@@ -753,6 +789,9 @@ pub async fn scan_folders(
   let resources = state.inner().clone();
   let flag = begin(&resources, &job_id)?;
   let event_id = job_id.clone();
+  let cache_rules = rules.clone();
+  let cache_options = options.clone();
+  let (left_root, right_root) = (left.clone(), right.clone());
   let result = worker(move || {
     let mut event_error = None;
     let mut throttle = ProgressThrottle::new(Instant::now());
@@ -783,6 +822,7 @@ pub async fn scan_folders(
         &mut progress,
       )
       .map(|entries| compare_fs::FolderScan {
+        scan_id: String::new(),
         entries,
         truncated: false,
       })
@@ -800,12 +840,84 @@ pub async fn scan_folders(
     result
   })
   .await;
+  let result = result.and_then(|mut scan| {
+    // Only rules-engine scans can be refreshed incrementally; the legacy path has no cache.
+    if let Some(rules) = cache_rules {
+      scan.scan_id = resources.id();
+      store_cached_scan(
+        &resources,
+        scan.scan_id.clone(),
+        CachedScan {
+          left_root,
+          right_root,
+          rules,
+          options: cache_options,
+          entries: scan.entries.clone(),
+        },
+      )?;
+    }
+    Ok(scan)
+  });
   resources
     .jobs
     .lock()
     .map_err(|e| e.to_string())?
     .remove(&job_id);
   result
+}
+
+#[tauri::command]
+pub async fn refresh_folder_paths(
+  scan_id: String,
+  paths: Vec<String>,
+  job_id: String,
+  state: State<'_, Arc<Resources>>,
+) -> Result<compare_fs::FolderPatch, String> {
+  let resources = state.inner().clone();
+  let flag = begin(&resources, &job_id)?;
+  let result = refresh_cached_scan(&resources, &scan_id, &paths, &flag).await;
+  resources
+    .jobs
+    .lock()
+    .map_err(|e| e.to_string())?
+    .remove(&job_id);
+  result
+}
+
+async fn refresh_cached_scan(
+  resources: &Arc<Resources>,
+  scan_id: &str,
+  paths: &[String],
+  flag: &Arc<AtomicBool>,
+) -> Result<compare_fs::FolderPatch, String> {
+  let cached = take_cached_scan(resources, scan_id)?;
+  let worker_flag = flag.clone();
+  let paths = paths.to_vec();
+  // The scan moves into the worker and comes back with the outcome. It is stored again
+  // only after a successful patch, so a failed or cancelled refresh never leaves a
+  // half-applied cache entry. A cancelled refresh is recovered by a full rescan.
+  let (cached, outcome) = worker(move || {
+    let mut cached = cached;
+    let outcome = compare_fs::refresh_paths(
+      Path::new(&cached.left_root),
+      Path::new(&cached.right_root),
+      &cached.options,
+      &cached.rules,
+      &cached.entries,
+      &paths,
+      &worker_flag,
+      |_| {},
+    )
+    .inspect(|patch| {
+      patch.apply_to(&mut cached.entries);
+    })
+    .map_err(|e| e.to_string());
+    Ok((cached, outcome))
+  })
+  .await?;
+  let patch = outcome?;
+  store_cached_scan(resources, scan_id.to_string(), cached)?;
+  Ok(patch)
 }
 
 #[derive(Serialize)]
@@ -1376,6 +1488,24 @@ mod tests {
     assert_eq!(plans.remove("preview-4"), Some(4));
     assert!(!plans.entries.contains_key("preview-4"));
     assert_eq!(plans.insertion_order.len(), 7);
+  }
+
+  #[test]
+  fn refresh_of_an_unknown_or_consumed_scan_reports_expiry() {
+    let resources = Resources::default();
+    let error = take_cached_scan(&resources, "missing").err();
+    assert_eq!(error.as_deref(), Some("Scan expired; run a full rescan."));
+
+    let scan = CachedScan {
+      left_root: "left".into(),
+      right_root: "right".into(),
+      rules: compare_fs::FolderRules::default(),
+      options: compare_fs::FolderOptions::default(),
+      entries: Vec::new(),
+    };
+    store_cached_scan(&resources, "scan-1".into(), scan).unwrap();
+    assert!(take_cached_scan(&resources, "scan-1").is_ok());
+    assert!(take_cached_scan(&resources, "scan-1").is_err());
   }
 
   #[test]

@@ -13,9 +13,9 @@ const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 #[path = "folder_rules.rs"]
 mod folder_rules;
 pub use folder_rules::{
-  refresh_selection, scan_pair_with_rules, scan_selected_with_rules, validate_folder_configuration,
-  ComparisonImportance, ContentMethod, FolderRules, FolderScan, FolderSide, FolderTextRules,
-  QuickTest, QuickTestPolicy,
+  refresh_paths, refresh_selection, scan_pair_with_rules, scan_selected_with_rules,
+  validate_folder_configuration, ComparisonImportance, ContentMethod, FolderPatch, FolderRules,
+  FolderScan, FolderSide, FolderTextRules, QuickTest, QuickTestPolicy, RowId,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

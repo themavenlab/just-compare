@@ -126,9 +126,21 @@ export interface FolderCounts {
 }
 export type FolderEntryKind = "file" | "directory" | "link";
 export interface FolderScan {
+  /** Handle for `refresh_folder_paths`. Empty when the scan is not cached. */
+  scanId: string;
   entries: FolderEntry[];
   /** True when a side hit the entry limit; the rows are a prefix of the tree. */
   truncated: boolean;
+}
+/** Identity of a folder row; kind is part of identity. */
+export interface FolderRowId {
+  relative: string;
+  isDirectory: boolean;
+}
+/** Row changes from a scoped refresh. Apply `removed` first, then upsert `upserted`. */
+export interface FolderPatch {
+  removed: FolderRowId[];
+  upserted: FolderEntry[];
 }
 export interface Preview {
   id: string;
@@ -346,6 +358,10 @@ interface Commands {
       rules?: FolderRules;
     };
     result: FolderScan;
+  };
+  refresh_folder_paths: {
+    args: { scanId: string; paths: string[]; jobId: string };
+    result: FolderPatch;
   };
   preview_local_action: {
     args: { request: LocalActionRequest; jobId: string };

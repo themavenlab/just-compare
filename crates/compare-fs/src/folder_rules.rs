@@ -296,8 +296,44 @@ const NON_UNICODE_NAME: &str = "Name is not valid Unicode; it cannot be compared
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderScan {
+  /// Assigned by the caller that caches the scan; the engine leaves it empty.
+  pub scan_id: String,
   pub entries: Vec<FolderEntry>,
   pub truncated: bool,
+}
+
+/// Identity of a folder row. Kind is part of identity: a file and a folder may share a name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowId {
+  pub relative: String,
+  pub is_directory: bool,
+}
+
+/// Row changes produced by [`refresh_paths`]. Applying it to the previous rows yields the new rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderPatch {
+  pub removed: Vec<RowId>,
+  pub upserted: Vec<FolderEntry>,
+}
+
+impl FolderPatch {
+  pub fn apply_to(&self, entries: &mut Vec<FolderEntry>) {
+    let changed: BTreeSet<(&str, bool)> = self
+      .removed
+      .iter()
+      .map(|id| (id.relative.as_str(), id.is_directory))
+      .chain(
+        self
+          .upserted
+          .iter()
+          .map(|row| (row.relative.as_str(), row.is_directory)),
+      )
+      .collect();
+    entries.retain(|row| !changed.contains(&(row.relative.as_str(), row.is_directory)));
+    entries.extend(self.upserted.iter().cloned());
+  }
 }
 
 struct Walk {
@@ -1145,9 +1181,121 @@ pub fn refresh_selection(
   aggregate_directories(&mut rows);
   cancel(cancelled)?;
   Ok(FolderScan {
+    scan_id: String::new(),
     entries: rows,
     truncated,
   })
+}
+
+/// Recompute the rows under `paths` (relative folder row paths; `""` is the whole root) and
+/// return only what changed. Every folder row is recomputed so aggregates stay exact, while
+/// file contents are compared only under `paths`. A path missing on both sides has no fresh
+/// rows, so its previous rows are removed.
+#[allow(clippy::too_many_arguments)]
+pub fn refresh_paths(
+  left: &Path,
+  right: &Path,
+  options: &FolderOptions,
+  rules: &FolderRules,
+  previous: &[FolderEntry],
+  paths: &[String],
+  cancelled: &AtomicBool,
+  progress: impl FnMut(usize) + Send,
+) -> Result<FolderPatch, FileError> {
+  cancel(cancelled)?;
+  if paths.is_empty() {
+    return Ok(FolderPatch::default());
+  }
+  if previous.len() > MAX_FOLDER_ENTRIES * 2 {
+    return Err(FileError(
+      "Previous presentation exceeds the bounded folder limit.".into(),
+    ));
+  }
+  let whole_root = paths.iter().any(String::is_empty)
+    || left.as_os_str().is_empty()
+    || right.as_os_str().is_empty();
+  let named: Vec<String> = paths.iter().filter(|p| !p.is_empty()).cloned().collect();
+  if !named.is_empty() {
+    validate_selection(&named)?;
+  }
+  let named = normalize_paths(named);
+  let scope = (!whole_root).then_some(named.as_slice());
+  let fresh = scan_with_selection(
+    left,
+    right,
+    options,
+    rules,
+    scope,
+    scope.is_some(),
+    cancelled,
+    progress,
+  )?;
+  let in_scope = |row: &FolderEntry| {
+    scope.is_none_or(|scope| {
+      [
+        Some(row.relative.as_str()),
+        row.left_relative.as_deref(),
+        row.right_relative.as_deref(),
+      ]
+      .into_iter()
+      .flatten()
+      .any(|name| selected_name(name, scope))
+    })
+  };
+  let key = |row: &FolderEntry| (row.relative.clone(), row.is_directory);
+  // Folder rows are always fresh (they carry aggregates); file rows are kept outside scope.
+  let mut merged: BTreeMap<(String, bool), FolderEntry> = previous
+    .iter()
+    .filter(|row| !row.is_directory && !in_scope(row))
+    .map(|row| (key(row), row.clone()))
+    .collect();
+  for row in fresh.entries {
+    if row.is_directory || in_scope(&row) {
+      merged.insert(key(&row), row);
+    }
+  }
+  if merged.len() > MAX_FOLDER_ENTRIES * 2 {
+    return Err(FileError(
+      "Refreshed presentation exceeds the bounded folder limit.".into(),
+    ));
+  }
+  let mut rows: Vec<_> = merged.into_values().collect();
+  aggregate_directories(&mut rows);
+  cancel(cancelled)?;
+
+  let previous_by_key: BTreeMap<(String, bool), &FolderEntry> =
+    previous.iter().map(|row| (key(row), row)).collect();
+  let current_keys: BTreeSet<(String, bool)> = rows.iter().map(key).collect();
+  let removed = previous_by_key
+    .keys()
+    .filter(|id| !current_keys.contains(*id))
+    .map(|(relative, is_directory)| RowId {
+      relative: relative.clone(),
+      is_directory: *is_directory,
+    })
+    .collect();
+  let upserted = rows
+    .into_iter()
+    .filter(|row| previous_by_key.get(&key(row)).is_none_or(|old| *old != row))
+    .collect();
+  Ok(FolderPatch { removed, upserted })
+}
+
+/// Sorts and deduplicates paths, then drops every path already covered by a listed ancestor.
+/// Sorting places an ancestor before its descendants, so one pass suffices.
+fn normalize_paths(mut paths: Vec<String>) -> Vec<String> {
+  paths.sort();
+  paths.dedup();
+  let mut kept: Vec<String> = Vec::with_capacity(paths.len());
+  for path in paths {
+    if !kept
+      .iter()
+      .any(|ancestor| selected_name(&path, std::slice::from_ref(ancestor)))
+    {
+      kept.push(path);
+    }
+  }
+  kept
 }
 
 fn selected_name(name: &str, selected: &[String]) -> bool {
@@ -1461,6 +1609,7 @@ fn scan_with_selection(
   }
   progress.finish(a.len() + b.len());
   Ok(FolderScan {
+    scan_id: String::new(),
     entries: rows,
     truncated,
   })
@@ -3520,5 +3669,269 @@ mod tests {
       |_| {},
     )
     .is_err());
+  }
+
+  fn sorted_rows(rows: &[FolderEntry]) -> Vec<FolderEntry> {
+    let mut rows = rows.to_vec();
+    rows.sort_by(|a, b| (&a.relative, a.is_directory).cmp(&(&b.relative, b.is_directory)));
+    rows
+  }
+
+  /// Refreshing `paths` and applying the patch to `previous` must reproduce a full rescan
+  /// of the current disk state exactly.
+  fn refresh_matches_full_scan(
+    fixture: &Fixture,
+    rules: &FolderRules,
+    previous: &[FolderEntry],
+    paths: &[&str],
+  ) -> FolderPatch {
+    let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+    let patch = refresh_paths(
+      &fixture.left,
+      &fixture.right,
+      &FolderOptions::default(),
+      rules,
+      previous,
+      &paths,
+      &AtomicBool::new(false),
+      |_| {},
+    )
+    .unwrap();
+    let mut patched = previous.to_vec();
+    patch.apply_to(&mut patched);
+    // NTFS updates a directory's own timestamp lazily in its parent's index, so a
+    // directory's modified time read right after a write can lag a later scan.
+    // Directory status is aggregated from children, so compare directory times loosely.
+    let normalize = |rows: Vec<FolderEntry>| -> Vec<FolderEntry> {
+      rows
+        .into_iter()
+        .map(|mut row| {
+          if row.is_directory {
+            row.left_modified = None;
+            row.right_modified = None;
+          }
+          row
+        })
+        .collect()
+    };
+    assert_eq!(
+      normalize(sorted_rows(&patched)),
+      normalize(sorted_rows(&fixture.scan(rules)))
+    );
+    patch
+  }
+
+  fn row<'a>(rows: &'a [FolderEntry], relative: &str) -> &'a FolderEntry {
+    rows.iter().find(|row| row.relative == relative).unwrap()
+  }
+
+  #[test]
+  fn refresh_paths_picks_up_a_file_added_inside_a_refreshed_folder() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir(root.join("parent")).unwrap();
+    }
+    fs::write(fixture.left.join("parent").join("same"), b"a").unwrap();
+    fs::write(fixture.right.join("parent").join("same"), b"a").unwrap();
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    fs::write(fixture.left.join("parent").join("added"), b"x").unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["parent"]);
+
+    assert!(patch.removed.is_empty());
+    assert_eq!(
+      row(&patch.upserted, "parent/added").status,
+      FolderStatus::LeftOnly
+    );
+    assert_eq!(
+      row(&patch.upserted, "parent").status,
+      FolderStatus::Different
+    );
+  }
+
+  #[test]
+  fn refresh_paths_one_sided_deletion_turns_the_folder_one_sided() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("parent").join("sub")).unwrap();
+      fs::write(root.join("parent").join("sub").join("file"), b"a").unwrap();
+    }
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    fs::remove_dir_all(fixture.left.join("parent")).unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["parent"]);
+
+    assert!(patch.removed.is_empty());
+    assert_eq!(
+      row(&patch.upserted, "parent").status,
+      FolderStatus::RightOnly
+    );
+    assert_eq!(
+      row(&patch.upserted, "parent/sub/file").status,
+      FolderStatus::RightOnly
+    );
+  }
+
+  #[test]
+  fn refresh_paths_removes_rows_for_a_folder_deleted_on_both_sides() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("gone").join("sub")).unwrap();
+      fs::write(root.join("gone").join("sub").join("file"), b"a").unwrap();
+    }
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    fs::remove_dir_all(fixture.left.join("gone")).unwrap();
+    fs::remove_dir_all(fixture.right.join("gone")).unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["gone"]);
+
+    assert!(patch.upserted.is_empty());
+    for (relative, is_directory) in [("gone", true), ("gone/sub", true), ("gone/sub/file", false)] {
+      assert!(patch.removed.contains(&RowId {
+        relative: relative.into(),
+        is_directory,
+      }));
+    }
+  }
+
+  #[test]
+  fn refresh_paths_turns_an_orphan_folder_same_when_the_other_side_matches() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.left.join("orphan")).unwrap();
+    fs::write(fixture.left.join("orphan").join("x"), b"a").unwrap();
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    assert_eq!(row(&previous, "orphan").status, FolderStatus::LeftOnly);
+    fs::create_dir(fixture.right.join("orphan")).unwrap();
+    fs::write(fixture.right.join("orphan").join("x"), b"a").unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["orphan"]);
+
+    assert_eq!(row(&patch.upserted, "orphan").status, FolderStatus::Same);
+    assert_eq!(row(&patch.upserted, "orphan/x").status, FolderStatus::Same);
+  }
+
+  #[test]
+  fn refresh_paths_replaces_a_file_with_a_folder_of_the_same_name() {
+    let fixture = Fixture::new();
+    fixture.files(b"a", b"a");
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    fs::remove_file(fixture.left.join("file")).unwrap();
+    fs::create_dir(fixture.left.join("file")).unwrap();
+    fs::write(fixture.left.join("file").join("inner"), b"x").unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["file"]);
+
+    // The right side still has a file, so the old file row becomes right-only rather than
+    // disappearing; the new folder row and its child are added.
+    assert!(!patch.removed.contains(&RowId {
+      relative: "file".into(),
+      is_directory: false,
+    }));
+    let old_file = patch
+      .upserted
+      .iter()
+      .find(|row| row.relative == "file" && !row.is_directory)
+      .unwrap();
+    assert_eq!(old_file.status, FolderStatus::RightOnly);
+    assert!(patch.upserted.iter().any(|row| row.relative == "file"
+      && row.is_directory
+      && row.left_kind == Some(FolderEntryKind::Directory)));
+    assert!(patch
+      .upserted
+      .iter()
+      .any(|row| row.relative == "file/inner"));
+  }
+
+  #[test]
+  fn refresh_paths_makes_an_ancestor_same_after_the_last_missing_file_is_copied() {
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.left.join("parent")).unwrap();
+    fs::create_dir(fixture.right.join("parent")).unwrap();
+    fs::write(fixture.left.join("parent").join("missing"), b"a").unwrap();
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    assert_eq!(row(&previous, "parent").status, FolderStatus::Different);
+    fs::write(fixture.right.join("parent").join("missing"), b"a").unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["parent/missing"]);
+
+    assert_eq!(row(&patch.upserted, "parent").status, FolderStatus::Same);
+  }
+
+  #[test]
+  fn refresh_paths_root_request_matches_a_full_rescan() {
+    let fixture = Fixture::new();
+    fixture.files(b"a", b"b");
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    fs::write(fixture.left.join("added"), b"x").unwrap();
+
+    refresh_matches_full_scan(&fixture, &rules, &previous, &[""]);
+  }
+
+  #[test]
+  fn refresh_paths_walks_up_from_a_path_missing_on_both_sides() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("parent")).unwrap();
+      fs::write(root.join("parent").join("keep"), b"k").unwrap();
+      fs::write(root.join("parent").join("gone"), b"g").unwrap();
+    }
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+    fs::remove_file(fixture.left.join("parent").join("gone")).unwrap();
+    fs::remove_file(fixture.right.join("parent").join("gone")).unwrap();
+
+    let patch = refresh_matches_full_scan(&fixture, &rules, &previous, &["parent/gone"]);
+
+    assert!(patch.removed.contains(&RowId {
+      relative: "parent/gone".into(),
+      is_directory: false,
+    }));
+    assert!(patch.upserted.iter().any(|row| row.relative == "parent"));
+  }
+
+  #[test]
+  fn refresh_paths_treats_duplicate_and_nested_paths_as_their_ancestor() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("parent").join("sub")).unwrap();
+    }
+    fs::write(fixture.left.join("parent").join("sub").join("new"), b"x").unwrap();
+    let rules = FolderRules::default();
+    let previous = fixture.scan(&rules);
+
+    let plain = refresh_matches_full_scan(&fixture, &rules, &previous, &["parent"]);
+    let noisy = refresh_matches_full_scan(
+      &fixture,
+      &rules,
+      &previous,
+      &["parent/sub", "parent", "parent/sub"],
+    );
+
+    assert_eq!(plain, noisy);
+  }
+
+  #[test]
+  fn refresh_paths_rejects_invalid_paths() {
+    let fixture = Fixture::new();
+    for paths in [vec!["../escape".to_string()], vec!["a//b".to_string()]] {
+      assert!(refresh_paths(
+        &fixture.left,
+        &fixture.right,
+        &FolderOptions::default(),
+        &FolderRules::default(),
+        &[],
+        &paths,
+        &AtomicBool::new(false),
+        |_| {},
+      )
+      .is_err());
+    }
   }
 }

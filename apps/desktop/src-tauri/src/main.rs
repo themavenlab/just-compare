@@ -111,6 +111,7 @@ fn main() {
       commands::save_document,
       commands::merge_text,
       commands::scan_folders,
+      commands::refresh_folder_paths,
       commands::validate_folder_rules,
       commands::normalize_folder_roots,
       commands::relative_folder_path,
