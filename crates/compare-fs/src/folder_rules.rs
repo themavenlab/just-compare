@@ -3250,6 +3250,70 @@ mod tests {
     assert_eq!(row("paired").counts, FolderCounts::default());
   }
 
+  /// Makes a directory unreadable until dropped. Returns `None` when this process can still
+  /// list it anyway (for example as root), so the caller can skip the scenario.
+  struct UnreadableDir(PathBuf);
+
+  impl UnreadableDir {
+    #[cfg(unix)]
+    fn new(path: &Path) -> Option<Self> {
+      use std::os::unix::fs::PermissionsExt;
+      fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+      let guard = Self(path.to_path_buf());
+      fs::read_dir(path).is_err().then_some(guard)
+    }
+
+    #[cfg(windows)]
+    fn new(path: &Path) -> Option<Self> {
+      let status = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/deny", "*S-1-1-0:(R)"])
+        .status()
+        .expect("run icacls");
+      assert!(status.success(), "icacls could not deny read access");
+      let guard = Self(path.to_path_buf());
+      fs::read_dir(path).is_err().then_some(guard)
+    }
+  }
+
+  impl Drop for UnreadableDir {
+    fn drop(&mut self) {
+      #[cfg(unix)]
+      {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+      }
+      #[cfg(windows)]
+      {
+        let _ = std::process::Command::new("icacls")
+          .arg(&self.0)
+          .arg("/reset")
+          .status();
+      }
+    }
+  }
+
+  #[test]
+  fn unreadable_folder_is_error_and_its_ancestors_stay_same() {
+    let fixture = Fixture::new();
+    for root in [&fixture.left, &fixture.right] {
+      fs::create_dir_all(root.join("outer").join("locked")).unwrap();
+      fs::write(root.join("outer").join("same"), b"x").unwrap();
+    }
+    let Some(_locked) = UnreadableDir::new(&fixture.left.join("outer").join("locked")) else {
+      eprintln!("skipped: this process can still read a denied folder");
+      return;
+    };
+    let rows = fixture.scan(&binary_rules());
+    let row = |relative: &str| rows.iter().find(|r| r.relative == relative).unwrap();
+    let locked = row("outer/locked");
+    assert_eq!(locked.status, FolderStatus::Error);
+    assert!(locked.error.as_deref().unwrap().starts_with("Left:"));
+    assert_eq!(row("outer").status, FolderStatus::Same);
+    // Counts cover descendant files only, so the unreadable folder itself is not counted.
+    assert_eq!(row("outer").counts, FolderCounts::default());
+  }
+
   #[test]
   fn directory_descendant_orphans_and_errors_remain_visible() {
     let fixture = Fixture::new();
