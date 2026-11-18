@@ -1083,110 +1083,6 @@ fn validate_selection(selected: &[String]) -> Result<(), FileError> {
   Ok(())
 }
 
-/// Refresh selected contents and all directory metadata/aggregates, retaining
-/// unselected file display results. Previous rows are never operation authority.
-#[allow(clippy::too_many_arguments)]
-pub fn refresh_selection(
-  left: &Path,
-  right: &Path,
-  options: &FolderOptions,
-  rules: &FolderRules,
-  selected: &[String],
-  previous: &[FolderEntry],
-  cancelled: &AtomicBool,
-  progress: impl FnMut(usize) + Send,
-) -> Result<FolderScan, FileError> {
-  validate_selection(selected)?;
-  if previous.len() > MAX_FOLDER_ENTRIES * 2 {
-    return Err(FileError(
-      "Previous presentation exceeds the bounded folder limit.".into(),
-    ));
-  }
-  let mut expanded: BTreeSet<String> = selected.iter().cloned().collect();
-  let mut names = BTreeSet::new();
-  for row in previous {
-    cancel(cancelled)?;
-    validate_selection(std::slice::from_ref(&row.relative))?;
-    for name in [&row.left_relative, &row.right_relative]
-      .into_iter()
-      .flatten()
-    {
-      validate_selection(std::slice::from_ref(name))?;
-    }
-    if !names.insert((row.relative.clone(), row.is_directory)) {
-      return Err(FileError(
-        "Previous presentation contains duplicate rows.".into(),
-      ));
-    }
-    if [&row.left_relative, &row.right_relative]
-      .into_iter()
-      .flatten()
-      .chain(std::iter::once(&row.relative))
-      .any(|name| selected_name(name, selected))
-    {
-      expanded.extend(
-        [row.left_relative.clone(), row.right_relative.clone()]
-          .into_iter()
-          .flatten(),
-      );
-    }
-  }
-  let expanded: Vec<_> = expanded.into_iter().collect();
-  let fresh = scan_with_selection(
-    left,
-    right,
-    options,
-    rules,
-    Some(&expanded),
-    true,
-    cancelled,
-    progress,
-  )?;
-  let truncated = fresh.truncated;
-  let mut merged: BTreeMap<(String, bool), FolderEntry> = previous
-    .iter()
-    .filter(|row| {
-      !row.is_directory
-        && ![
-          row.left_relative.as_deref(),
-          row.right_relative.as_deref(),
-          Some(&row.relative),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|name| selected_name(name, &expanded))
-    })
-    .map(|row| ((row.relative.clone(), row.is_directory), row.clone()))
-    .collect();
-  for row in fresh.entries {
-    if row.is_directory
-      && !names.contains(&(row.relative.clone(), true))
-      && !selected_name(&row.relative, &expanded)
-      && !expanded.iter().any(|name| {
-        name
-          .strip_prefix(&row.relative)
-          .is_some_and(|suffix| suffix.starts_with('/'))
-      })
-    {
-      continue;
-    }
-    merged.insert((row.relative.clone(), row.is_directory), row);
-  }
-  if merged.len() > MAX_FOLDER_ENTRIES * 2 {
-    return Err(FileError(
-      "Refreshed presentation exceeds the bounded folder limit.".into(),
-    ));
-  }
-  let mut rows: Vec<_> = merged.into_values().collect();
-  aggregate_directories(&mut rows);
-  cancel(cancelled)?;
-  Ok(FolderScan {
-    scan_id: String::new(),
-    entries: rows,
-    truncated,
-  })
-}
-
 /// Recompute the rows under `paths` (relative folder row paths; `""` is the whole root) and
 /// return only what changed. Every folder row is recomputed so aggregates stay exact, while
 /// file contents are compared only under `paths`. A path missing on both sides has no fresh
@@ -2836,18 +2732,19 @@ mod tests {
       .find(|row| row.relative == "reverse/child")
       .unwrap();
     assert_eq!(child.status, FolderStatus::RightOnly);
-    let refreshed = refresh_selection(
+    let mut refreshed = rows.clone();
+    refresh_paths(
       &fixture.left,
       &fixture.right,
       &FolderOptions::default(),
       &FolderRules::default(),
-      &["collision".into()],
       &rows,
+      &["collision".into()],
       &AtomicBool::new(false),
       |_| {},
     )
     .unwrap()
-    .entries;
+    .apply_to(&mut refreshed);
     let refreshed_folder = refreshed
       .iter()
       .find(|row| row.relative == "collision" && row.is_directory)
@@ -3290,18 +3187,19 @@ mod tests {
       ..Default::default()
     };
     let full = fixture.scan(&rules);
-    let refreshed = refresh_selection(
+    let mut refreshed = full.clone();
+    refresh_paths(
       &fixture.left,
       &fixture.right,
       &FolderOptions::default(),
       &rules,
-      &["parent/sub".into()],
       &full,
+      &["parent/sub".into()],
       &AtomicBool::new(false),
       |_| {},
     )
     .unwrap()
-    .entries;
+    .apply_to(&mut refreshed);
     let counts_of = |rows: &[FolderEntry], relative: &str| {
       rows.iter().find(|r| r.relative == relative).unwrap().counts
     };
@@ -3557,114 +3455,29 @@ mod tests {
   }
 
   #[test]
-  fn refresh_selection_replaces_subtrees_and_preserves_unselected_file_results() {
+  fn refresh_paths_rejects_invalid_paths_and_root_failures() {
     let fixture = Fixture::new();
-    for root in [&fixture.left, &fixture.right] {
-      fs::create_dir(root.join("parent")).unwrap();
-      fs::create_dir(root.join("parent").join("selected")).unwrap();
-      fs::write(root.join("parent").join("selected").join("old"), b"x").unwrap();
-      fs::write(root.join("untouched"), b"same").unwrap();
-    }
-    let previous = fixture.scan(&FolderRules::default());
-    for root in [&fixture.left, &fixture.right] {
-      fs::remove_file(root.join("parent").join("selected").join("old")).unwrap();
-    }
-    fs::write(
-      fixture.left.join("parent").join("selected").join("new"),
-      b"x",
-    )
-    .unwrap();
-    fs::File::options()
-      .write(true)
-      .open(fixture.left.join("untouched"))
-      .unwrap()
-      .set_len(TEXT_LIMIT + 1)
-      .unwrap();
-    let rules = FolderRules {
-      content: ContentMethod::Rules,
-      ..Default::default()
-    };
-    let refreshed = refresh_selection(
-      &fixture.left,
-      &fixture.right,
-      &FolderOptions::default(),
-      &rules,
-      &["parent/selected".into()],
-      &previous,
-      &AtomicBool::new(false),
-      |_| {},
-    )
-    .unwrap()
-    .entries;
-    assert!(!refreshed.iter().any(|r| r.relative.ends_with("/old")));
-    assert!(refreshed
-      .iter()
-      .any(|r| r.relative == "parent/selected/new" && r.status == FolderStatus::LeftOnly));
-    assert_eq!(
-      refreshed
-        .iter()
-        .find(|r| r.relative == "parent")
-        .unwrap()
-        .status,
-      FolderStatus::Different
-    );
-    assert_eq!(
-      refreshed.iter().find(|r| r.relative == "untouched"),
-      previous.iter().find(|r| r.relative == "untouched")
-    );
-    fs::remove_file(fixture.left.join("parent").join("selected").join("new")).unwrap();
-    for root in [&fixture.left, &fixture.right] {
-      fs::remove_dir(root.join("parent").join("selected")).unwrap();
-    }
-    let deleted = refresh_selection(
-      &fixture.left,
-      &fixture.right,
-      &FolderOptions::default(),
-      &rules,
-      &["parent/selected".into()],
-      &refreshed,
-      &AtomicBool::new(false),
-      |_| {},
-    )
-    .unwrap()
-    .entries;
-    assert!(!deleted
-      .iter()
-      .any(|r| r.relative.starts_with("parent/selected")));
-    assert_eq!(
-      deleted
-        .iter()
-        .find(|r| r.relative == "parent")
-        .unwrap()
-        .status,
-      FolderStatus::Same
-    );
-  }
-
-  #[test]
-  fn refresh_selection_rejects_invalid_selection_and_root_failures() {
-    let fixture = Fixture::new();
-    for selected in [vec![], vec!["../escape".into()]] {
-      assert!(refresh_selection(
+    for paths in [vec!["../escape".to_string()], vec!["a//b".to_string()]] {
+      assert!(refresh_paths(
         &fixture.left,
         &fixture.right,
         &FolderOptions::default(),
         &FolderRules::default(),
-        &selected,
         &[],
+        &paths,
         &AtomicBool::new(false),
         |_| {},
       )
       .is_err());
     }
     fs::remove_dir(&fixture.left).unwrap();
-    assert!(refresh_selection(
+    assert!(refresh_paths(
       &fixture.left,
       &fixture.right,
       &FolderOptions::default(),
       &FolderRules::default(),
-      &["missing".into()],
       &[],
+      &["missing".into()],
       &AtomicBool::new(false),
       |_| {},
     )
@@ -3915,23 +3728,5 @@ mod tests {
     );
 
     assert_eq!(plain, noisy);
-  }
-
-  #[test]
-  fn refresh_paths_rejects_invalid_paths() {
-    let fixture = Fixture::new();
-    for paths in [vec!["../escape".to_string()], vec!["a//b".to_string()]] {
-      assert!(refresh_paths(
-        &fixture.left,
-        &fixture.right,
-        &FolderOptions::default(),
-        &FolderRules::default(),
-        &[],
-        &paths,
-        &AtomicBool::new(false),
-        |_| {},
-      )
-      .is_err());
-    }
   }
 }
