@@ -34,7 +34,11 @@ export interface WorkspaceController {
   progress: (jobId: string, count: number) => void;
   cancel: () => Promise<void>;
   clearPreview: () => void;
-  diskChanged: (paths: string[], refreshFolders?: boolean) => void;
+  diskChanged: (
+    paths: string[],
+    refreshFolders?: boolean,
+    folderRefreshed?: boolean,
+  ) => void;
   command: (name: string) => void;
   recoverySnapshot: () => DraftRecovery | null;
 }

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { FolderEntry, FolderStatus } from "./api";
+import type {
+  FileAction,
+  FolderEntry,
+  FolderPatch,
+  FolderStatus,
+  LocalOperation,
+} from "./api";
 import {
+  affectedFolders,
+  applyFolderPatch,
   canCopy,
   countFolderEntries,
   differenceFilters,
@@ -11,6 +19,7 @@ import {
   isCurrentFolderGeneration,
   matchesFilter,
   matchesName,
+  parentFolderPath,
   rowKey,
   targetRelativeFor,
   toggleFolderErrorFilter,
@@ -559,5 +568,141 @@ describe("folder presentation", () => {
     await olderResult;
 
     expect(displayed).toBe("new result");
+  });
+});
+
+describe("folder refresh helpers", () => {
+  const roots = { left: "C:\\left", right: "C:\\right" };
+  const op = (
+    action: FileAction,
+    source: string | null,
+    destination: string | null,
+  ): LocalOperation => ({
+    action,
+    source,
+    destination,
+    entryCount: 1,
+    entries: [
+      {
+        action,
+        source,
+        destination,
+        directory: false,
+        replacesExisting: false,
+      },
+    ],
+  });
+  const row = (
+    relative: string,
+    isDirectory = false,
+    status: FolderStatus = "same",
+  ): FolderEntry => ({
+    ...entry(relative, status),
+    isDirectory,
+  });
+
+  it("returns the parent folder of a relative path", () => {
+    expect(parentFolderPath("a/b/c.txt")).toBe("a/b");
+    expect(parentFolderPath("c.txt")).toBe("");
+  });
+
+  it("maps a copy to the destination's parent folder", () => {
+    const result = affectedFolders(
+      [op({ kind: "copy" }, "C:\\left\\a\\b.txt", "C:\\right\\a\\b.txt")],
+      roots,
+    );
+    expect(result).toEqual({ folders: ["a"], unmapped: 0 });
+  });
+
+  it("maps a move to both the source and destination parents", () => {
+    const result = affectedFolders(
+      [op({ kind: "move" }, "C:\\left\\x\\f.txt", "C:\\right\\y\\f.txt")],
+      roots,
+    );
+    expect(result.folders).toEqual(["x", "y"]);
+  });
+
+  it("maps recycle, rename, and attribute changes to the source parent", () => {
+    expect(
+      affectedFolders(
+        [op({ kind: "recycle" }, "C:\\left\\dir\\gone.txt", null)],
+        roots,
+      ).folders,
+    ).toEqual(["dir"]);
+    expect(
+      affectedFolders(
+        [op({ kind: "setReadOnly", readonly: true }, "C:\\left\\f.txt", null)],
+        roots,
+      ).folders,
+    ).toEqual([""]);
+  });
+
+  it("uses the root itself for a top-level destination and dedupes parents", () => {
+    const result = affectedFolders(
+      [
+        op({ kind: "createDirectory" }, null, "C:\\right\\new"),
+        op({ kind: "copy" }, "C:\\left\\a\\one.txt", "C:\\right\\a\\one.txt"),
+        op({ kind: "copy" }, "C:\\left\\a\\two.txt", "C:\\right\\a\\two.txt"),
+      ],
+      roots,
+    );
+    expect(result).toEqual({ folders: ["", "a"], unmapped: 0 });
+  });
+
+  it("reports a needed path outside both roots as unmapped", () => {
+    const result = affectedFolders(
+      [op({ kind: "copy" }, "C:\\left\\f.txt", "D:\\elsewhere\\f.txt")],
+      roots,
+    );
+    expect(result).toEqual({ folders: [], unmapped: 1 });
+  });
+
+  it("prefers per-entry paths and normalizes forward slashes", () => {
+    const operation: LocalOperation = {
+      ...op({ kind: "copy" }, null, null),
+      entries: [
+        {
+          action: { kind: "copy" },
+          source: "C:/left/p/q.txt",
+          destination: "C:/right/p/q.txt",
+          directory: false,
+          replacesExisting: false,
+        },
+      ],
+    };
+    expect(affectedFolders([operation], roots)).toEqual({
+      folders: ["p"],
+      unmapped: 0,
+    });
+  });
+
+  it("applies removals before upserts and keeps file and folder rows distinct", () => {
+    const current = [
+      row("a", true, "same"),
+      row("a", false, "leftOnly"),
+      row("b.txt", false, "different"),
+    ];
+    const patch: FolderPatch = {
+      removed: [{ relative: "a", isDirectory: false }],
+      upserted: [row("a", false, "same"), row("c.txt", false, "rightOnly")],
+    };
+    const next = applyFolderPatch(current, patch);
+    expect(
+      next.map((r) => `${r.isDirectory ? "d" : "f"}:${r.relative}:${r.status}`),
+    ).toEqual([
+      "f:a:same",
+      "d:a:same",
+      "f:b.txt:different",
+      "f:c.txt:rightOnly",
+    ]);
+  });
+
+  it("replaces an existing row when upserting the same identity", () => {
+    const next = applyFolderPatch([row("a.txt", false, "different")], {
+      removed: [],
+      upserted: [row("a.txt", false, "same")],
+    });
+    expect(next).toHaveLength(1);
+    expect(next[0]?.status).toBe("same");
   });
 });

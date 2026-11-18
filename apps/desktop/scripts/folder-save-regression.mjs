@@ -39,6 +39,7 @@ try {
       const command = [
         "scan_folders",
         "compare_folder_selection",
+        "refresh_folder_paths",
         "relative_folder_path",
       ].find((name) => request.includes(name));
       if (!command) return originalFetch(input, init);
@@ -118,15 +119,21 @@ try {
   assert.equal(
     refreshCommands.filter((command) => command === "compare_folder_selection")
       .length,
+    0,
+    "Saving one file must not recompare the selection",
+  );
+  assert.equal(
+    refreshCommands.filter((command) => command === "refresh_folder_paths")
+      .length,
     1,
-    "Saving one file should dispatch one selected-row refresh",
+    "Saving one file should dispatch one path-scoped refresh",
   );
   assert.equal(await tracked.getAttribute("data-status"), "different");
   assert.equal(await tracked.getAttribute("aria-selected"), "false");
   assert.equal(await readFile(join(left, "tracked.txt"), "utf8"), "changed\n");
   const refreshMetrics = await page.evaluate(() => ({
     mapping: window.__folderRefreshMetrics.relative_folder_path,
-    selection: window.__folderRefreshMetrics.compare_folder_selection,
+    selection: window.__folderRefreshMetrics.refresh_folder_paths,
   }));
 
   assert.equal(

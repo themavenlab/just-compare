@@ -940,42 +940,27 @@ pub struct FilePreview {
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn compare_folder_selection(
   left: String,
   right: String,
   options: FolderOptions,
   rules: compare_fs::FolderRules,
   selected: Vec<String>,
-  previous: Option<Vec<compare_fs::FolderEntry>>,
   job_id: String,
   state: State<'_, Arc<Resources>>,
 ) -> Result<compare_fs::FolderScan, String> {
   let resources = state.inner().clone();
   let flag = begin(&resources, &job_id)?;
   let result = worker(move || {
-    if let Some(previous) = previous {
-      compare_fs::refresh_selection(
-        Path::new(&left),
-        Path::new(&right),
-        &options,
-        &rules,
-        &selected,
-        &previous,
-        &flag,
-        |_| {},
-      )
-    } else {
-      compare_fs::scan_selected_with_rules(
-        Path::new(&left),
-        Path::new(&right),
-        &options,
-        &rules,
-        &selected,
-        &flag,
-        |_| {},
-      )
-    }
+    compare_fs::scan_selected_with_rules(
+      Path::new(&left),
+      Path::new(&right),
+      &options,
+      &rules,
+      &selected,
+      &flag,
+      |_| {},
+    )
     .map_err(|e| e.to_string())
   })
   .await;

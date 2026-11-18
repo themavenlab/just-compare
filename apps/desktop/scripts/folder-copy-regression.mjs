@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchNative, selectWorkspace } from "./native-harness.mjs";
@@ -19,6 +26,7 @@ await Promise.all([
   writeFile(join(tracker, "sub", "b.txt"), "beta\n"),
   writeFile(join(left, "paired.txt"), "paired\n"),
   writeFile(join(right, "paired.txt"), "paired\n"),
+  writeFile(join(left, "doomed.txt"), "left-only\n"),
 ]);
 
 let session;
@@ -52,6 +60,7 @@ try {
     '.folder-row[data-relative="support/github-tracker"]',
   );
   await trackerRow.waitFor();
+  await trackerRow.locator(".folder-side").nth(1).click();
   await trackerRow.locator(".folder-side").nth(1).click({ button: "right" });
   await page
     .getByRole("menuitem", { name: "Copy to Side...", exact: true })
@@ -83,6 +92,27 @@ try {
     "beta\n",
   );
 
+  // Copy to Left updates the affected rows without a manual rescan, and keeps
+  // the selection made before the copy.
+  await page.waitForFunction(
+    () =>
+      ["support", "support/github-tracker"].every(
+        (relative) =>
+          document
+            .querySelector(
+              `.workspace-slot[aria-hidden="false"] .folder-row[data-relative="${relative}"]`,
+            )
+            ?.getAttribute("data-status") === "same",
+      ),
+    undefined,
+    { timeout: 10000 },
+  );
+  assert.match(
+    (await trackerRow.getAttribute("class")) ?? "",
+    /selected-folder-row/,
+  );
+  assert.equal(await page.getByText(/rescan/i).count(), 0);
+
   await list
     .locator('.folder-row[data-relative="paired.txt"]')
     .locator(".folder-side")
@@ -111,6 +141,22 @@ try {
   await workspace
     .getByText("Copied 1 paths to the clipboard.", { exact: true })
     .waitFor();
+  assert.equal(await page.getByRole("alert").count(), 0);
+
+  // Recycling a left-only file removes its row without a manual rescan.
+  const doomedRow = list.locator('.folder-row[data-relative="doomed.txt"]');
+  await doomedRow.waitFor();
+  await doomedRow.locator(".folder-side").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete...", exact: true }).click();
+  const deleteDialog = page.getByRole("dialog", { name: /^recycle - / });
+  await deleteDialog.waitFor();
+  await deleteDialog
+    .getByRole("button", { name: "Start", exact: true })
+    .click();
+  await deleteDialog.waitFor({ state: "detached" });
+  await doomedRow.waitFor({ state: "detached", timeout: 10000 });
+  await assert.rejects(access(join(left, "doomed.txt")), /ENOENT/);
+  assert.equal(await page.getByText(/rescan/i).count(), 0);
   assert.equal(await page.getByRole("alert").count(), 0);
 
   await workspace

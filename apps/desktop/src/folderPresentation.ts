@@ -1,4 +1,9 @@
-import type { FolderEntry } from "./api";
+import type {
+  FolderEntry,
+  FolderPatch,
+  FolderRowId,
+  LocalOperation,
+} from "./api";
 
 export function withoutLinkedSource(
   entries: FolderEntry[],
@@ -146,6 +151,93 @@ export function rowKey(entry: FolderEntry) {
 
 export function folderSelectionKeys(entries: FolderEntry[]) {
   return entries.map(rowKey);
+}
+
+export interface FolderRoots {
+  left: string;
+  right: string;
+}
+
+/** Relative folder that contains `relative`; "" is the root itself. */
+export function parentFolderPath(relative: string) {
+  const slash = relative.lastIndexOf("/");
+  return slash < 0 ? "" : relative.slice(0, slash);
+}
+
+function relativeFolderOf(absolute: string, roots: FolderRoots): string | null {
+  const path = absolute.replace(/\\/g, "/");
+  for (const root of [roots.left, roots.right]) {
+    const base = root.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (path === base) return "";
+    if (path.startsWith(`${base}/`)) return path.slice(base.length + 1);
+  }
+  return null;
+}
+
+function parentOfAbsolute(absolute: string) {
+  const path = absolute.replace(/\\/g, "/");
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? null : path.slice(0, slash);
+}
+
+/**
+ * Relative folders whose rows a completed local operation can change, plus
+ * the number of needed paths that fall outside both roots. Each action only
+ * touches the parent folders of the paths it moves, so the parents are the
+ * refresh scope. Per-entry paths are preferred over the operation-level ones.
+ */
+export function affectedFolders(
+  operations: LocalOperation[],
+  roots: FolderRoots,
+): { folders: string[]; unmapped: number } {
+  const folders = new Set<string>();
+  let unmapped = 0;
+  const note = (absolute: string | null) => {
+    if (absolute === null) return;
+    const parent = parentOfAbsolute(absolute);
+    const relative = parent === null ? null : relativeFolderOf(parent, roots);
+    if (relative === null) unmapped += 1;
+    else folders.add(relative);
+  };
+  for (const operation of operations) {
+    const items =
+      operation.entries.length > 0 ? operation.entries : [operation];
+    for (const item of items) {
+      switch (item.action.kind) {
+        case "copy":
+        case "createDirectory":
+          note(item.destination);
+          break;
+        case "move":
+          note(item.source);
+          note(item.destination);
+          break;
+        default:
+          note(item.source);
+      }
+    }
+  }
+  return { folders: [...folders].sort(), unmapped };
+}
+
+function folderRowKey(row: FolderRowId) {
+  return `${row.isDirectory ? "d" : "f"}:${row.relative}`;
+}
+
+/** Applies a scoped refresh: removals first, then upserts, sorted like the scan. */
+export function applyFolderPatch(
+  entries: FolderEntry[],
+  patch: FolderPatch,
+): FolderEntry[] {
+  const rows = new Map<string, FolderEntry>();
+  for (const entry of entries) rows.set(folderRowKey(entry), entry);
+  for (const removed of patch.removed) rows.delete(folderRowKey(removed));
+  for (const upserted of patch.upserted)
+    rows.set(folderRowKey(upserted), upserted);
+  return [...rows.values()].sort((a, b) => {
+    if (a.relative !== b.relative) return a.relative < b.relative ? -1 : 1;
+    return Number(a.isDirectory) - Number(b.isDirectory);
+  });
 }
 
 function excludedByKind(

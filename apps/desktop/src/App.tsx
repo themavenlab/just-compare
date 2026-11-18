@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   useCallback,
   useEffect,
@@ -9,6 +10,7 @@ import {
 } from "react";
 import { defaults, native, type DraftRecovery, type Settings } from "./api";
 import { APP_NAME } from "./appName";
+import { CommandMenu } from "./CommandMenu";
 import { errorMessage } from "./comparison";
 import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { ConfirmationDialog } from "./ConfirmationDialog";
@@ -258,11 +260,14 @@ export function App() {
     },
     [confirmAction],
   );
-  const diskChanged = useCallback((paths: string[], refreshFolders = false) => {
-    for (const [id, controller] of controllers.current)
-      if (id !== operation.current)
-        controller.diskChanged(paths, refreshFolders);
-  }, []);
+  const diskChanged = useCallback(
+    (paths: string[], refreshFolders = false, folderRefreshed = false) => {
+      for (const [id, controller] of controllers.current)
+        if (id !== operation.current)
+          controller.diskChanged(paths, refreshFolders, folderRefreshed);
+    },
+    [],
+  );
   const confirmGitExit = useCallback(
     async (id: string) => {
       if (

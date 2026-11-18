@@ -374,7 +374,6 @@ interface Commands {
       options: FolderOptions;
       rules: FolderRules;
       selected: string[];
-      previous?: FolderEntry[];
       jobId: string;
     };
     result: FolderScan;

@@ -17,6 +17,7 @@ import {
   fitsLiveComparisonBounds,
   native,
   textLines,
+  type Block,
   type DocumentView,
   type DraftRecovery,
   type FolderEntry,
@@ -27,7 +28,11 @@ import {
   type Settings,
 } from "./api";
 import { CodeEditor } from "./CodeEditor";
+import { CommandMenu } from "./CommandMenu";
+import { errorMessage, type DiffSpan } from "./comparison";
 import {
+  affectedFolders,
+  applyFolderPatch,
   countFolderEntries,
   differenceFilters,
   folderSelectionKeys,
@@ -35,15 +40,19 @@ import {
   formatSize,
   isCurrentFolderGeneration,
   matchesName,
+  parentFolderPath,
   targetRelativeFor,
   toggleFolderErrorFilter,
   withoutLinkedSource,
 } from "./folderPresentation";
 import { FolderRulesDialog } from "./FolderRulesDialog";
+import { FolderView, type FolderSide } from "./FolderView";
+import { Icon } from "./icons";
 import { LineInspector } from "./LineInspector";
 import { PathInput } from "./PathInput";
 import { TextSearchPanel } from "./TextSearchPanel";
 import { ToolButton } from "./ToolButton";
+import { VirtualList } from "./VirtualList";
 import {
   fileName,
   plainPath,
@@ -136,7 +145,11 @@ interface WorkspaceProps {
   openSession: (session: SavedSession) => void;
   setTabSessionName: (id: string, name: string | null) => void;
   renameSessionTabs: (previous: string, next: string | null) => void;
-  diskChanged: (paths: string[], refreshFolders?: boolean) => void;
+  diskChanged: (
+    paths: string[],
+    refreshFolders?: boolean,
+    folderRefreshed?: boolean,
+  ) => void;
   confirmAction: (message: string) => Promise<boolean>;
   confirmGitExit: (id: string) => Promise<boolean>;
   onHome: () => void;
@@ -250,6 +263,7 @@ export function ComparisonWorkspace({
     [],
   );
   const folderRefreshInFlight = useRef(false);
+  const folderScanId = useRef("");
   const folderGeneration = useRef(0);
   const folderJobId = useRef<string | null>(null);
   const [staleSides, setStaleSides] = useState<Side[]>([]);
@@ -1500,12 +1514,13 @@ export function ComparisonWorkspace({
     requestedRoots = folderRoots,
     options = folderOptions(),
     rules = folderRules,
+    keepSelection = false,
   ) {
     const { generation, jobId } = beginFolderGeneration();
     discardPreview(tab.id);
     setPreview(null);
     setFolderStale(true);
-    setSelectedFiles([]);
+    if (!keepSelection) setSelectedFiles([]);
     setProgress(0);
     try {
       const roots =
@@ -1524,8 +1539,13 @@ export function ComparisonWorkspace({
       });
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))
         return;
+      folderScanId.current = result.scanId;
       setFolders(result.entries);
       setFolderTruncated(result.truncated);
+      if (keepSelection) {
+        const keys = new Set(folderSelectionKeys(result.entries));
+        setSelectedFiles((prior) => prior.filter((key) => keys.has(key)));
+      }
       if (filter === "error") {
         selectFilter("all");
       }
@@ -1588,11 +1608,16 @@ export function ComparisonWorkspace({
         if (!isCurrentFolderGeneration(folderGeneration.current, generation))
           return;
         startJob(jobId);
-        const refreshed = await native("scan_folders", {
-          left: roots.left,
-          right: roots.right,
-          options: folderOptions(),
-          rules: folderRules,
+        if (!folderScanId.current) {
+          await scan(roots, folderOptions(), folderRules, true);
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
+          setNotice("Folder scan refreshed from disk.");
+          return;
+        }
+        const refreshed = await native("refresh_folder_paths", {
+          scanId: folderScanId.current,
+          paths: [""],
           jobId,
         });
         if (!isCurrentFolderGeneration(folderGeneration.current, generation))
@@ -1600,9 +1625,9 @@ export function ComparisonWorkspace({
         setFolderRoots(roots);
         setNativeFolderRoots(roots);
         const changed =
-          JSON.stringify(refreshed.entries) !== JSON.stringify(folders);
-        setFolderTruncated(refreshed.truncated);
-        setFolderStale(changed);
+          refreshed.removed.length > 0 || refreshed.upserted.length > 0;
+        if (changed) setFolders(applyFolderPatch(folders, refreshed));
+        setFolderStale(false);
         if (changed) {
           discardPreview(tab.id);
           setPreview(null);
@@ -1610,7 +1635,7 @@ export function ComparisonWorkspace({
         }
         setNotice(
           changed
-            ? "Folder contents changed on disk. Existing results are retained; scan folders to refresh."
+            ? "Folder contents changed on disk and were refreshed."
             : "No folder changes found on disk.",
         );
       } catch (failure) {
@@ -1730,6 +1755,41 @@ export function ComparisonWorkspace({
       ],
     };
   }
+  function markStale(reason: string) {
+    folderScanId.current = "";
+    setFolderStale(true);
+    if (reason === "refresh-failed")
+      setNotice(
+        "Folder refresh failed; results may be stale. Run a full refresh.",
+      );
+  }
+  async function refreshFolderRows(paths: string[]) {
+    if (!folderScanId.current) {
+      await scan(nativeFolderRoots, folderOptions(), folderRules, true);
+      return null;
+    }
+    const generation = folderGeneration.current;
+    const jobId = crypto.randomUUID();
+    startJob(jobId);
+    try {
+      const patch = await native("refresh_folder_paths", {
+        scanId: folderScanId.current,
+        paths,
+        jobId,
+      });
+      if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+        return null;
+      const next = applyFolderPatch(folders, patch);
+      setFolders(next);
+      return next;
+    } catch (failure) {
+      if (isCurrentFolderGeneration(folderGeneration.current, generation))
+        markStale("refresh-failed");
+      throw failure;
+    } finally {
+      finishFolderJob(jobId);
+    }
+  }
   const runPendingFolderRefresh = useEffectEvent(() => {
     if (
       !pendingFolderRefresh.length ||
@@ -1739,11 +1799,9 @@ export function ComparisonWorkspace({
     )
       return;
     void attempt(async () => {
-      const { generation, jobId } = beginFolderGeneration();
       const paths = pendingFolderRefresh;
       setPendingFolderRefresh([]);
       folderRefreshInFlight.current = true;
-      setFolderStale(true);
       try {
         const roots = nativeFolderRoots;
         if (!roots.left || !roots.right)
@@ -1755,42 +1813,22 @@ export function ComparisonWorkspace({
             native("relative_folder_path", { ...roots, path }),
           ),
         );
-        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
-          return;
         const selected = [
           ...new Set(mapped.filter((path): path is string => path !== null)),
         ];
-        if (selected.length) {
-          startJob(jobId);
-          const refreshed = await native("compare_folder_selection", {
-            ...roots,
-            options: folderOptions(),
-            rules: folderRules,
-            selected,
-            previous: folders,
-            jobId,
-          });
-          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
-            return;
-          setFolders(refreshed.entries);
-          setFolderTruncated(refreshed.truncated);
-        }
+        if (selected.length) await refreshFolderRows(selected);
         const allMapped = mapped.every((path) => path !== null);
-        setFolderStale(!allMapped);
+        if (!allMapped) markStale("unmapped-change");
         setNotice(
           allMapped
             ? `Refreshed ${selected.length} saved file${selected.length === 1 ? "" : "s"} and affected directory summaries.`
             : "Some saved files could not be mapped to the scanned roots. Results remain stale; run a full refresh to update them.",
         );
       } catch (failure) {
-        if (!isCurrentFolderGeneration(folderGeneration.current, generation))
-          return;
-        setFolderStale(true);
         setPendingFolderRefresh([]);
         throw failure;
       } finally {
         folderRefreshInFlight.current = false;
-        finishFolderJob(jobId);
       }
     });
   });
@@ -1915,8 +1953,19 @@ export function ComparisonWorkspace({
     setPreview(null);
     setPreviewKind(null);
     const results = await native("execute_sync", { id, jobId });
-    diskChanged([nativeFolderRoots.left, nativeFolderRoots.right]);
+    diskChanged([nativeFolderRoots.left, nativeFolderRoots.right], false, true);
     const failures = results.filter((r) => r.error);
+    const affectedRelatives = [
+      ...new Set(results.map((r) => parentFolderPath(r.relative))),
+    ];
+    let refreshError: unknown = null;
+    if (affectedRelatives.length) {
+      try {
+        await refreshFolderRows(affectedRelatives);
+      } catch (failure) {
+        refreshError = failure;
+      }
+    }
     setNotice(
       `Completed ${results.length - failures.length} of ${results.length} operations.`,
     );
@@ -1924,7 +1973,7 @@ export function ComparisonWorkspace({
       throw new Error(
         failures.map((f) => `${f.relative}: ${f.error}`).join("\n"),
       );
-    await scan();
+    if (refreshError) throw refreshError;
   }
   async function mergeInputs(inputs = editors, restoring = false) {
     if (
@@ -2266,7 +2315,7 @@ export function ComparisonWorkspace({
       clearPreview: () => {
         setPreview(null);
       },
-      diskChanged: (paths, refreshFolders = false) => {
+      diskChanged: (paths, refreshFolders = false, folderRefreshed = false) => {
         const affected = (path: string) =>
           paths.some((changed) => relatedPaths(path, changed));
         const changedSides = (["left", "right", "base"] as const).filter(
@@ -2281,7 +2330,7 @@ export function ComparisonWorkspace({
             affected(folderRoots.right) ||
             affected(nativeFolderRoots.left) ||
             affected(nativeFolderRoots.right));
-        if (affectedFolderRoots) {
+        if (affectedFolderRoots && !folderRefreshed) {
           const canRefreshSelection =
             refreshFolders &&
             hasScanned &&
@@ -2297,7 +2346,7 @@ export function ComparisonWorkspace({
               ...new Set([...prior, ...affectedPaths]),
             ]);
           } else {
-            setFolderStale(true);
+            markStale("external-change");
           }
         }
         if (
@@ -2314,7 +2363,9 @@ export function ComparisonWorkspace({
           setPreview(null);
           if (!refreshFolders || !affectedFolderRoots)
             setNotice(
-              "Files changed on disk. Rescan folders or reopen inputs to refresh; drafts are retained.",
+              folderRefreshed
+                ? "Files changed. Folder summaries were refreshed; drafts are retained."
+                : "Files changed on disk. Rescan folders or reopen inputs to refresh; drafts are retained.",
             );
         }
       },
@@ -2333,7 +2384,7 @@ export function ComparisonWorkspace({
         else if (name === "run")
           void attempt(() =>
             mode === "folder"
-              ? scan()
+              ? scan(undefined, undefined, undefined, true)
               : mode === "merge"
                 ? mergeInputs()
                 : compareInputs(),
@@ -2811,27 +2862,20 @@ export function ComparisonWorkspace({
         try {
           discardPreview(tab.id);
           setPreview(null);
-          const roots = await normalizeFolderRoots(generation);
+          await normalizeFolderRoots(generation);
           if (!isCurrentFolderGeneration(folderGeneration.current, generation))
             return;
-          const jobId = crypto.randomUUID();
-          startJob(jobId);
-          const refreshed = await native("compare_folder_selection", {
-            ...roots,
-            options: folderOptions(),
-            rules: folderRules,
-            selected: entries.map((entry) => entry.relative),
-            previous: folders,
-            jobId,
-          });
-          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
-            return;
-          setFolders(refreshed.entries);
-          setFolderTruncated(refreshed.truncated);
-          const refreshedKeys = new Set(folderSelectionKeys(refreshed.entries));
-          setSelectedFiles((prior) =>
-            prior.filter((key) => refreshedKeys.has(key)),
+          const refreshedRows = await refreshFolderRows(
+            entries.map((entry) => entry.relative),
           );
+          if (!isCurrentFolderGeneration(folderGeneration.current, generation))
+            return;
+          if (refreshedRows) {
+            const refreshedKeys = new Set(folderSelectionKeys(refreshedRows));
+            setSelectedFiles((prior) =>
+              prior.filter((key) => refreshedKeys.has(key)),
+            );
+          }
           setNotice(
             `Refreshed ${entries.length} selected entries, their descendants, and affected directory summaries.`,
           );
@@ -2988,14 +3032,26 @@ export function ComparisonWorkspace({
           compareModified: false,
         },
         selected: entries.map((entry) => entry.relative),
-        previous: folders,
         jobId,
       });
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))
         return;
-      setFolders(compared.entries);
+      const selectedPaths = entries.map((entry) => entry.relative);
+      const underSelection = (relative: string) =>
+        selectedPaths.some(
+          (path) => relative === path || relative.startsWith(`${path}/`),
+        );
+      const comparedRows = compared.entries.filter((entry) =>
+        underSelection(entry.relative),
+      );
+      setFolders((prior) =>
+        applyFolderPatch(
+          prior.filter((entry) => !underSelection(entry.relative)),
+          { removed: [], upserted: comparedRows },
+        ),
+      );
       setFolderTruncated(compared.truncated);
-      const selectedResults = compared.entries.filter((entry) =>
+      const selectedResults = comparedRows.filter((entry) =>
         entries.some(
           (selected) =>
             selected.relative === entry.relative ||
@@ -3203,7 +3259,6 @@ export function ComparisonWorkspace({
       return;
     }
     const { total, failures } = await executeLocalPlan(result);
-    await scan();
     setNotice(
       `Completed ${total - failures.length} of ${total} local actions.${
         skippedLinks ? ` Links are not copied; ${skippedLinks} skipped.` : ""
@@ -3224,14 +3279,32 @@ export function ComparisonWorkspace({
         (path): path is string => path !== null,
       ),
     );
-    diskChanged(paths);
-    setFolderStale(true);
+    diskChanged(paths, false, true);
+    const affected = affectedFolders(
+      results.map((item) => item.operation),
+      nativeFolderRoots,
+    );
+    let refreshError: unknown = null;
+    const refreshPaths = affected.folders;
+    if (refreshPaths.length) {
+      try {
+        await refreshFolderRows(refreshPaths);
+      } catch (failure) {
+        refreshError = failure;
+      }
+    }
+    if (affected.unmapped) markStale("unmapped-change");
     const failures = results
       .filter((item) => item.result.status !== "completed")
       .map(
         (item) =>
           `${item.operation.source ?? item.operation.destination}: ${item.result.message ?? item.result.status}`,
       );
+    if (refreshError) {
+      const message = errorMessage(refreshError);
+      if (failures.length) failures.push(message);
+      else throw refreshError;
+    }
     return { total: results.length, failures };
   }
   const inputs = (
@@ -3349,7 +3422,7 @@ export function ComparisonWorkspace({
           event.preventDefault();
           void attempt(() =>
             mode === "folder"
-              ? scan()
+              ? scan(undefined, undefined, undefined, true)
               : mode === "merge"
                 ? mergeInputs()
                 : compareInputs(),
