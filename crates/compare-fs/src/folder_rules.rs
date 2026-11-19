@@ -303,7 +303,7 @@ pub struct FolderScan {
 }
 
 /// Identity of a folder row. Kind is part of identity: a file and a folder may share a name.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowId {
   pub relative: String,
@@ -2997,7 +2997,11 @@ mod tests {
       .unwrap()
       .set_times(fs::FileTimes::new().set_modified(old_time))
       .unwrap();
-    assert!(plan.execute(&flag, |_| {}).is_err());
+    assert!(plan
+      .execute(&flag, |_| {})
+      .unwrap()
+      .iter()
+      .all(|(_, result)| result.is_err()));
     assert_eq!(fs::read(fixture.right.join("file")).unwrap(), b"two");
   }
 

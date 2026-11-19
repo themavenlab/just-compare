@@ -574,12 +574,15 @@ try {
   await mkdir(join(leftFolder, "empty"));
   await writeFile(join(leftFolder, "copy.txt"), "source");
   const options = { criterion: "content", exclude: [] };
-  let rows = await call("scan_folders", {
+  const rules = {};
+  let scan = await call("scan_folders", {
     left: leftFolder,
     right: rightFolder,
     options,
+    rules,
     jobId: "scan-test",
   });
+  const rows = scan.entries;
   assert.equal(rows[0].status, "leftOnly");
   assert.equal(rows[0].leftKind, "file");
   assert.equal(rows[0].rightKind, null);
@@ -603,21 +606,32 @@ try {
     "status",
   ]);
   let plan = await call("preview_sync", {
-    left: leftFolder,
-    right: rightFolder,
-    options,
+    scanId: scan.scanId,
     mode: "update",
+    selected: null,
+    destination: "right",
   });
   await writeFile(join(leftFolder, "copy.txt"), "changed");
-  await assert.rejects(
-    call("execute_sync", { id: plan.id, jobId: "stale-test" }),
-    /stale/,
+  const stale = await call("execute_sync", {
+    id: plan.id,
+    jobId: "stale-test",
+  });
+  assert.match(
+    stale.find((result) => result.relative === "copy.txt").error,
+    /Changed since preview/,
   );
-  plan = await call("preview_sync", {
+  scan = await call("scan_folders", {
     left: leftFolder,
     right: rightFolder,
     options,
+    rules,
+    jobId: "rescan-test",
+  });
+  plan = await call("preview_sync", {
+    scanId: scan.scanId,
     mode: "update",
+    selected: null,
+    destination: "right",
   });
   assert.equal(plan.operations[0].action, "copy");
   const results = await call("execute_sync", {
@@ -630,14 +644,15 @@ try {
     await readFile(join(rightFolder, "copy.txt"), "utf8"),
     "changed",
   );
-  rows = await call("scan_folders", {
+  scan = await call("scan_folders", {
     left: leftFolder,
     right: rightFolder,
     options,
+    rules,
     jobId: "equal-test",
   });
-  assert.equal(rows[0].status, "same");
-  assert.equal(rows[1].isDirectory, true);
+  assert.equal(scan.entries[0].status, "same");
+  assert.equal(scan.entries[1].isDirectory, true);
   await writeFile(join(leftFolder, "move.txt"), "move safely");
   let filePlan = await call("preview_local_action", {
     request: {
@@ -687,12 +702,14 @@ try {
   await writeFile(join(mismatchLeft, "folder-right"), "file");
   await mkdir(join(mismatchRight, "folder-right"));
   await writeFile(join(mismatchRight, "folder-right", "child.txt"), "child");
-  const mismatchRows = await call("scan_folders", {
+  const mismatchScan = await call("scan_folders", {
     left: mismatchLeft,
     right: mismatchRight,
     options,
+    rules,
     jobId: "type-mismatch-test",
   });
+  const mismatchRows = mismatchScan.entries;
   const folderLeftRows = mismatchRows.filter(
     (row) => row.relative === "folder-left",
   );
@@ -723,10 +740,10 @@ try {
   );
   await assert.rejects(
     call("preview_sync", {
-      left: mismatchLeft,
-      right: mismatchRight,
-      options,
+      scanId: mismatchScan.scanId,
       mode: "update",
+      selected: null,
+      destination: "right",
     }),
     /collision/,
     "A same-name file and folder must not make unsafe synchronization executable.",

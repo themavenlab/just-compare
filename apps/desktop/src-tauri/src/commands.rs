@@ -66,6 +66,8 @@ struct CachedScan {
   rules: compare_fs::FolderRules,
   options: FolderOptions,
   entries: Vec<compare_fs::FolderEntry>,
+  /// Sync refuses truncated scans, so the flag is kept with the rows it describes.
+  truncated: bool,
 }
 
 const SCAN_EXPIRED: &str = "Scan expired; run a full rescan.";
@@ -853,6 +855,7 @@ pub async fn scan_folders(
           rules,
           options: cache_options,
           entries: scan.entries.clone(),
+          truncated: scan.truncated,
         },
       )?;
     }
@@ -925,11 +928,18 @@ async fn refresh_cached_scan(
 pub struct Preview {
   id: String,
   operations: Vec<Operation>,
+  skipped: Vec<Skipped>,
 }
 #[derive(Serialize)]
 pub struct Operation {
   relative: String,
   action: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Skipped {
+  relative: String,
+  reason: String,
 }
 
 #[derive(Serialize)]
@@ -1033,70 +1043,107 @@ pub async fn execute_local_action(
 
 #[tauri::command]
 pub async fn preview_sync(
-  left: String,
-  right: String,
-  options: FolderOptions,
+  scan_id: String,
   mode: SyncMode,
-  selected: Option<Vec<String>>,
+  selected: Option<Vec<compare_fs::RowId>>,
+  destination: compare_fs::FolderSide,
   job_id: Option<String>,
   state: State<'_, Arc<Resources>>,
 ) -> Result<Preview, String> {
   let resources = state.inner().clone();
   let job_id = job_id.unwrap_or_else(|| resources.id());
   let flag = begin(&resources, &job_id)?;
-  let worker_resources = resources.clone();
-  let result = worker(move || {
-    let mut plan = Plan::preview(Path::new(&left), Path::new(&right), options, mode, &flag)
-      .map_err(|e| e.to_string())?;
-    if let Some(names) = selected {
-      if names.is_empty()
-        || names.len() > compare_fs::MAX_FOLDER_ENTRIES
-        || names.iter().any(|name| {
-          name.is_empty()
-            || name.starts_with('/')
-            || name.split('/').any(|part| part == ".." || part.is_empty())
-        })
-      {
-        return Err("Select valid relative entries for synchronization.".into());
-      }
-      let actionable: Vec<_> = plan
-        .operations
-        .iter()
-        .filter(|operation| {
-          names.iter().any(|name| {
-            operation.relative == *name || operation.relative.starts_with(&format!("{name}/"))
-          })
-        })
-        .map(|operation| operation.relative.clone())
-        .collect();
-      if actionable.is_empty() {
-        return Err("No changes are required for the selected entries.".into());
-      }
-      plan.select(&actionable).map_err(|e| e.to_string())?;
-    }
-    let operations = plan
-      .operations
-      .iter()
-      .map(|o| Operation {
-        relative: o.relative.clone(),
-        action: o.action.clone(),
-      })
-      .collect();
-    let id = worker_resources.id();
-    worker_resources
-      .plans
-      .lock()
-      .map_err(|e| e.to_string())?
-      .insert(id.clone(), plan);
-    Ok(Preview { id, operations })
-  })
-  .await;
+  let result = preview_cached_sync(&resources, &scan_id, mode, selected, destination, &flag).await;
   resources
     .jobs
     .lock()
     .map_err(|e| e.to_string())?
     .remove(&job_id);
   result
+}
+
+async fn preview_cached_sync(
+  resources: &Arc<Resources>,
+  scan_id: &str,
+  mode: SyncMode,
+  selected: Option<Vec<compare_fs::RowId>>,
+  destination: compare_fs::FolderSide,
+  flag: &Arc<AtomicBool>,
+) -> Result<Preview, String> {
+  // Sync plans from the rows the grid shows, so it cannot disagree with what the user
+  // sees. The scan is put back into the cache whatever the outcome.
+  let cached = take_cached_scan(resources, scan_id)?;
+  let worker_flag = flag.clone();
+  let worker_resources = resources.clone();
+  let (cached, outcome) = worker(move || {
+    let outcome = (|| {
+      if cached.truncated {
+        return Err(
+          "The folder scan was truncated; run a full rescan before synchronizing.".to_string(),
+        );
+      }
+      if let Some(selection) = &selected {
+        if selection.len() > compare_fs::MAX_FOLDER_ENTRIES
+          || selection.iter().any(|row| {
+            row.relative.is_empty()
+              || row.relative.starts_with('/')
+              || row
+                .relative
+                .split('/')
+                .any(|part| part == ".." || part.is_empty())
+          })
+        {
+          return Err("Select valid relative entries for synchronization.".into());
+        }
+      }
+      let (source, target, rows) = match destination {
+        compare_fs::FolderSide::Right => (
+          Path::new(&cached.left_root),
+          Path::new(&cached.right_root),
+          cached.entries.clone(),
+        ),
+        compare_fs::FolderSide::Left => (
+          Path::new(&cached.right_root),
+          Path::new(&cached.left_root),
+          compare_fs::swap_sides(&cached.entries),
+        ),
+      };
+      let plan =
+        Plan::from_rows(source, target, &rows, mode, selected.as_deref(), &worker_flag)
+          .map_err(|e| e.to_string())?;
+      let operations = plan
+        .operations
+        .iter()
+        .map(|o| Operation {
+          relative: o.relative.clone(),
+          action: o.action.clone(),
+        })
+        .collect();
+      let skipped = plan
+        .skipped
+        .iter()
+        .map(|s| Skipped {
+          relative: s.relative.clone(),
+          reason: s.reason.clone(),
+        })
+        .collect();
+      let id = worker_resources.id();
+      worker_resources
+        .plans
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id.clone(), plan);
+      Ok(Preview {
+        id,
+        operations,
+        skipped,
+      })
+    })();
+    Ok((cached, outcome))
+  })
+  .await?;
+  store_cached_scan(resources, scan_id.to_string(), cached)?;
+  outcome
 }
 
 #[derive(Serialize)]
@@ -1487,6 +1534,7 @@ mod tests {
       rules: compare_fs::FolderRules::default(),
       options: compare_fs::FolderOptions::default(),
       entries: Vec::new(),
+      truncated: false,
     };
     store_cached_scan(&resources, "scan-1".into(), scan).unwrap();
     assert!(take_cached_scan(&resources, "scan-1").is_ok());

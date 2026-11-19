@@ -21,6 +21,7 @@ import {
   type DocumentView,
   type DraftRecovery,
   type FolderEntry,
+  type FolderRowId,
   type FolderRules,
   type LocalActionRequest,
   type LocalPreview,
@@ -1892,7 +1893,7 @@ export function ComparisonWorkspace({
   }
   async function createPreview(
     syncMode: string,
-    selected: string[] | null = null,
+    selected: FolderRowId[] | null = null,
     destination: "left" | "right" = "right",
   ) {
     if (syncMode !== "update" && syncMode !== "mirror")
@@ -1901,7 +1902,10 @@ export function ComparisonWorkspace({
       throw new Error(
         "Sync is unavailable because the scan is incomplete. Exclude large folders such as node_modules and scan again.",
       );
-    const roots = await normalizeFolderRoots();
+    if (!folderScanId.current)
+      throw new Error(
+        "The folder comparison is out of date. Refresh the comparison before syncing.",
+      );
     if (!(await claimPreview(tab.id))) return;
     setPreview(null);
     setPreviewKind(
@@ -1915,11 +1919,10 @@ export function ComparisonWorkspace({
     const jobId = crypto.randomUUID();
     startJob(jobId);
     const result = await native("preview_sync", {
-      left: destination === "right" ? roots.left : roots.right,
-      right: destination === "right" ? roots.right : roots.left,
-      options: folderOptions(),
+      scanId: folderScanId.current,
       mode: syncMode,
       selected,
+      destination,
       jobId,
     }).catch((failure: unknown) => {
       discardPreview(tab.id);
@@ -1939,11 +1942,16 @@ export function ComparisonWorkspace({
     await executeSyncPlan(preview);
   }
   async function executeSyncPlan(plan: Preview) {
+    const skippedNote = plan.skipped.length
+      ? ` Skipped (${plan.skipped.length}).`
+      : "";
     if (!plan.operations.length) {
       discardPreview(tab.id);
       setPreview(null);
       setPreviewKind(null);
-      setNotice("Nothing to copy: the destination already matches.");
+      setNotice(
+        `Nothing to copy: the destination already matches.${skippedNote}`,
+      );
       return;
     }
     const jobId = crypto.randomUUID();
@@ -1967,7 +1975,7 @@ export function ComparisonWorkspace({
       }
     }
     setNotice(
-      `Completed ${results.length - failures.length} of ${results.length} operations.`,
+      `Completed ${results.length - failures.length} of ${results.length} operations.${skippedNote}`,
     );
     if (failures.length)
       throw new Error(
@@ -3124,26 +3132,16 @@ export function ComparisonWorkspace({
         throw new Error(
           "Aligned names require an explicit Copy to Folder destination; synchronization does not guess alternate destination names.",
         );
-      const expanded = entries.length
-        ? folders
-            .filter((entry) =>
-              entries.some(
-                (selected) =>
-                  entry.relative === selected.relative ||
-                  (selected.isDirectory &&
-                    entry.relative.startsWith(`${selected.relative}/`)),
-              ),
-            )
-            .filter(
-              (entry) =>
-                (side === "left" ? entry.leftSize : entry.rightSize) !== null,
-            )
-            .map((entry) => entry.relative)
+      const selectedRows = entries.length
+        ? entries.map((entry) => ({
+            relative: entry.relative,
+            isDirectory: entry.isDirectory,
+          }))
         : null;
       setFolderDialog(null);
       await createPreview(
         dialogValue,
-        expanded,
+        selectedRows,
         side === "left" ? "right" : "left",
       );
       return;
@@ -5203,6 +5201,30 @@ export function ComparisonWorkspace({
                     </p>
                   )}
                 </section>
+                {preview.skipped.length > 0 && (
+                  <section
+                    className="sync-preview-operations"
+                    aria-label="Skipped rows"
+                  >
+                    <h3>Skipped ({preview.skipped.length})</h3>
+                    <VirtualList
+                      count={preview.skipped.length}
+                      height={120}
+                      rowHeight={38}
+                      label="Skipped sync rows"
+                      render={(index) => {
+                        const row = preview.skipped[index];
+                        if (!row) return null;
+                        return (
+                          <div className="sync-preview-operation">
+                            <strong>{row.reason}</strong>
+                            <span title={row.relative}>{row.relative}</span>
+                          </div>
+                        );
+                      }}
+                    />
+                  </section>
+                )}
                 <div className="dialog-actions">
                   <button disabled={busy} onClick={dismissPreview}>
                     Cancel

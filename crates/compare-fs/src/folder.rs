@@ -121,7 +121,17 @@ struct Snapshot {
 }
 
 fn is_directory_hash(hash: &str) -> bool {
-  matches!(hash, "directory" | "excludedDirectory")
+  hash == "directory"
+}
+
+/// Kind of the entry at `path` without following links: `None` if absent, otherwise
+/// `Some(true)` for a directory and `Some(false)` for anything else, including links.
+fn other_side_is_directory(path: &Path) -> Result<Option<bool>, FileError> {
+  match fs::symlink_metadata(path) {
+    Ok(metadata) => Ok(Some(metadata.is_dir())),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(error.into()),
+  }
 }
 
 fn cancel(cancelled: &AtomicBool) -> Result<(), FileError> {
@@ -281,25 +291,6 @@ fn scan(
   cancelled: &AtomicBool,
   progress: &mut impl FnMut(usize),
 ) -> Result<Scan, FileError> {
-  scan_internal(root, options, cancelled, progress, false)
-}
-
-fn scan_for_plan(
-  root: &Path,
-  options: &FolderOptions,
-  cancelled: &AtomicBool,
-  progress: &mut impl FnMut(usize),
-) -> Result<Scan, FileError> {
-  scan_internal(root, options, cancelled, progress, true)
-}
-
-fn scan_internal(
-  root: &Path,
-  options: &FolderOptions,
-  cancelled: &AtomicBool,
-  progress: &mut impl FnMut(usize),
-  retain_excluded_markers: bool,
-) -> Result<Scan, FileError> {
   let root = checked_path(root, false)?;
   if !root.is_dir() {
     return Err(FileError("Folder root must be a directory.".into()));
@@ -350,7 +341,7 @@ fn scan_internal(
         filters.files.contains(&relative) && metadata.as_ref().is_some_and(|value| value.is_file());
       let excluded_directory = metadata.as_ref().is_some_and(|value| value.is_dir())
         && (filters.directories.contains(&relative) || glob_excludes_directory);
-      if (excluded_file || excluded_directory) && !retain_excluded_markers {
+      if excluded_file || excluded_directory {
         continue;
       }
       count += 1;
@@ -359,23 +350,6 @@ fn scan_internal(
       }
       if count % 100 == 0 {
         progress(count);
-      }
-      if excluded_file || excluded_directory {
-        let metadata = metadata.expect("excluded entry has metadata");
-        let (size, hash) = if excluded_directory {
-          (0, "excludedDirectory")
-        } else {
-          (metadata.len(), "excludedFile")
-        };
-        files.insert(
-          relative,
-          Snapshot {
-            size,
-            modified: metadata.modified()?,
-            hash: hash.into(),
-          },
-        );
-        continue;
       }
       if let Err(error) = checked_path(&path, false) {
         errors.insert(relative, error.to_string());
@@ -585,47 +559,258 @@ pub struct PlannedOperation {
 
 pub type OperationResults = Vec<(String, Result<(), String>)>;
 
+/// A row that Sync will not act on, with the reason shown in the preview.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedRow {
+  pub relative: String,
+  pub reason: String,
+}
+
+/// Approval guard for one operation: the items the preview judged, revalidated at execution.
+struct Guard {
+  source: Option<Snapshot>,
+  destination: Option<Snapshot>,
+}
+
 pub struct Plan {
   left: PathBuf,
   right: PathBuf,
-  options: FolderOptions,
-  left_snapshot: BTreeMap<String, Snapshot>,
-  right_snapshot: BTreeMap<String, Snapshot>,
+  guards: BTreeMap<String, Guard>,
   pub operations: Vec<PlannedOperation>,
+  pub skipped: Vec<SkippedRow>,
+}
+
+/// Mirror scan rows so that the right side plays the left role. `Plan::from_rows` only
+/// plans left-to-right, so a right-to-left Sync plans `swap_sides(rows)` against the
+/// swapped roots. Row identity (`relative`, `is_directory`) is unchanged by the swap.
+pub fn swap_sides(rows: &[FolderEntry]) -> Vec<FolderEntry> {
+  rows
+    .iter()
+    .map(|row| FolderEntry {
+      relative: row.relative.clone(),
+      left_relative: row.right_relative.clone(),
+      right_relative: row.left_relative.clone(),
+      left_kind: row.right_kind.clone(),
+      right_kind: row.left_kind.clone(),
+      status: match row.status {
+        FolderStatus::LeftOnly => FolderStatus::RightOnly,
+        FolderStatus::RightOnly => FolderStatus::LeftOnly,
+        other => other,
+      },
+      left_size: row.right_size,
+      right_size: row.left_size,
+      left_modified: row.right_modified,
+      right_modified: row.left_modified,
+      newer: row.newer.map(|side| match side {
+        FolderSide::Left => FolderSide::Right,
+        FolderSide::Right => FolderSide::Left,
+      }),
+      newer_mixed: row.newer_mixed,
+      importance: row.importance,
+      error: row.error.clone(),
+      detail: row.detail.clone(),
+      is_directory: row.is_directory,
+      counts: FolderCounts {
+        different: row.counts.different,
+        left_only: row.counts.right_only,
+        right_only: row.counts.left_only,
+        error: row.counts.error,
+      },
+    })
+    .collect()
 }
 
 impl Plan {
-  pub fn select(&mut self, names: &[String]) -> Result<(), FileError> {
-    if names.len() > MAX_FOLDER_ENTRIES
-      || names
-        .iter()
-        .any(|name| !self.operations.iter().any(|op| &op.relative == name))
-    {
-      return Err(FileError(
-        "Selection includes an operation outside the preview.".into(),
-      ));
-    }
-    self.operations.retain(|op| {
-      names.contains(&op.relative)
-        || (op.action == "mkdir"
-          && names
-            .iter()
-            .any(|name| Path::new(name).starts_with(&op.relative)))
-    });
-    Ok(())
-  }
-
-  pub fn preview(
+  /// Decide Sync operations from scan rows. Update semantics are unchanged:
+  ///
+  /// | Row                                  | Update    | Mirror          |
+  /// | ------------------------------------ | --------- | --------------- |
+  /// | LeftOnly file                        | copy      | copy            |
+  /// | LeftOnly directory                   | mkdir     | mkdir           |
+  /// | Different file                       | overwrite | overwrite       |
+  /// | Different directory, Same row        | none      | none            |
+  /// | RightOnly file                       | none      | trash           |
+  /// | RightOnly directory                  | none      | trashDirectory  |
+  /// | Error row, or a link on either side  | skipped   | skipped         |
+  ///
+  /// Excluded entries never appear as rows. If an excluded item on the other side has a
+  /// different kind from a planned item, the preview is refused as a collision; if it has
+  /// the same kind, the item is treated as excluded and skipped.
+  ///
+  /// `selection` limits operations to the named rows; selecting a directory includes all
+  /// of its descendants. `None` plans every row.
+  pub fn from_rows(
     left: &Path,
     right: &Path,
-    options: FolderOptions,
+    rows: &[FolderEntry],
     mode: SyncMode,
+    selection: Option<&[RowId]>,
     cancelled: &AtomicBool,
   ) -> Result<Self, FileError> {
-    Self::preview_internal(left, right, options, mode, cancelled)
+    let (left, right) = roots(left, right)?;
+    let mut kinds: BTreeMap<&str, (bool, bool)> = BTreeMap::new();
+    for row in rows {
+      let entry = kinds.entry(row.relative.as_str()).or_default();
+      if row.is_directory {
+        entry.0 = true;
+      } else {
+        entry.1 = true;
+      }
+      if entry.0 && entry.1 {
+        return Err(FileError(format!(
+          "File/directory collision at {}; no sync was planned.",
+          row.relative
+        )));
+      }
+    }
+    if let Some(selection) = selection {
+      if selection.len() > MAX_FOLDER_ENTRIES
+        || selection.iter().any(|id| {
+          !rows
+            .iter()
+            .any(|row| row.relative == id.relative && row.is_directory == id.is_directory)
+        })
+      {
+        return Err(FileError(
+          "Selection includes an operation outside the preview.".into(),
+        ));
+      }
+    }
+    // Missing parents of selected items are planned too, so no directory is created unseen.
+    let required_parents: BTreeSet<&str> = selection
+      .unwrap_or_default()
+      .iter()
+      .flat_map(|id| {
+        id.relative
+          .match_indices('/')
+          .map(move |(index, _)| &id.relative[..index])
+      })
+      .collect();
+    let in_scope = |row: &FolderEntry| match selection {
+      None => true,
+      Some(selection) => {
+        selection.iter().any(|id| {
+          (id.relative == row.relative && id.is_directory == row.is_directory)
+            || (id.is_directory
+              && row
+                .relative
+                .strip_prefix(id.relative.as_str())
+                .is_some_and(|rest| rest.starts_with('/')))
+        }) || (row.is_directory
+          && row.status == FolderStatus::LeftOnly
+          && required_parents.contains(row.relative.as_str()))
+      }
+    };
+    let mut operations = Vec::new();
+    let mut skipped = Vec::new();
+    let mut guards = BTreeMap::new();
+    for row in rows.iter().filter(|row| in_scope(row)) {
+      if row.status == FolderStatus::Same {
+        continue;
+      }
+      if row.status == FolderStatus::Error {
+        skipped.push(SkippedRow {
+          relative: row.relative.clone(),
+          reason: row
+            .error
+            .clone()
+            .unwrap_or_else(|| "Could not be compared.".into()),
+        });
+        continue;
+      }
+      if row.left_kind == Some(FolderEntryKind::Link)
+        || row.right_kind == Some(FolderEntryKind::Link)
+      {
+        skipped.push(SkippedRow {
+          relative: row.relative.clone(),
+          reason: "Links are not synced.".into(),
+        });
+        continue;
+      }
+      let left_path = left.join(row.left_relative.as_deref().unwrap_or(&row.relative));
+      let right_path = right.join(row.right_relative.as_deref().unwrap_or(&row.relative));
+      // Excluded items on the other side are invisible to rows, so probe them here.
+      if matches!(row.status, FolderStatus::LeftOnly | FolderStatus::RightOnly) {
+        let other = if row.status == FolderStatus::LeftOnly {
+          &right_path
+        } else {
+          &left_path
+        };
+        match other_side_is_directory(other)? {
+          Some(other_is_directory) if other_is_directory != row.is_directory => {
+            return Err(FileError(format!(
+              "File/directory collision at {}; no sync was planned.",
+              row.relative
+            )));
+          }
+          // Present with the same kind: an excluded item, so it is not synced.
+          Some(_) => continue,
+          None => {}
+        }
+      }
+      let action = match (row.status, row.is_directory, mode) {
+        (FolderStatus::LeftOnly, true, _) => "mkdir",
+        (FolderStatus::LeftOnly, false, _) => "copy",
+        (FolderStatus::Different, false, _) => "overwrite",
+        (FolderStatus::RightOnly, true, SyncMode::Mirror) => "trashDirectory",
+        (FolderStatus::RightOnly, false, SyncMode::Mirror) => "trash",
+        _ => continue,
+      };
+      let (source, destination) = match action {
+        "trash" | "trashDirectory" => (None, Some(&right_path)),
+        "mkdir" | "copy" => (Some(&left_path), None),
+        _ => (Some(&left_path), Some(&right_path)),
+      };
+      let captured = (|| -> Result<Guard, FileError> {
+        Ok(Guard {
+          source: source.map(|path| snapshot(path, cancelled)).transpose()?,
+          destination: destination
+            .filter(|path| path.symlink_metadata().is_ok())
+            .map(|path| snapshot(path, cancelled))
+            .transpose()?,
+        })
+      })();
+      let guard = match captured {
+        Ok(guard) => guard,
+        Err(_) if cancelled.load(Ordering::Relaxed) => {
+          return Err(FileError("Folder operation cancelled.".into()));
+        }
+        Err(error) => {
+          skipped.push(SkippedRow {
+            relative: row.relative.clone(),
+            reason: error.to_string(),
+          });
+          continue;
+        }
+      };
+      guards.insert(row.relative.clone(), guard);
+      operations.push(PlannedOperation {
+        relative: row.relative.clone(),
+        action: action.into(),
+      });
+    }
+    // Parents before children for creation; children before parents for recycling.
+    operations.sort_by(|a, b| {
+      let depth = |op: &PlannedOperation| op.relative.matches('/').count();
+      match (a.action.starts_with("trash"), b.action.starts_with("trash")) {
+        (true, true) => depth(b).cmp(&depth(a)).then(a.relative.cmp(&b.relative)),
+        (false, false) => depth(a).cmp(&depth(b)).then(a.relative.cmp(&b.relative)),
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+      }
+    });
+    Ok(Self {
+      left,
+      right,
+      guards,
+      operations,
+      skipped,
+    })
   }
 
-  fn preview_internal(
+  /// Preview a whole-tree Sync with byte-exact rules. Refuses truncated scans.
+  pub fn preview(
     left: &Path,
     right: &Path,
     options: FolderOptions,
@@ -637,80 +822,20 @@ impl Plan {
       display_path(left),
       display_path(right)
     );
-    Self::preview_internal_impl(left, right, options, mode, cancelled)
+    let rules = FolderRules {
+      content: ContentMethod::Binary,
+      ..FolderRules::default()
+    };
+    let scan = scan_pair_with_rules(left, right, &options, &rules, cancelled, |_| {})
+      .map_err(|error| error.context(context.clone()))?;
+    if scan.truncated {
+      return Err(
+        FileError("Folder scan was truncated; narrow the folders before syncing.".into())
+          .context(context),
+      );
+    }
+    Self::from_rows(left, right, &scan.entries, mode, None, cancelled)
       .map_err(|error| error.context(context))
-  }
-
-  fn preview_internal_impl(
-    left: &Path,
-    right: &Path,
-    options: FolderOptions,
-    mode: SyncMode,
-    cancelled: &AtomicBool,
-  ) -> Result<Self, FileError> {
-    let (left, right) = roots(left, right)?;
-    let (a, ae) = scan_for_plan(&left, &options, cancelled, &mut |_| {})?;
-    let (b, be) = scan_for_plan(&right, &options, cancelled, &mut |_| {})?;
-    if !ae.is_empty() || !be.is_empty() {
-      return Err(FileError("Sync is blocked by inaccessible, linked, or unsupported entries. Resolve scan errors first.".into()));
-    }
-    let mut operations = Vec::new();
-    for (name, value) in &a {
-      if b
-        .get(name)
-        .is_some_and(|other| is_directory_hash(&value.hash) != is_directory_hash(&other.hash))
-      {
-        return Err(FileError(format!(
-          "File/directory collision at {name}; no sync was planned."
-        )));
-      }
-      if excluded_from_plan(name, &a, &b, &options) {
-        continue;
-      }
-      if b.get(name).is_none_or(|other| other.hash != value.hash) {
-        operations.push(PlannedOperation {
-          relative: name.clone(),
-          action: if value.hash == "directory" {
-            "mkdir"
-          } else if b.contains_key(name) {
-            "overwrite"
-          } else {
-            "copy"
-          }
-          .into(),
-        });
-      }
-    }
-    if matches!(mode, SyncMode::Mirror) {
-      let mut orphaned: Vec<_> = b.keys().filter(|name| !a.contains_key(*name)).collect();
-      orphaned.sort_by_key(|name| {
-        (
-          std::cmp::Reverse(name.matches('/').count()),
-          is_directory_hash(&b[*name].hash),
-        )
-      });
-      for name in orphaned {
-        if !a.contains_key(name) && !excluded_from_plan(name, &a, &b, &options) {
-          operations.push(PlannedOperation {
-            relative: name.clone(),
-            action: if b[name].hash == "directory" {
-              "trashDirectory"
-            } else {
-              "trash"
-            }
-            .into(),
-          });
-        }
-      }
-    }
-    Ok(Self {
-      left,
-      right,
-      options,
-      left_snapshot: a,
-      right_snapshot: b,
-      operations,
-    })
   }
 
   /// Consume a preview once. Failures are per-operation, never hidden as complete sync.
@@ -734,27 +859,6 @@ impl Plan {
     mut progress: impl FnMut(usize),
     mut recycle: impl FnMut(&Path) -> Result<(), FileError>,
   ) -> Result<OperationResults, FileError> {
-    let left_context = format!(
-      "Could not recheck the left folder \"{}\"",
-      display_path(&self.left)
-    );
-    let right_context = format!(
-      "Could not recheck the right folder \"{}\"",
-      display_path(&self.right)
-    );
-    let (a, ae) = scan_for_plan(&self.left, &self.options, cancelled, &mut |_| {})
-      .map_err(|error| error.context(left_context))?;
-    let (b, be) = scan_for_plan(&self.right, &self.options, cancelled, &mut |_| {})
-      .map_err(|error| error.context(right_context))?;
-    if a != self.left_snapshot || b != self.right_snapshot || !ae.is_empty() || !be.is_empty() {
-      return Err(
-        FileError("Sync preview is stale. Create a new preview.".into()).context(format!(
-          "Could not execute Sync between the left folder \"{}\" and the right folder \"{}\"",
-          display_path(&self.left),
-          display_path(&self.right)
-        )),
-      );
-    }
     let mut results = Vec::new();
     for operation in self.operations {
       if cancelled.load(Ordering::Relaxed) {
@@ -764,6 +868,10 @@ impl Plan {
         ));
         continue;
       }
+      let guard = self
+        .guards
+        .get(&operation.relative)
+        .ok_or_else(|| FileError("Missing approval for operation.".into()))?;
       let source = self.left.join(&operation.relative);
       let destination = self.right.join(&operation.relative);
       let operation_context = sync_operation_context(&operation.action, &source, &destination);
@@ -780,20 +888,29 @@ impl Plan {
           recycle(&destination)?;
           return Ok(());
         }
-        if let Some(expected) = self.right_snapshot.get(&operation.relative) {
-          if snapshot(&destination, cancelled)? != *expected {
-            return Err(FileError("Destination changed after preview.".into()));
+        match &guard.destination {
+          Some(expected) => {
+            if snapshot(&destination, cancelled)? != *expected {
+              return Err(FileError("Changed since preview; skipped".into()));
+            }
           }
-        } else if destination.exists() {
-          return Err(FileError("Destination was created after preview.".into()));
+          None => {
+            if destination.symlink_metadata().is_ok() {
+              return Err(FileError("Changed since preview; skipped".into()));
+            }
+          }
         }
         if operation.action == "trash" {
           checked_path(&destination, false)?;
           recycle(&destination)?;
           return Ok(());
         }
-        if snapshot(&source, cancelled)? != self.left_snapshot[&operation.relative] {
-          return Err(FileError("Source changed after preview.".into()));
+        let expected_source = guard
+          .source
+          .as_ref()
+          .ok_or_else(|| FileError("Missing source approval.".into()))?;
+        if snapshot(&source, cancelled)? != *expected_source {
+          return Err(FileError("Changed since preview; skipped".into()));
         }
         let parent = destination
           .parent()
@@ -829,11 +946,11 @@ impl Plan {
           hash.update(&buffer[..read]);
           temp.write_all(&buffer[..read])?;
         }
-        if hash.finalize().to_hex().as_str() != self.left_snapshot[&operation.relative].hash {
+        if hash.finalize().to_hex().as_str() != expected_source.hash {
           return Err(FileError("Source changed during copy.".into()));
         }
         checked_path(&destination, true)?;
-        let permissions = if let Some(expected) = self.right_snapshot.get(&operation.relative) {
+        let permissions = if let Some(expected) = &guard.destination {
           if snapshot(&destination, cancelled)? != *expected {
             return Err(FileError("Destination changed during copy.".into()));
           }
@@ -845,12 +962,12 @@ impl Plan {
         } else {
           fs::metadata(&source)?.permissions()
         };
-        temp.as_file().set_times(
-          fs::FileTimes::new().set_modified(self.left_snapshot[&operation.relative].modified),
-        )?;
+        temp
+          .as_file()
+          .set_times(fs::FileTimes::new().set_modified(expected_source.modified))?;
         temp.as_file().set_permissions(permissions)?;
         temp.as_file().sync_all()?;
-        if self.right_snapshot.contains_key(&operation.relative) {
+        if guard.destination.is_some() {
           temp
             .persist(&destination)
             .map_err(|e| FileError(e.error.to_string()))?;
@@ -891,49 +1008,6 @@ fn sync_operation_context(action: &str, source: &Path, destination: &Path) -> St
             "Could not execute Sync action \"{action}\" for \"{source}\" and \"{destination}\""
         ),
     }
-}
-
-fn excluded_from_plan(
-  name: &str,
-  left: &BTreeMap<String, Snapshot>,
-  right: &BTreeMap<String, Snapshot>,
-  options: &FolderOptions,
-) -> bool {
-  if left
-    .get(name)
-    .is_some_and(|entry| entry.hash == "excludedDirectory")
-    || right
-      .get(name)
-      .is_some_and(|entry| entry.hash == "excludedDirectory")
-  {
-    return true;
-  }
-  let is_directory = |path: &str| {
-    left
-      .get(path)
-      .is_some_and(|entry| is_directory_hash(&entry.hash))
-      || right
-        .get(path)
-        .is_some_and(|entry| is_directory_hash(&entry.hash))
-  };
-  if options.exclude_directories.iter().any(|excluded| {
-    (name == excluded
-      || name
-        .strip_prefix(excluded)
-        .is_some_and(|suffix| suffix.starts_with('/')))
-      && is_directory(excluded)
-  }) {
-    return true;
-  }
-  options.exclude_files.iter().any(|excluded| {
-    name == excluded
-      && (left
-        .get(name)
-        .is_some_and(|entry| entry.hash == "excludedFile")
-        || right
-          .get(name)
-          .is_some_and(|entry| entry.hash == "excludedFile"))
-  })
 }
 
 #[cfg(test)]
@@ -1048,7 +1122,13 @@ mod tests {
     let flag = AtomicBool::new(false);
     let plan = Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).unwrap();
     fs::write(a.join("one"), b"changed").unwrap();
-    assert!(plan.execute(&flag, |_| {}).is_err());
+    let results = plan.execute(&flag, |_| {}).unwrap();
+    assert!(results[0]
+      .1
+      .as_ref()
+      .unwrap_err()
+      .contains("Changed since preview; skipped"));
+    assert!(!b.join("one").exists());
     let plan = Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).unwrap();
     assert_eq!(plan.operations.len(), 1);
     assert!(plan.execute(&flag, |_| {}).unwrap()[0].1.is_ok());
@@ -1250,7 +1330,8 @@ mod tests {
     fs::set_permissions(b.join("file"), permissions).unwrap();
     let plan = Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).unwrap();
     flag.store(true, Ordering::Relaxed);
-    assert!(plan.execute(&flag, |_| {}).is_err());
+    let results = plan.execute(&flag, |_| {}).unwrap();
+    assert!(results.iter().all(|(_, result)| result.is_err()));
     assert_eq!(fs::read_to_string(b.join("file")).unwrap(), "old");
   }
 
@@ -1364,6 +1445,28 @@ mod tests {
     assert!(error.contains("trash unavailable"));
   }
 
+  fn preview_selected(
+    a: &Path,
+    b: &Path,
+    mode: SyncMode,
+    selection: &[RowId],
+    flag: &AtomicBool,
+  ) -> Result<Plan, FileError> {
+    let rules = FolderRules {
+      content: ContentMethod::Binary,
+      ..FolderRules::default()
+    };
+    let scan = scan_pair_with_rules(a, b, &FolderOptions::default(), &rules, flag, |_| {})?;
+    Plan::from_rows(a, b, &scan.entries, mode, Some(selection), flag)
+  }
+
+  fn file_row(relative: &str) -> RowId {
+    RowId {
+      relative: relative.into(),
+      is_directory: false,
+    }
+  }
+
   #[test]
   fn preview_selection_cannot_add_operations() {
     let root = tempfile::tempdir().unwrap();
@@ -1374,18 +1477,15 @@ mod tests {
     fs::write(a.join("one"), "one").unwrap();
     fs::write(a.join("two"), "two").unwrap();
     let flag = AtomicBool::new(false);
-    let mut plan =
-      Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).unwrap();
-    assert!(plan.select(&["../escape".into()]).is_err());
-    plan.select(&["two".into()]).unwrap();
+    assert!(preview_selected(&a, &b, SyncMode::Update, &[file_row("../escape")], &flag).is_err());
+    let plan = preview_selected(&a, &b, SyncMode::Update, &[file_row("two")], &flag).unwrap();
     assert_eq!(plan.operations.len(), 1);
     assert!(plan.execute(&flag, |_| {}).unwrap()[0].1.is_ok());
     assert!(!b.join("one").exists());
     fs::create_dir(a.join("nested")).unwrap();
     fs::write(a.join("nested").join("file"), "nested").unwrap();
-    let mut plan =
-      Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).unwrap();
-    plan.select(&["nested/file".into()]).unwrap();
+    let plan =
+      preview_selected(&a, &b, SyncMode::Update, &[file_row("nested/file")], &flag).unwrap();
     assert_eq!(plan.operations.len(), 2);
     assert!(plan.operations.iter().any(|op| op.action == "mkdir"));
     assert!(plan
@@ -1397,5 +1497,145 @@ mod tests {
       fs::read_to_string(b.join("nested").join("file")).unwrap(),
       "nested"
     );
+  }
+
+  #[test]
+  fn selecting_a_directory_includes_its_descendants() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    fs::create_dir_all(a.join("dir").join("inner")).unwrap();
+    fs::create_dir(&b).unwrap();
+    fs::write(a.join("dir").join("top"), "top").unwrap();
+    fs::write(a.join("dir").join("inner").join("deep"), "deep").unwrap();
+    let flag = AtomicBool::new(false);
+    let dir_row = RowId {
+      relative: "dir".into(),
+      is_directory: true,
+    };
+    let plan = preview_selected(&a, &b, SyncMode::Update, &[dir_row], &flag).unwrap();
+    assert!(plan
+      .operations
+      .iter()
+      .any(|op| op.action == "copy" && op.relative == "dir/inner/deep"));
+    assert!(plan
+      .operations
+      .iter()
+      .any(|op| op.action == "copy" && op.relative == "dir/top"));
+    assert!(plan
+      .execute(&flag, |_| {})
+      .unwrap()
+      .iter()
+      .all(|(_, r)| r.is_ok()));
+    assert_eq!(
+      fs::read_to_string(b.join("dir/inner/deep")).unwrap(),
+      "deep"
+    );
+  }
+
+  #[test]
+  fn stale_item_fails_alone_while_others_complete() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    fs::write(a.join("one"), "one").unwrap();
+    fs::write(a.join("two"), "two").unwrap();
+    let flag = AtomicBool::new(false);
+    let plan = Plan::from_rows(
+      &a,
+      &b,
+      &scan_pair_with_rules(
+        &a,
+        &b,
+        &FolderOptions::default(),
+        &FolderRules {
+          content: ContentMethod::Binary,
+          ..FolderRules::default()
+        },
+        &flag,
+        |_| {},
+      )
+      .unwrap()
+      .entries,
+      SyncMode::Update,
+      None,
+      &flag,
+    )
+    .unwrap();
+    assert_eq!(plan.operations.len(), 2);
+    fs::write(a.join("one"), "changed after preview").unwrap();
+    let results = plan.execute(&flag, |_| {}).unwrap();
+    let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+    let succeeded = results.iter().filter(|(_, r)| r.is_ok()).count();
+    assert_eq!((failed, succeeded), (1, 1));
+    assert!(!b.join("one").exists());
+    assert_eq!(fs::read_to_string(b.join("two")).unwrap(), "two");
+  }
+
+  #[test]
+  fn grid_quick_test_rows_are_not_resynced_but_preview_compares_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    fs::write(a.join("file"), "aaaa").unwrap();
+    fs::write(b.join("file"), "bbbb").unwrap();
+    let modified =
+      std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_620_000_000);
+    for path in [a.join("file"), b.join("file")] {
+      fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    }
+    let flag = AtomicBool::new(false);
+    let scan = scan_pair_with_rules(
+      &a,
+      &b,
+      &FolderOptions::default(),
+      &FolderRules::default(),
+      &flag,
+      |_| {},
+    )
+    .unwrap();
+    assert_eq!(scan.entries[0].status, FolderStatus::Same);
+    let plan = Plan::from_rows(&a, &b, &scan.entries, SyncMode::Update, None, &flag).unwrap();
+    assert!(plan.operations.is_empty());
+    let plan = Plan::preview(&a, &b, FolderOptions::default(), SyncMode::Update, &flag).unwrap();
+    assert_eq!(plan.operations.len(), 1);
+    assert_eq!(plan.operations[0].action, "overwrite");
+  }
+
+  #[test]
+  fn swap_sides_plans_right_to_left_sync() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    fs::write(a.join("only-a"), "from a").unwrap();
+    fs::write(b.join("only-b"), "from b").unwrap();
+    let flag = AtomicBool::new(false);
+    let rules = FolderRules {
+      content: ContentMethod::Binary,
+      ..FolderRules::default()
+    };
+    let scan =
+      scan_pair_with_rules(&a, &b, &FolderOptions::default(), &rules, &flag, |_| {}).unwrap();
+    // Right-to-left: the right folder b is the source, so plan with b as the left root.
+    let swapped = swap_sides(&scan.entries);
+    let plan = Plan::from_rows(&b, &a, &swapped, SyncMode::Update, None, &flag).unwrap();
+    assert_eq!(plan.operations.len(), 1);
+    assert_eq!(plan.operations[0].relative, "only-b");
+    assert_eq!(plan.operations[0].action, "copy");
+    assert!(plan.execute(&flag, |_| {}).unwrap()[0].1.is_ok());
+    assert_eq!(fs::read_to_string(a.join("only-b")).unwrap(), "from b");
+    assert_eq!(fs::read_to_string(a.join("only-a")).unwrap(), "from a");
+    assert!(!b.join("only-a").exists());
   }
 }

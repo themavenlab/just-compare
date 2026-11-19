@@ -145,6 +145,8 @@ export interface FolderPatch {
 export interface Preview {
   id: string;
   operations: { relative: string; action: string }[];
+  /** Rows Sync will not act on, with the reason shown in the preview. */
+  skipped: { relative: string; reason: string }[];
 }
 export interface Outcome {
   relative: string;
@@ -402,11 +404,10 @@ interface Commands {
   };
   preview_sync: {
     args: {
-      left: string;
-      right: string;
-      options: FolderOptions;
+      scanId: string;
       mode: string;
-      selected: string[] | null;
+      selected: FolderRowId[] | null;
+      destination: "left" | "right";
       jobId?: string;
     };
     result: Preview;
