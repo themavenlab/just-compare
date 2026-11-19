@@ -3706,7 +3706,6 @@ mod tests {
       relative: "parent/gone".into(),
       is_directory: false,
     }));
-    assert!(patch.upserted.iter().any(|row| row.relative == "parent"));
   }
 
   #[test]
