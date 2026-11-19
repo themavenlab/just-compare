@@ -780,13 +780,6 @@ impl Plan {
           recycle(&destination)?;
           return Ok(());
         }
-        if operation.action == "trashLeft" {
-          if snapshot(&source, cancelled)? != self.left_snapshot[&operation.relative] {
-            return Err(FileError("Source changed after preview.".into()));
-          }
-          recycle(&source)?;
-          return Ok(());
-        }
         if let Some(expected) = self.right_snapshot.get(&operation.relative) {
           if snapshot(&destination, cancelled)? != *expected {
             return Err(FileError("Destination changed after preview.".into()));
@@ -867,18 +860,6 @@ impl Plan {
             .map_err(|e| FileError(e.error.to_string()))?;
         }
         crate::file_actions::copy_hidden_system_attributes(&source, &destination)?;
-        if operation.action == "move" {
-          if snapshot(&source, cancelled)? != self.left_snapshot[&operation.relative] {
-            return Err(FileError(
-              "Copied destination, but source changed; move deletion was not performed.".into(),
-            ));
-          }
-          recycle(&source).map_err(|e| {
-            FileError(format!(
-              "Destination copied, but source recycling failed: {e}"
-            ))
-          })?;
-        }
         Ok(())
       })()
       .map_err(|error| error.context(&operation_context).to_string());
@@ -899,13 +880,9 @@ fn sync_operation_context(action: &str, source: &Path, destination: &Path) -> St
         "overwrite" => format!(
             "Could not overwrite \"{destination}\" in the right folder from \"{source}\" in the left folder"
         ),
-        "move" => format!(
-            "Could not move \"{source}\" from the left folder to \"{destination}\" in the right folder"
-        ),
         "mkdir" => format!(
             "Could not create folder \"{destination}\" in the right folder from \"{source}\" in the left folder"
         ),
-        "trashLeft" => format!("Could not recycle \"{source}\" from the left folder"),
         "trash" => format!("Could not recycle \"{destination}\" from the right folder"),
         "trashDirectory" => format!(
             "Could not recycle directory \"{destination}\" from the right folder"
