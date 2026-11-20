@@ -255,7 +255,6 @@ interface CompareOptions {
   alignmentAnchors?: { left: number; right: number }[];
 }
 interface FolderOptions {
-  criterion: string;
   exclude: string[];
   excludeFiles: string[];
   excludeDirectories: string[];

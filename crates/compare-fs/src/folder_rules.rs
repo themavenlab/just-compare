@@ -82,8 +82,8 @@ pub struct FolderTextRules {
   pub unicode_normalization: bool,
 }
 
-/// Independent of the legacy `FolderOptions::criterion`. Size/time quick tests
-/// obey the content precedence policy; name/attribute checks remain independent.
+/// Size/time quick tests obey the content precedence policy; name/attribute
+/// checks remain independent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderRules {
@@ -1021,8 +1021,8 @@ fn selected_attribute_mask(rules: &FolderRules) -> u32 {
     | (if rules.compare_hidden { 0x2 } else { 0 })
 }
 
-/// The legacy criterion is intentionally ignored; `options` supplies exclusions.
-/// Error rows carry actual per-side names and never imply equality.
+/// `options` supplies exclusions. Error rows carry actual per-side names and
+/// never imply equality.
 pub fn scan_pair_with_rules(
   left: &Path,
   right: &Path,
@@ -1737,7 +1737,7 @@ mod tests {
   }
 
   #[test]
-  fn defaults_use_metadata_quick_test_and_legacy_criterion_is_not_reused() {
+  fn defaults_use_metadata_quick_test_and_binary_rules_read_content() {
     let fixture = Fixture::new();
     fixture.files(b"one", b"two");
     let base = 1_700_000_000_000;
@@ -1750,37 +1750,6 @@ mod tests {
     let rows = fixture.scan(&binary_rules());
     assert_eq!(rows[0].status, FolderStatus::Different);
     assert_eq!(rows[0].importance, ComparisonImportance::Important);
-    let rows = scan_pair_with_rules(
-      &fixture.left,
-      &fixture.right,
-      &FolderOptions {
-        criterion: Criterion::Size,
-        exclude: vec![],
-        ..Default::default()
-      },
-      &binary_rules(),
-      &AtomicBool::new(false),
-      |_| {},
-    )
-    .unwrap()
-    .entries;
-    assert_eq!(rows[0].status, FolderStatus::Different);
-    assert_eq!(
-      scan_pair(
-        &fixture.left,
-        &fixture.right,
-        &FolderOptions {
-          criterion: Criterion::Size,
-          exclude: vec![],
-          ..Default::default()
-        },
-        &AtomicBool::new(false),
-        |_| {},
-      )
-      .unwrap()[0]
-        .status,
-      FolderStatus::Same
-    );
   }
 
   #[test]
@@ -3451,8 +3420,10 @@ mod tests {
     )
     .is_err());
     assert!(
-      serde_json::from_str::<FolderOptions>(r#"{"criterion":"content","exclude":[]}"#).is_ok()
+      serde_json::from_str::<FolderOptions>(r#"{"criterion":"content","exclude":[]}"#).is_err(),
+      "the legacy criterion field is no longer part of the contract"
     );
+    assert!(serde_json::from_str::<FolderOptions>(r#"{"exclude":[]}"#).is_ok());
     assert!(serde_json::from_str::<FolderRules>(r#"{"timestampToleranceMs":1.5}"#).is_err());
     assert!(serde_json::from_str::<FolderRules>(r#"{"timezoneOffsetMinutes":"bad"}"#).is_err());
     assert!(serde_json::from_str::<FolderRules>(r#"{"timestampToleranceMs":-1}"#).is_err());

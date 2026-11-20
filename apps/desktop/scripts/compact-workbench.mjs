@@ -539,7 +539,7 @@ try {
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
 
-  const options = { criterion: "content", exclude: [] };
+  const options = { exclude: [] };
   const nativeRows = await call("scan_folders", {
     left,
     right,

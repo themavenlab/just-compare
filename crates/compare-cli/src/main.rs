@@ -1,4 +1,4 @@
-use compare_fs::{Document, FolderOptions, FolderStatus};
+use compare_fs::{ContentMethod, Document, FolderOptions, FolderRules, FolderStatus, QuickTest};
 use compare_merge::MergeBlock;
 use compare_text::{compare, CompareOptions, DiffKind};
 use std::path::Path;
@@ -20,19 +20,34 @@ fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
       Ok(i32::from(different))
     }
     [command, left, right] if command == "folder" => {
-      let entries = compare_fs::scan_pair(
+      let rules = FolderRules {
+        align_case: false,
+        content: ContentMethod::Binary,
+        quick_test: QuickTest::None,
+        ..FolderRules::default()
+      };
+      let entries = compare_fs::scan_pair_with_rules(
         Path::new(left),
         Path::new(right),
         &FolderOptions::default(),
+        &rules,
         &AtomicBool::new(false),
         |_| {},
-      )?;
+      )?
+      .entries;
       let mut different = false;
       let mut errors = false;
       for entry in entries {
-        different |= entry.status != FolderStatus::Same;
-        errors |= entry.status == FolderStatus::Error;
-        println!("{}\t{}", entry.status.as_str(), entry.relative);
+        // Folder rows report only their own kind, as the CLI always has; the
+        // desktop aggregates descendant differences onto folder rows instead.
+        let status = if entry.is_directory && entry.status == FolderStatus::Different {
+          FolderStatus::Same
+        } else {
+          entry.status
+        };
+        different |= status != FolderStatus::Same;
+        errors |= status == FolderStatus::Error;
+        println!("{}\t{}", status.as_str(), entry.relative);
         if let Some(detail) = entry.detail {
           eprintln!("{detail}");
         }

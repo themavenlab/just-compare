@@ -18,18 +18,9 @@ pub use folder_rules::{
   FolderTextRules, QuickTest, QuickTestPolicy, RowId,
 };
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum Criterion {
-  Content,
-  Size,
-  Modified,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderOptions {
-  pub criterion: Criterion,
   pub exclude: Vec<String>,
   /// Exact normalized relative file paths excluded from comparison.
   #[serde(default)]
@@ -37,16 +28,6 @@ pub struct FolderOptions {
   /// Exact normalized relative directory paths excluded with their subtrees.
   #[serde(default)]
   pub exclude_directories: Vec<String>,
-}
-impl Default for FolderOptions {
-  fn default() -> Self {
-    Self {
-      criterion: Criterion::Content,
-      exclude: Vec::new(),
-      exclude_files: Vec::new(),
-      exclude_directories: Vec::new(),
-    }
-  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,10 +99,6 @@ struct Snapshot {
   size: u64,
   modified: std::time::SystemTime,
   hash: String,
-}
-
-fn is_directory_hash(hash: &str) -> bool {
-  hash == "directory"
 }
 
 /// Kind of the entry at `path` without following links: `None` if absent, otherwise
@@ -220,8 +197,6 @@ pub fn relative_folder_path(
   Ok(None)
 }
 
-type Scan = (BTreeMap<String, Snapshot>, BTreeMap<String, String>);
-
 pub(super) struct ExclusionFilters {
   pub patterns: GlobSet,
   pub files: BTreeSet<String>,
@@ -285,99 +260,6 @@ pub(super) fn exclusion_filters(options: &FolderOptions) -> Result<ExclusionFilt
   })
 }
 
-fn scan(
-  root: &Path,
-  options: &FolderOptions,
-  cancelled: &AtomicBool,
-  progress: &mut impl FnMut(usize),
-) -> Result<Scan, FileError> {
-  let root = checked_path(root, false)?;
-  if !root.is_dir() {
-    return Err(FileError("Folder root must be a directory.".into()));
-  }
-  let filters = exclusion_filters(options)?;
-  let mut stack = vec![root.clone()];
-  let mut files = BTreeMap::new();
-  let mut errors = BTreeMap::new();
-  let mut count = 0;
-  while let Some(directory) = stack.pop() {
-    cancel(cancelled)?;
-    checked_path(&directory, false)?;
-    for item in fs::read_dir(&directory)? {
-      cancel(cancelled)?;
-      let item = item?;
-      let path = item.path();
-      let relative_path = path
-        .strip_prefix(&root)
-        .map_err(|e| FileError(e.to_string()))?;
-      let relative = relative_path
-        .components()
-        .map(|component| {
-          component
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| FileError("Non-Unicode paths are unsupported; scan stopped.".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .join("/");
-      if filters.patterns.is_match(&relative) {
-        continue;
-      }
-      let glob_excludes_directory =
-        !options.exclude.is_empty() && filters.matches_directory_pattern(&relative);
-      let metadata = if glob_excludes_directory
-        || filters.files.contains(&relative)
-        || filters.directories.contains(&relative)
-      {
-        if let Err(error) = checked_path(&path, false) {
-          errors.insert(relative, error.to_string());
-          continue;
-        }
-        Some(fs::symlink_metadata(&path)?)
-      } else {
-        None
-      };
-      let excluded_file =
-        filters.files.contains(&relative) && metadata.as_ref().is_some_and(|value| value.is_file());
-      let excluded_directory = metadata.as_ref().is_some_and(|value| value.is_dir())
-        && (filters.directories.contains(&relative) || glob_excludes_directory);
-      if excluded_file || excluded_directory {
-        continue;
-      }
-      count += 1;
-      if count > MAX_FOLDER_ENTRIES {
-        return Err(FileError("Folder exceeds the 250,000-entry limit.".into()));
-      }
-      if count % 100 == 0 {
-        progress(count);
-      }
-      if let Err(error) = checked_path(&path, false) {
-        errors.insert(relative, error.to_string());
-        continue;
-      }
-      let metadata = match metadata {
-        Some(metadata) => metadata,
-        None => fs::symlink_metadata(&path)?,
-      };
-      if metadata.is_dir() {
-        files.insert(relative, snapshot(&path, cancelled)?);
-        stack.push(path);
-      } else {
-        match snapshot(&path, cancelled) {
-          Ok(value) => {
-            files.insert(relative, value);
-          }
-          Err(error) => {
-            errors.insert(relative, error.to_string());
-          }
-        }
-      }
-    }
-  }
-  progress(count);
-  Ok((files, errors))
-}
-
 fn roots(left: &Path, right: &Path) -> Result<(PathBuf, PathBuf), FileError> {
   let left = checked_path(left, false).map_err(|error| {
     error.context(format!(
@@ -401,146 +283,6 @@ fn roots(left: &Path, right: &Path) -> Result<(PathBuf, PathBuf), FileError> {
     );
   }
   Ok((left, right))
-}
-
-pub fn scan_pair(
-  left: &Path,
-  right: &Path,
-  options: &FolderOptions,
-  cancelled: &AtomicBool,
-  progress: impl FnMut(usize) + Send,
-) -> Result<Vec<FolderEntry>, FileError> {
-  let (left, right) = roots(left, right)?;
-  let callback = std::sync::Mutex::new(progress);
-  let counts = [
-    std::sync::atomic::AtomicUsize::new(0),
-    std::sync::atomic::AtomicUsize::new(0),
-  ];
-  let scans = std::thread::scope(|scope| {
-    let run = |root: &Path, side: usize| {
-      scan(root, options, cancelled, &mut |count| {
-        counts[side].store(count, Ordering::Relaxed);
-        callback.lock().expect("Progress callback lock poisoned")(
-          counts[0].load(Ordering::Relaxed) + counts[1].load(Ordering::Relaxed),
-        );
-      })
-    };
-    let left = &left;
-    let right = &right;
-    let a = scope.spawn(move || run(left, 0));
-    let b = scope.spawn(move || run(right, 1));
-    let a = a
-      .join()
-      .map_err(|_| FileError("Left scan worker panicked.".into()))??;
-    let b = b
-      .join()
-      .map_err(|_| FileError("Right scan worker panicked.".into()))??;
-    Ok::<_, FileError>((a, b))
-  })?;
-  let ((a, ae), (b, be)) = scans;
-  let names: BTreeSet<_> = a
-    .keys()
-    .chain(b.keys())
-    .chain(ae.keys())
-    .chain(be.keys())
-    .collect();
-  let mut rows = Vec::new();
-  for name in names {
-    let l = a.get(name);
-    let r = b.get(name);
-    let detail = ae.get(name).or_else(|| be.get(name)).cloned();
-    // A file on one side and a folder on the other are independent rows.
-    let kind_differs = detail.is_none()
-      && l
-        .zip(r)
-        .is_some_and(|(l, r)| is_directory_hash(&l.hash) != is_directory_hash(&r.hash));
-    if kind_differs {
-      rows.push(scan_entry(name, l, None, &ae, &be, None, options));
-      rows.push(scan_entry(name, None, r, &ae, &be, None, options));
-    } else {
-      rows.push(scan_entry(name, l, r, &ae, &be, detail, options));
-    }
-  }
-  rows.sort_by(|x, y| {
-    x.relative
-      .cmp(&y.relative)
-      .then(y.is_directory.cmp(&x.is_directory))
-  });
-  Ok(rows)
-}
-
-fn scan_entry(
-  name: &str,
-  l: Option<&Snapshot>,
-  r: Option<&Snapshot>,
-  ae: &BTreeMap<String, String>,
-  be: &BTreeMap<String, String>,
-  detail: Option<String>,
-  options: &FolderOptions,
-) -> FolderEntry {
-  let status = if detail.is_some() {
-    FolderStatus::Error
-  } else {
-    match (l, r) {
-      (Some(l), Some(r)) => {
-        let equal = match options.criterion {
-          Criterion::Content => l.hash == r.hash,
-          Criterion::Size => l.size == r.size,
-          Criterion::Modified => l.size == r.size && l.modified == r.modified,
-        };
-        if equal {
-          FolderStatus::Same
-        } else {
-          FolderStatus::Different
-        }
-      }
-      (Some(_), None) => FolderStatus::LeftOnly,
-      (None, Some(_)) => FolderStatus::RightOnly,
-      _ => FolderStatus::Error,
-    }
-  };
-  FolderEntry {
-    relative: name.to_owned(),
-    left_relative: (l.is_some() || ae.contains_key(name)).then(|| name.to_owned()),
-    right_relative: (r.is_some() || be.contains_key(name)).then(|| name.to_owned()),
-    left_kind: l.map(|snapshot| {
-      if snapshot.hash == "directory" {
-        FolderEntryKind::Directory
-      } else {
-        FolderEntryKind::File
-      }
-    }),
-    right_kind: r.map(|snapshot| {
-      if snapshot.hash == "directory" {
-        FolderEntryKind::Directory
-      } else {
-        FolderEntryKind::File
-      }
-    }),
-    status,
-    left_size: l.map(|s| s.size),
-    right_size: r.map(|s| s.size),
-    left_modified: l.and_then(|s| folder_rules::modified_ms(s.modified)),
-    right_modified: r.and_then(|s| folder_rules::modified_ms(s.modified)),
-    newer: match (l, r) {
-      (Some(l), Some(r)) if l.modified > r.modified => Some(FolderSide::Left),
-      (Some(l), Some(r)) if l.modified < r.modified => Some(FolderSide::Right),
-      _ => None,
-    },
-    newer_mixed: false,
-    counts: FolderCounts::default(),
-    importance: match status {
-      FolderStatus::Same => ComparisonImportance::Equal,
-      FolderStatus::Error => ComparisonImportance::Unknown,
-      _ => ComparisonImportance::Important,
-    },
-    error: (status == FolderStatus::Error)
-      .then(|| detail.clone())
-      .flatten(),
-    detail,
-    is_directory: l.is_some_and(|s| s.hash == "directory")
-      || r.is_some_and(|s| s.hash == "directory"),
-  }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -1013,6 +755,24 @@ fn sync_operation_context(action: &str, source: &Path, destination: &Path) -> St
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Row output under binary content rules without quick test or case folding,
+  /// matching the behaviour the scenarios below were written against.
+  fn scan_pair(
+    left: &Path,
+    right: &Path,
+    options: &FolderOptions,
+    cancelled: &AtomicBool,
+    progress: impl FnMut(usize) + Send,
+  ) -> Result<Vec<FolderEntry>, FileError> {
+    let rules = FolderRules {
+      align_case: false,
+      content: ContentMethod::Binary,
+      quick_test: QuickTest::None,
+      ..FolderRules::default()
+    };
+    scan_pair_with_rules(left, right, options, &rules, cancelled, progress).map(|scan| scan.entries)
+  }
 
   #[test]
   fn folder_status_wire_names_match_serde_and_as_str() {

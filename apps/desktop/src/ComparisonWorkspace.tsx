@@ -1748,7 +1748,6 @@ export function ComparisonWorkspace({
     } = {},
   ) {
     return {
-      criterion: "content",
       exclude: overrides.exclude ?? exclude.split("\n").filter(Boolean),
       excludeFiles: overrides.excludeFiles ?? [...excludedFiles],
       excludeDirectories: overrides.excludeDirectories ?? [

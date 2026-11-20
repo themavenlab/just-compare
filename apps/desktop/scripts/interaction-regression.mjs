@@ -368,7 +368,7 @@ try {
     left: "",
     right,
     rules: { content: "binary" },
-    options: { criterion: "content", exclude: [] },
+    options: { exclude: [] },
     jobId: "single-right",
   });
   assert.ok(

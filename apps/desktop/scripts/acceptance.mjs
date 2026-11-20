@@ -88,7 +88,8 @@ try {
   const rows = await call("scan_folders", {
     left: a,
     right: b,
-    options: { criterion: "content", exclude: [] },
+    options: { exclude: [] },
+    rules: {},
     jobId: "folder-bench",
   });
   const scanMs = performance.now() - start;
@@ -98,7 +99,8 @@ try {
   const pending = call("scan_folders", {
     left: a,
     right: b,
-    options: { criterion: "content", exclude: [] },
+    options: { exclude: [] },
+    rules: {},
     jobId: "cancel-bench",
   });
   const cancelled = assert.rejects(pending, /cancelled/);

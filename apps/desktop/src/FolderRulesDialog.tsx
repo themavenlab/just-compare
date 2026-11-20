@@ -41,7 +41,6 @@ export function FolderRulesDialog({
       await native("validate_folder_rules", {
         rules: draft,
         options: {
-          criterion: "content",
           exclude: exclude.split("\n").filter(Boolean),
           excludeFiles: files.split("\n").filter(Boolean),
           excludeDirectories: directories.split("\n").filter(Boolean),

@@ -573,7 +573,7 @@ try {
   await mkdir(rightFolder);
   await mkdir(join(leftFolder, "empty"));
   await writeFile(join(leftFolder, "copy.txt"), "source");
-  const options = { criterion: "content", exclude: [] };
+  const options = { exclude: [] };
   const rules = {};
   let scan = await call("scan_folders", {
     left: leftFolder,

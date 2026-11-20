@@ -783,7 +783,7 @@ pub async fn scan_folders(
   left: String,
   right: String,
   options: FolderOptions,
-  rules: Option<compare_fs::FolderRules>,
+  rules: compare_fs::FolderRules,
   job_id: String,
   app: tauri::AppHandle,
   state: State<'_, Arc<Resources>>,
@@ -806,29 +806,14 @@ pub async fn scan_folders(
         }
       }
     };
-    let result = if let Some(rules) = rules {
-      compare_fs::scan_pair_with_rules(
-        Path::new(&left),
-        Path::new(&right),
-        &options,
-        &rules,
-        &flag,
-        &mut progress,
-      )
-    } else {
-      compare_fs::scan_pair(
-        Path::new(&left),
-        Path::new(&right),
-        &options,
-        &flag,
-        &mut progress,
-      )
-      .map(|entries| compare_fs::FolderScan {
-        scan_id: String::new(),
-        entries,
-        truncated: false,
-      })
-    }
+    let result = compare_fs::scan_pair_with_rules(
+      Path::new(&left),
+      Path::new(&right),
+      &options,
+      &rules,
+      &flag,
+      &mut progress,
+    )
     .map_err(|e| e.to_string());
     drop(progress);
     throttle.emit_final(final_count, |count| {
@@ -843,22 +828,19 @@ pub async fn scan_folders(
   })
   .await;
   let result = result.and_then(|mut scan| {
-    // Only rules-engine scans can be refreshed incrementally; the legacy path has no cache.
-    if let Some(rules) = cache_rules {
-      scan.scan_id = resources.id();
-      store_cached_scan(
-        &resources,
-        scan.scan_id.clone(),
-        CachedScan {
-          left_root,
-          right_root,
-          rules,
-          options: cache_options,
-          entries: scan.entries.clone(),
-          truncated: scan.truncated,
-        },
-      )?;
-    }
+    scan.scan_id = resources.id();
+    store_cached_scan(
+      &resources,
+      scan.scan_id.clone(),
+      CachedScan {
+        left_root,
+        right_root,
+        rules: cache_rules,
+        options: cache_options,
+        entries: scan.entries.clone(),
+        truncated: scan.truncated,
+      },
+    )?;
     Ok(scan)
   });
   resources
@@ -1108,9 +1090,15 @@ async fn preview_cached_sync(
           compare_fs::swap_sides(&cached.entries),
         ),
       };
-      let plan =
-        Plan::from_rows(source, target, &rows, mode, selected.as_deref(), &worker_flag)
-          .map_err(|e| e.to_string())?;
+      let plan = Plan::from_rows(
+        source,
+        target,
+        &rows,
+        mode,
+        selected.as_deref(),
+        &worker_flag,
+      )
+      .map_err(|e| e.to_string())?;
       let operations = plan
         .operations
         .iter()

@@ -8,11 +8,11 @@ mod windows_metadata;
 
 pub use document::{checked_path, display_path, Document, FileError};
 pub use folder::{
-  refresh_paths, relative_folder_path, scan_pair, scan_pair_with_rules, scan_selected_with_rules,
-  swap_sides, validate_folder_configuration, ComparisonImportance, ContentMethod, Criterion,
-  FolderCounts, FolderEntry, FolderEntryKind, FolderOptions, FolderPatch, FolderRules, FolderScan,
-  FolderSide, FolderStatus, FolderTextRules, Plan, QuickTest, QuickTestPolicy, RowId, SkippedRow,
-  SyncMode, MAX_FOLDER_ENTRIES,
+  refresh_paths, relative_folder_path, scan_pair_with_rules, scan_selected_with_rules, swap_sides,
+  validate_folder_configuration, ComparisonImportance, ContentMethod, FolderCounts, FolderEntry,
+  FolderEntryKind, FolderOptions, FolderPatch, FolderRules, FolderScan, FolderSide, FolderStatus,
+  FolderTextRules, Plan, QuickTest, QuickTestPolicy, RowId, SkippedRow, SyncMode,
+  MAX_FOLDER_ENTRIES,
 };
 pub use recovery::{
   clear_recoveries, discard_recovery, load_recoveries, save_recoveries, DraftRecovery,
