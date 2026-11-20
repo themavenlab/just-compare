@@ -191,6 +191,7 @@ export interface LocalOperation {
 export interface LocalPreview {
   id: string;
   operations: LocalOperation[];
+  skipped: { requestIndex: number; message: string }[];
 }
 
 export interface FolderRules {

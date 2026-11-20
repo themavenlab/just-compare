@@ -22,6 +22,7 @@
     "test:recovery": "node scripts/recovery-regression.mjs",
     "test:alignment-merge": "node scripts/alignment-merge-regression.mjs",
     "test:folder-copy": "node scripts/folder-copy-regression.mjs",
+    "test:folder-link-copy": "node scripts/folder-link-copy-regression.mjs",
     "test:delete": "node scripts/delete-regression.mjs",
     "test:one-step-actions": "node scripts/one-step-actions-regression.mjs",
     "test:preview-maps": "node scripts/preview-map-regression.mjs",

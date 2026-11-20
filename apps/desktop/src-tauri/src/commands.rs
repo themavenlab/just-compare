@@ -929,6 +929,13 @@ pub struct Skipped {
 pub struct FilePreview {
   id: String,
   operations: Vec<compare_fs::file_actions::FileActionOperation>,
+  skipped: Vec<FileSkipped>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSkipped {
+  request_index: usize,
+  message: String,
 }
 
 #[tauri::command]
@@ -977,13 +984,25 @@ pub async fn preview_local_action(
     let plan = compare_fs::file_actions::FileActionPlan::preview(request, &flag)
       .map_err(|e| e.to_string())?;
     let operations = plan.operations().to_vec();
+    let skipped = plan
+      .skipped()
+      .iter()
+      .map(|skip| FileSkipped {
+        request_index: skip.request_index,
+        message: skip.message.clone(),
+      })
+      .collect();
     let id = retained.id();
     retained
       .file_plans
       .lock()
       .map_err(|e| e.to_string())?
       .insert(id.clone(), plan);
-    Ok(FilePreview { id, operations })
+    Ok(FilePreview {
+      id,
+      operations,
+      skipped,
+    })
   })
   .await;
   resources

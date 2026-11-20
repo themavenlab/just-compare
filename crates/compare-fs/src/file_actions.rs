@@ -195,11 +195,20 @@ fn parent_snapshot(path: &Path) -> Result<ParentSnapshot, FileError> {
   })
 }
 
+/// A batch item that was left out of the plan, identified by its position in
+/// the submitted batch. Other items in the batch remain approved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedRequest {
+  pub request_index: usize,
+  pub message: String,
+}
+
 /// Not deserializable or cloneable: adapters must retain this object behind an
 /// opaque, single-use handle. The public preview is never execution input.
 pub struct FileActionPlan {
   operations: Vec<FileActionOperation>,
   approved: Vec<ApprovedOperation>,
+  skipped: Vec<SkippedRequest>,
 }
 
 fn failure(message: &str) -> FileError {
@@ -636,19 +645,32 @@ impl FileActionPlan {
           return Err(failure("Batch requires 1 to 250000 non-nested requests."));
         }
         let mut approved: Vec<ApprovedOperation> = Vec::new();
+        let mut skipped: Vec<SkippedRequest> = Vec::new();
         let mut count = 0;
-        for request in requests {
+        for (request_index, request) in requests.into_iter().enumerate() {
           check_cancel(cancelled)?;
           if matches!(request, FileActionRequest::Batch { .. }) {
             return Err(failure("Nested action batches are unsupported."));
           }
-          let plan = Self::preview(request, cancelled)?;
-          for next in plan.approved {
-            count +=
-              next.source.len().max(1) + next.destination.len() + next.missing_ancestors.len();
-            if count > MAX_FOLDER_ENTRIES {
-              return Err(failure("Batch exceeds the 250,000-entry action limit."));
+          let plan = match Self::preview(request, cancelled) {
+            Ok(plan) => plan,
+            Err(error) => {
+              check_cancel(cancelled)?;
+              skipped.push(SkippedRequest {
+                request_index,
+                message: error.to_string(),
+              });
+              continue;
             }
+          };
+          // An item is accepted or skipped as a unit, so a conflicting
+          // item never leaves partial operations in the batch.
+          let mut item: Vec<ApprovedOperation> = Vec::new();
+          let mut conflict = false;
+          let mut item_count = 0;
+          for next in plan.approved {
+            item_count +=
+              next.source.len().max(1) + next.destination.len() + next.missing_ancestors.len();
             let next_paths: Vec<_> = [
               next.operation.source.as_ref(),
               next.operation.destination.as_ref(),
@@ -656,7 +678,7 @@ impl FileActionPlan {
             .into_iter()
             .flatten()
             .collect();
-            if approved.iter().any(|previous| {
+            if approved.iter().chain(item.iter()).any(|previous| {
               [
                 previous.operation.source.as_ref(),
                 previous.operation.destination.as_ref(),
@@ -665,16 +687,35 @@ impl FileActionPlan {
               .flatten()
               .any(|path| next_paths.iter().any(|next| overlaps(path, next)))
             }) {
-              return Err(failure(
-                "Batch operations have overlapping sources or destinations.",
-              ));
+              conflict = true;
+              break;
             }
-            approved.push(next);
+            item.push(next);
           }
+          if conflict {
+            skipped.push(SkippedRequest {
+              request_index,
+              message: "Overlaps another item in this batch.".into(),
+            });
+            continue;
+          }
+          count += item_count;
+          if count > MAX_FOLDER_ENTRIES {
+            return Err(failure("Batch exceeds the 250,000-entry action limit."));
+          }
+          approved.extend(item);
+        }
+        if approved.is_empty() {
+          let reason = skipped
+            .first()
+            .map(|skip| skip.message.as_str())
+            .unwrap_or("No batch items were approved.");
+          return Err(failure(&format!("No batch item can be applied: {reason}")));
         }
         return Ok(Self {
           operations: approved.iter().map(|a| a.operation.clone()).collect(),
           approved,
+          skipped,
         });
       }
       request => request,
@@ -975,11 +1016,17 @@ impl FileActionPlan {
     Ok(Self {
       operations: approved.iter().map(|a| a.operation.clone()).collect(),
       approved,
+      skipped: Vec::new(),
     })
   }
 
   pub fn operations(&self) -> &[FileActionOperation] {
     &self.operations
+  }
+
+  /// Batch items left out of the plan. Empty for single-request previews.
+  pub fn skipped(&self) -> &[SkippedRequest] {
+    &self.skipped
   }
 
   /// Consumes approved state. Cancellation reports every unstarted operation;
@@ -2384,13 +2431,16 @@ mod tests {
         overwrite: true,
       },
     ] {
-      assert!(FileActionPlan::preview(
+      let plan = FileActionPlan::preview(
         FileActionRequest::Batch {
           requests: vec![first(), second],
         },
-        &cancel
+        &cancel,
       )
-      .is_err());
+      .unwrap();
+      assert_eq!(plan.operations().len(), 1);
+      assert_eq!(plan.skipped().len(), 1);
+      assert_eq!(plan.skipped()[0].request_index, 1);
     }
     for requests in [
       vec![],
@@ -2400,6 +2450,47 @@ mod tests {
     ] {
       assert!(FileActionPlan::preview(FileActionRequest::Batch { requests }, &cancel).is_err());
     }
+  }
+
+  #[test]
+  fn batch_skips_invalid_items_and_approves_the_rest() {
+    let (_temp, source, destination) = fixture();
+    fs::write(source.join("c.txt"), b"gamma").unwrap();
+    let cancel = AtomicBool::new(false);
+    let plan = FileActionPlan::preview(
+      FileActionRequest::Batch {
+        requests: vec![
+          FileActionRequest::CopyTo {
+            source: source.join("a.txt"),
+            destination: destination.join("ok"),
+            overwrite: false,
+          },
+          FileActionRequest::CopyTo {
+            source: source.join("missing"),
+            destination: destination.join("missing"),
+            overwrite: false,
+          },
+          FileActionRequest::CopyTo {
+            source: source.join("c.txt"),
+            destination: destination.join("ok-too"),
+            overwrite: false,
+          },
+        ],
+      },
+      &cancel,
+    )
+    .unwrap();
+    assert_eq!(plan.operations().len(), 2);
+    assert_eq!(plan.skipped().len(), 1);
+    assert_eq!(plan.skipped()[0].request_index, 1);
+    assert!(!plan.skipped()[0].message.is_empty());
+    let results = run(plan);
+    assert!(results
+      .iter()
+      .all(|o| o.result == FileActionStatus::Completed));
+    assert_eq!(fs::read(destination.join("ok")).unwrap(), b"alpha");
+    assert_eq!(fs::read(destination.join("ok-too")).unwrap(), b"gamma");
+    assert!(!destination.join("missing").exists());
   }
 
   #[test]

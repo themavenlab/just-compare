@@ -3159,6 +3159,7 @@ export function ComparisonWorkspace({
       }),
     );
     let request: LocalActionRequest;
+    let includedThroughParent = 0;
     const source = sources[0];
     if (action === "recycle") request = { kind: "recycle", sources };
     else if (action === "rename" && source && sources.length === 1)
@@ -3207,8 +3208,10 @@ export function ComparisonWorkspace({
               parent.isDirectory &&
               entry.relative.startsWith(`${parent.relative}/`),
           )
-        )
+        ) {
+          includedThroughParent += 1;
           continue;
+        }
         const sourceRelative =
           (side === "left" ? entry.leftRelative : entry.rightRelative) ??
           entry.relative;
@@ -3250,20 +3253,28 @@ export function ComparisonWorkspace({
       throw failure;
     }
     setFolderDialog(null);
+    const skipNotes = [
+      skippedLinks ? `Links are not copied; ${skippedLinks} skipped.` : "",
+      includedThroughParent
+        ? `${includedThroughParent} items are included through their parent folder.`
+        : "",
+      ...result.skipped.map(
+        (skip) =>
+          `Batch item ${skip.requestIndex + 1} skipped: ${skip.message}`,
+      ),
+    ].filter(Boolean);
+    const skipSuffix = skipNotes.length ? ` ${skipNotes.join(" ")}` : "";
     if (!result.operations.length) {
       discardPreview(tab.id);
-      setNotice("Nothing to change: the destination already matches.");
+      setNotice(
+        `Nothing to change: the destination already matches.${skipSuffix}`,
+      );
       return;
     }
-    const { total, failures } = await executeLocalPlan(result);
-    setNotice(
-      `Completed ${total - failures.length} of ${total} local actions.${
-        skippedLinks ? ` Links are not copied; ${skippedLinks} skipped.` : ""
-      }`,
-    );
+    const { failures } = await executeLocalPlan(result, skipSuffix);
     if (failures.length) throw new Error(failures.join("\n"));
   }
-  async function executeLocalPlan(plan: LocalPreview) {
+  async function executeLocalPlan(plan: LocalPreview, skipSuffix = "") {
     discardPreview(tab.id);
     const jobId = crypto.randomUUID();
     startJob(jobId);
@@ -3302,6 +3313,9 @@ export function ComparisonWorkspace({
       if (failures.length) failures.push(message);
       else throw refreshError;
     }
+    setNotice(
+      `Completed ${results.length - failures.length} of ${results.length} local actions.${skipSuffix}`,
+    );
     return { total: results.length, failures };
   }
   const inputs = (
