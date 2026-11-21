@@ -10,19 +10,20 @@ import {
   affectedFolders,
   applyFolderPatch,
   canCopy,
-  countFolderEntries,
-  differenceFilters,
-  folderRows,
+  countVisibleSelection,
   folderSelectionKeys,
   formatFolderErrorsLabel,
   formatSize,
-  isCurrentFolderGeneration,
+  hasSelectedAncestor,
+  isWithinSelection,
   matchesFilter,
   matchesName,
   parentFolderPath,
   rowKey,
+  selectionScope,
   targetRelativeFor,
   toggleFolderErrorFilter,
+  visibleFolderIndex,
   withoutLinkedSource,
 } from "./folderPresentation";
 import {
@@ -332,7 +333,7 @@ describe("folder presentation", () => {
       "f:.git",
       "d:.git",
     ]);
-    expect(countFolderEntries([gitFile, gitFolder], "all", "all")).toBe(2);
+    expect(visibleFolderIndex([gitFile, gitFolder], "all", "all").size).toBe(2);
     const rows = folderRows(
       [gitFile, gitFolder, head],
       "all",
@@ -400,14 +401,73 @@ describe("folder presentation", () => {
       ["f:hello-world.txt", "hello-world.txt"],
     ]);
     expect(
-      countFolderEntries(
+      visibleFolderIndex(
         [folder, file, child, sibling],
         "all",
         "all",
         new Set(),
         excludedDirectories,
-      ),
+      ).size,
     ).toBe(2);
+  });
+  it("indexes 50,000 visible rows and counts only selected keys that are still visible", () => {
+    const large: FolderEntry[] = [];
+    for (let directory = 0; directory < 2000; directory++) {
+      large.push({
+        ...entry(`dir${directory}`, "same", null, null),
+        isDirectory: true,
+        leftKind: "directory",
+        rightKind: "directory",
+      });
+      for (let file = 0; file < 24; file++)
+        large.push(entry(`dir${directory}/file${file}.txt`));
+    }
+    expect(large).toHaveLength(50000);
+    const index = visibleFolderIndex(large, "all", "all");
+    expect(index.size).toBe(50000);
+    expect(index.get("f:dir7/file3.txt")?.relative).toBe("dir7/file3.txt");
+    const selected = new Set(["f:dir7/file3.txt", "d:dir7", "f:gone.txt"]);
+    expect(countVisibleSelection(selected, index)).toBe(2);
+    expect(visibleFolderIndex(large, "all", "folders").size).toBe(2000);
+    expect(visibleFolderIndex(large, "all", "files").size).toBe(48000);
+    expect(visibleFolderIndex(large, "differences", "all").size).toBe(48000);
+  });
+  it("hides excluded entries from the index and from selected counts", () => {
+    const folder: FolderEntry = {
+      ...entry("hello", "rightOnly", null, 0),
+      isDirectory: true,
+      leftKind: null,
+      rightKind: "directory",
+    };
+    const child = entry("hello/child.txt", "rightOnly", null, 1);
+    const index = visibleFolderIndex(
+      [folder, child],
+      "all",
+      "all",
+      new Set(),
+      new Set(["hello"]),
+    );
+    expect(index.size).toBe(0);
+    expect(
+      countVisibleSelection(new Set(["d:hello", "f:hello/child.txt"]), index),
+    ).toBe(0);
+  });
+  it("resolves ancestor and exact selection scope without scanning the entry list", () => {
+    const folder: FolderEntry = {
+      ...entry("docs", "same", null, null),
+      isDirectory: true,
+      leftKind: "directory",
+      rightKind: "directory",
+    };
+    const scope = selectionScope([folder, entry("loose.txt")]);
+    expect(isWithinSelection("docs", scope)).toBe(true);
+    expect(isWithinSelection("docs/a/b.txt", scope)).toBe(true);
+    expect(isWithinSelection("loose.txt", scope)).toBe(true);
+    expect(isWithinSelection("docs-extra/a.txt", scope)).toBe(false);
+    expect(isWithinSelection("other/a.txt", scope)).toBe(false);
+    expect(hasSelectedAncestor("docs", scope)).toBe(false);
+    expect(hasSelectedAncestor("docs/a", scope)).toBe(true);
+    expect(hasSelectedAncestor("loose.txt/a", scope)).toBe(false);
   });
   it("checks actual copy direction and rejects same/error sources", () => {
     expect(canCopy(entry("a", "rightOnly", null), "left")).toBe(true);

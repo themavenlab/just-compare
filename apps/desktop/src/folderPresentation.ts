@@ -258,6 +258,70 @@ function excludedByKind(
   return false;
 }
 
+/** Entries that pass the exclusion, text, and kind filters, keyed by row key. */
+export function visibleFolderIndex(
+  entries: FolderEntry[],
+  filter: string,
+  kindFilter: "all" | "files" | "folders",
+  excludedFiles: ReadonlySet<string> = new Set(),
+  excludedDirectories: ReadonlySet<string> = new Set(),
+) {
+  const visible = new Map<string, FolderEntry>();
+  for (const entry of entries)
+    if (
+      !excludedByKind(entry, excludedFiles, excludedDirectories) &&
+      matchesFilter(entry, filter) &&
+      matchesKindFilter(entry, kindFilter)
+    )
+      visible.set(rowKey(entry), entry);
+  return visible;
+}
+
+/** Counts selected keys that still name a visible entry; hidden or stale keys are skipped. */
+export function countVisibleSelection(
+  selected: ReadonlySet<string>,
+  visible: ReadonlyMap<string, FolderEntry>,
+) {
+  let count = 0;
+  for (const key of selected) if (visible.has(key)) count += 1;
+  return count;
+}
+
+export interface SelectionScope {
+  /** Relative paths of the selected entries themselves. */
+  paths: ReadonlySet<string>;
+  /** Relative paths of selected folders; their descendants are in scope too. */
+  folders: ReadonlySet<string>;
+}
+
+export function selectionScope(
+  entries: Pick<FolderEntry, "relative" | "isDirectory">[],
+): SelectionScope {
+  const paths = new Set<string>();
+  const folders = new Set<string>();
+  for (const entry of entries) {
+    paths.add(entry.relative);
+    if (entry.isDirectory) folders.add(entry.relative);
+  }
+  return { paths, folders };
+}
+
+/** True when a proper ancestor of `relative` is a selected folder. */
+export function hasSelectedAncestor(relative: string, scope: SelectionScope) {
+  for (
+    let slash = relative.lastIndexOf("/");
+    slash > 0;
+    slash = relative.lastIndexOf("/", slash - 1)
+  )
+    if (scope.folders.has(relative.slice(0, slash))) return true;
+  return false;
+}
+
+/** True when `relative` is selected itself or lies beneath a selected folder. */
+export function isWithinSelection(relative: string, scope: SelectionScope) {
+  return scope.paths.has(relative) || hasSelectedAncestor(relative, scope);
+}
+
 export function countFolderEntries(
   entries: FolderEntry[],
   filter: string,
