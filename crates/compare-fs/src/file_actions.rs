@@ -31,6 +31,14 @@ use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+/// Source files up to this size are hashed at preview and must match their streamed
+/// hash when copied. Larger sources are identified by metadata at preview, which avoids
+/// reading very large files twice.
+const PREVIEW_HASH_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn hashed_at_preview(len: u64) -> bool {
+  len <= PREVIEW_HASH_MAX_BYTES
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -391,7 +399,13 @@ fn metadata_snapshot(
   })
 }
 
-fn entry_snapshot(path: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileError> {
+/// `hashed` receives the file length and decides whether its bytes are hashed. Unhashed
+/// files are identified by size, modification time and attributes alone.
+fn entry_snapshot(
+  path: &Path,
+  hashed: impl FnOnce(u64) -> bool,
+  cancelled: &AtomicBool,
+) -> Result<Snapshot, FileError> {
   check_cancel(cancelled)?;
   safe_path(path, false)?;
   let metadata = fs::symlink_metadata(path)?;
@@ -399,10 +413,10 @@ fn entry_snapshot(path: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileE
     return Err(failure("Only regular files and directories are supported."));
   }
   let before = metadata_snapshot(&metadata, None)?;
-  let hash = if metadata.is_file() {
-    if metadata.len() > MAX_FILE_BYTES {
-      return Err(failure("File exceeds the 100 MiB action limit."));
-    }
+  if metadata.is_file() && metadata.len() > MAX_FILE_BYTES {
+    return Err(failure("File exceeds the 100 MiB action limit."));
+  }
+  let hash = if metadata.is_file() && hashed(metadata.len()) {
     let mut reader = File::open(path)?;
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0; 64 * 1024];
@@ -430,10 +444,44 @@ fn entry_snapshot(path: &Path, cancelled: &AtomicBool) -> Result<Snapshot, FileE
   Ok(Snapshot { hash, ..before })
 }
 
+/// A Move may recycle its source only if every approved entry is unchanged and every
+/// file's current bytes match what the copy streamed.
+fn moved_source_matches(current: &Tree, approved: &Tree, streamed: &StreamedHashes) -> bool {
+  current.len() == approved.len()
+    && approved.iter().all(|(relative, expected)| {
+      let Some(actual) = current.get(relative) else {
+        return false;
+      };
+      let hash_matches = match streamed.get(relative) {
+        Some(hash) => actual.hash == Some(*hash),
+        None => actual.hash.is_none(),
+      };
+      hash_matches && same_metadata(actual, expected)
+    })
+}
+
+fn same_metadata(current: &Snapshot, approved: &Snapshot) -> bool {
+  current.directory == approved.directory
+    && current.len == approved.len
+    && current.modified == approved.modified
+    && current.readonly == approved.readonly
+    && {
+      #[cfg(unix)]
+      {
+        current.mode == approved.mode
+      }
+      #[cfg(not(unix))]
+      {
+        true
+      }
+    }
+}
+
 fn snapshot_tree(
   root: &Path,
   cancelled: &AtomicBool,
   count: &mut usize,
+  hashed: impl Fn(&Path, u64) -> bool,
 ) -> Result<Tree, FileError> {
   let mut tree = BTreeMap::new();
   let mut pending = vec![PathBuf::new()];
@@ -444,7 +492,7 @@ fn snapshot_tree(
       return Err(failure("Selection exceeds the 250,000-entry action limit."));
     }
     let path = tree_path(root, &relative);
-    let snapshot = entry_snapshot(&path, cancelled)?;
+    let snapshot = entry_snapshot(&path, |len| hashed(&relative, len), cancelled)?;
     if snapshot.directory {
       // Bound the queue as well as the completed traversal.
       for child in fs::read_dir(&path)? {
@@ -901,13 +949,20 @@ impl FileActionPlan {
         }
       }
       let tree = match source {
-        Some(source) => snapshot_tree(source, cancelled, &mut count)?,
+        Some(source) => snapshot_tree(source, cancelled, &mut count, |_, len| {
+          hashed_at_preview(len)
+        })?,
         None => BTreeMap::new(),
       };
       let destination_tree = if matches!(action, FileAction::Copy | FileAction::Move)
         && target.as_ref().unwrap().exists()
       {
-        snapshot_tree(target.as_ref().unwrap(), cancelled, &mut count)?
+        snapshot_tree(
+          target.as_ref().unwrap(),
+          cancelled,
+          &mut count,
+          |relative, _| tree.contains_key(relative),
+        )?
       } else {
         BTreeMap::new()
       };
@@ -1075,7 +1130,8 @@ fn revalidate(approved: &ApprovedOperation, cancelled: &AtomicBool) -> Result<()
   check_cancel(cancelled)?;
   if let Some(source) = &approved.operation.source {
     if safe_path(source, false)? != *source
-      || snapshot_tree(source, cancelled, &mut 0)? != approved.source
+      || snapshot_tree(source, cancelled, &mut 0, |_, len| hashed_at_preview(len))?
+        != approved.source
     {
       return Err(failure("Source changed since preview. Preview again."));
     }
@@ -1110,7 +1166,10 @@ fn revalidate(approved: &ApprovedOperation, cancelled: &AtomicBool) -> Result<()
       absent_destination(destination)? == *destination
     } else {
       safe_path(destination, false)? == *destination
-        && snapshot_tree(destination, cancelled, &mut 0)? == approved.destination
+        && snapshot_tree(destination, cancelled, &mut 0, |relative, _| {
+          approved.source.contains_key(relative)
+        })?
+          == approved.destination
     };
     if !target_matches
       || safe_path(parent, false)? != *parent
@@ -1122,25 +1181,29 @@ fn revalidate(approved: &ApprovedOperation, cancelled: &AtomicBool) -> Result<()
   Ok(())
 }
 
+/// Content hashes of the source files streamed by [`copy_tree`], keyed by relative path.
+type StreamedHashes = BTreeMap<PathBuf, blake3::Hash>;
+
 fn copy_tree(
   source: &Path,
   destination: &Path,
   tree: &Tree,
   destination_tree: &Tree,
   cancelled: &AtomicBool,
-) -> Result<(), FileError> {
+) -> Result<StreamedHashes, FileError> {
+  let mut streamed = StreamedHashes::new();
   for (relative, expected) in tree {
     check_cancel(cancelled)?;
     let from = tree_path(source, relative);
     let to = tree_path(destination, relative);
-    if entry_snapshot(&from, cancelled)? != *expected {
+    if !same_metadata(&entry_snapshot(&from, |_| false, cancelled)?, expected) {
       return Err(failure(
         "Source changed during copy. Partial destination retained.",
       ));
     }
     let existing = destination_tree.get(relative);
     if let Some(existing) = existing {
-      if entry_snapshot(&to, cancelled)? != *existing {
+      if entry_snapshot(&to, |_| true, cancelled)? != *existing {
         return Err(failure("Destination changed during copy. Preview again."));
       }
     } else {
@@ -1153,8 +1216,8 @@ fn copy_tree(
     } else {
       let mut input = File::open(&from)?;
       let mut output = NamedTempFile::new_in(to.parent().unwrap())?;
-      let mut hasher = blake3::Hasher::new();
       let mut buffer = [0; 64 * 1024];
+      let mut hasher = blake3::Hasher::new();
       let mut length = 0;
       loop {
         check_cancel(cancelled)?;
@@ -1171,21 +1234,28 @@ fn copy_tree(
         hasher.update(&buffer[..n]);
         output.write_all(&buffer[..n])?;
       }
-      if Some(hasher.finalize()) != expected.hash || length != expected.len {
+      if length != expected.len {
         return Err(failure(
           "Source changed during copy. Partial destination retained.",
         ));
       }
+      let streamed_hash = hasher.finalize();
+      if expected.hash.is_some_and(|hash| hash != streamed_hash) {
+        return Err(failure(
+          "Source changed during copy. Partial destination retained.",
+        ));
+      }
+      streamed.insert(relative.clone(), streamed_hash);
       let permissions = fs::metadata(if existing.is_some() { &to } else { &from })?.permissions();
       output.as_file().sync_all()?;
       check_cancel(cancelled)?;
-      if entry_snapshot(&from, cancelled)? != *expected {
+      if !same_metadata(&entry_snapshot(&from, |_| false, cancelled)?, expected) {
         return Err(failure(
           "Source changed during copy. Partial destination retained.",
         ));
       }
       let persisted = if let Some(existing) = existing {
-        if entry_snapshot(&to, cancelled)? != *existing {
+        if entry_snapshot(&to, |_| true, cancelled)? != *existing {
           return Err(failure("Destination changed during copy. Preview again."));
         }
         output.persist(&to)
@@ -1223,7 +1293,7 @@ fn copy_tree(
       set_path_modified_time(&to, snapshot.modified)?;
     }
   }
-  Ok(())
+  Ok(streamed)
 }
 
 fn execute_operation(
@@ -1273,7 +1343,7 @@ fn execute_operation(
   }
   match &operation.action {
     FileAction::Copy | FileAction::Move => {
-      copy_tree(
+      let streamed = copy_tree(
         source.unwrap(),
         destination.unwrap(),
         &approved.source,
@@ -1282,7 +1352,12 @@ fn execute_operation(
       )?;
       if operation.action == FileAction::Move {
         // Copy completion does not authorize recycling a newly changed source.
-        if snapshot_tree(source.unwrap(), cancelled, &mut 0)? != approved.source {
+        // Moves hash each source file here, so the streamed bytes are the bytes
+        // that get recycled.
+        let current = snapshot_tree(source.unwrap(), cancelled, &mut 0, |relative, _| {
+          streamed.contains_key(relative)
+        })?;
+        if !moved_source_matches(&current, &approved.source, &streamed) {
           return Err(failure(
             "Copy completed but source changed; source was not recycled.",
           ));
@@ -1714,6 +1789,89 @@ mod tests {
     assert!(matches!(run(plan)[0].result, FileActionStatus::Failed(_)));
   }
 
+  fn rewrite_keeping_modified(path: &Path, bytes: &[u8]) {
+    let modified = fs::metadata(path).unwrap().modified().unwrap();
+    fs::write(path, bytes).unwrap();
+    fs::OpenOptions::new()
+      .write(true)
+      .open(path)
+      .unwrap()
+      .set_times(FileTimes::new().set_modified(modified))
+      .unwrap();
+  }
+
+  #[test]
+  fn replaced_destination_with_same_size_and_mtime_is_rejected() {
+    let (_temp, source, destination) = fixture();
+    fs::write(destination.join("a.txt"), b"omega").unwrap();
+    let plan = FileActionPlan::preview(
+      copy_to(source.join("a.txt"), destination.join("a.txt"), true),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    rewrite_keeping_modified(&destination.join("a.txt"), b"OMEGA");
+    assert!(matches!(run(plan)[0].result, FileActionStatus::Failed(_)));
+    assert_eq!(fs::read(destination.join("a.txt")).unwrap(), b"OMEGA");
+  }
+
+  #[test]
+  fn small_source_same_size_and_mtime_edit_is_rejected_at_copy() {
+    let (_temp, source, destination) = fixture();
+    let plan = FileActionPlan::preview(
+      copy(source.clone(), destination.clone()),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    rewrite_keeping_modified(&source.join("a.txt"), b"ALPHA");
+    assert!(matches!(run(plan)[0].result, FileActionStatus::Failed(_)));
+    assert!(!destination.join("source").join("a.txt").exists());
+  }
+
+  #[test]
+  fn large_source_same_size_and_mtime_edit_is_copied_as_streamed() {
+    let (_temp, source, destination) = fixture();
+    let large = source.join("large.bin");
+    let size = usize::try_from(PREVIEW_HASH_MAX_BYTES).unwrap() + 1;
+    fs::write(&large, vec![b'a'; size]).unwrap();
+    let plan = FileActionPlan::preview(
+      copy(source.clone(), destination.clone()),
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    rewrite_keeping_modified(&large, &vec![b'b'; size]);
+    assert!(matches!(run(plan)[0].result, FileActionStatus::Completed));
+    assert_eq!(
+      fs::read(destination.join("source").join("large.bin")).unwrap(),
+      vec![b'b'; size]
+    );
+  }
+
+  #[test]
+  fn destination_only_entries_do_not_block_a_merge() {
+    let (_temp, source, destination) = fixture();
+    fs::create_dir(destination.join("source")).unwrap();
+    fs::write(destination.join("source").join("extra.txt"), b"keep").unwrap();
+    let plan = FileActionPlan::preview(
+      FileActionRequest::Copy {
+        sources: vec![source.clone()],
+        destination: destination.clone(),
+        overwrite: true,
+      },
+      &AtomicBool::new(false),
+    )
+    .unwrap();
+    rewrite_keeping_modified(&destination.join("source").join("extra.txt"), b"KEEP");
+    assert!(matches!(run(plan)[0].result, FileActionStatus::Completed));
+    assert_eq!(
+      fs::read(destination.join("source").join("extra.txt")).unwrap(),
+      b"KEEP"
+    );
+    assert_eq!(
+      fs::read(destination.join("source").join("a.txt")).unwrap(),
+      b"alpha"
+    );
+  }
+
   #[test]
   fn collisions_at_preview_and_execution_do_not_clobber() {
     let (_temp, source, destination) = fixture();
@@ -1978,7 +2136,7 @@ mod tests {
     let (_temp, source, destination) = fixture();
     let cancel = AtomicBool::new(false);
     let mut count = MAX_FOLDER_ENTRIES;
-    assert!(snapshot_tree(&source, &cancel, &mut count).is_err());
+    assert!(snapshot_tree(&source, &cancel, &mut count, |_, _| false).is_err());
     let plan = FileActionPlan::preview(copy(source.join("a.txt"), destination), &cancel).unwrap();
     let readonly = FileActionPlan::preview(
       FileActionRequest::SetReadOnly {
