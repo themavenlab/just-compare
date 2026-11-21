@@ -30,8 +30,8 @@ export function FolderView({
   excludedFiles: ReadonlySet<string>;
   excludedDirectories: ReadonlySet<string>;
   busy: boolean;
-  selected: string[];
-  onSelect: (relative: string, checked: boolean) => void;
+  selected: ReadonlySet<string>;
+  onSelect: (keys: readonly string[], checked: boolean) => void;
   openPair: (entry: FolderEntry) => void;
   onAction: (action: string, entries: FolderEntry[], side: FolderSide) => void;
   registerCommands: (controller: ((name: string) => void) | null) => void;
@@ -122,7 +122,7 @@ export function FolderView({
       for (const row of currentRows)
         if (
           row.entry &&
-          currentSelection.includes(row.key) &&
+          currentSelection.has(row.key) &&
           row.entry.status !== "error"
         )
           selectedEntries.set(rowKey(row.entry), row.entry);
@@ -135,14 +135,19 @@ export function FolderView({
         name === "selectNone" ||
         name === "selectInvert"
       ) {
-        for (const row of currentRows)
-          if (row.entry && row.entry.status !== "error")
-            select(
-              row.key,
-              name === "selectAll" ||
-                (name === "selectInvert" &&
-                  !currentSelection.includes(row.key)),
-            );
+        const selectable = currentRows
+          .filter((row) => row.entry && row.entry.status !== "error")
+          .map((row) => row.key);
+        if (name === "selectInvert") {
+          select(
+            selectable.filter((key) => !currentSelection.has(key)),
+            true,
+          );
+          select(
+            selectable.filter((key) => currentSelection.has(key)),
+            false,
+          );
+        } else select(selectable, name === "selectAll");
       } else if (name) {
         action(name, [...selectedEntries.values()], currentSide);
       }
@@ -177,9 +182,9 @@ export function FolderView({
     key: string,
   ): MenuCommand[] {
     const targets = new Map<string, FolderEntry>();
-    if (selected.includes(key)) {
+    if (selected.has(key)) {
       for (const row of rows)
-        if (row.entry && selected.includes(row.key))
+        if (row.entry && selected.has(row.key))
           targets.set(rowKey(row.entry), row.entry);
     } else targets.set(rowKey(entry), entry);
     const selectedEntries = [...targets.values()];
@@ -365,10 +370,11 @@ export function FolderView({
                     .filter((r) => r.entry && r.entry.status !== "error")
                     .map((r) => r.key),
                 );
-                for (const key of selected)
-                  if (!range.has(key)) onSelect(key, false);
-                for (const key of range)
-                  if (!selected.includes(key)) onSelect(key, true);
+                onSelect(
+                  [...selected].filter((key) => !range.has(key)),
+                  false,
+                );
+                onSelect([...range], true);
               }
             } else if (row && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
               event.preventDefault();
@@ -382,7 +388,7 @@ export function FolderView({
               else if (row.entry && openable(row.entry)) openPair(row.entry);
             } else if (row?.entry && !busy && event.key === " ") {
               event.preventDefault();
-              onSelect(row.key, !selected.includes(row.key));
+              onSelect([row.key], !selected.has(row.key));
             } else if (
               row?.entry &&
               !busy &&
@@ -425,7 +431,7 @@ export function FolderView({
             const entry = node.entry;
             return (
               <div
-                className={`paired-folder-row folder-row ${index % 2 ? "alternate-row" : ""} ${focused === node.key ? "focused-row" : ""} ${selected.includes(node.key) ? "selected-folder-row" : ""}`}
+                className={`paired-folder-row folder-row ${index % 2 ? "alternate-row" : ""} ${focused === node.key ? "focused-row" : ""} ${selected.has(node.key) ? "selected-folder-row" : ""}`}
                 data-status={entry?.status ?? "ancestor"}
                 data-tone={node.tone ?? "ancestor"}
                 data-relative={node.path}
@@ -436,7 +442,7 @@ export function FolderView({
                 aria-expanded={
                   tree && node.branch ? !collapsed.has(node.key) : undefined
                 }
-                aria-selected={tree ? selected.includes(node.key) : undefined}
+                aria-selected={tree ? selected.has(node.key) : undefined}
               >
                 {(["left", "right"] as const).map((pane) => {
                   const kind: FolderEntryKind | null = entry
@@ -469,18 +475,27 @@ export function FolderView({
                         if (!missing) setSide(pane);
                         if (entry && !busy && entry.status !== "error") {
                           if (event.shiftKey && focusedIndex >= 0) {
-                            for (const row of rows.slice(
-                              Math.min(index, focusedIndex),
-                              Math.max(index, focusedIndex) + 1,
-                            ))
-                              if (row.entry && row.entry.status !== "error")
-                                onSelect(row.key, true);
+                            onSelect(
+                              rows
+                                .slice(
+                                  Math.min(index, focusedIndex),
+                                  Math.max(index, focusedIndex) + 1,
+                                )
+                                .filter(
+                                  (row) =>
+                                    row.entry && row.entry.status !== "error",
+                                )
+                                .map((row) => row.key),
+                              true,
+                            );
                           } else if (event.ctrlKey || event.metaKey)
-                            onSelect(node.key, !selected.includes(node.key));
+                            onSelect([node.key], !selected.has(node.key));
                           else {
-                            for (const key of selected)
-                              if (key !== node.key) onSelect(key, false);
-                            onSelect(node.key, true);
+                            onSelect(
+                              [...selected].filter((key) => key !== node.key),
+                              false,
+                            );
+                            onSelect([node.key], true);
                           }
                         }
                         setFocused(node.key);

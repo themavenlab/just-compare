@@ -34,16 +34,20 @@ import { errorMessage, type DiffSpan } from "./comparison";
 import {
   affectedFolders,
   applyFolderPatch,
-  countFolderEntries,
+  countVisibleSelection,
   differenceFilters,
   folderSelectionKeys,
   formatFolderErrorsLabel,
   formatSize,
+  hasSelectedAncestor,
   isCurrentFolderGeneration,
+  isWithinSelection,
   matchesName,
   parentFolderPath,
+  selectionScope,
   targetRelativeFor,
   toggleFolderErrorFilter,
+  visibleFolderIndex,
   withoutLinkedSource,
 } from "./folderPresentation";
 import { FolderRulesDialog } from "./FolderRulesDialog";
@@ -394,7 +398,9 @@ export function ComparisonWorkspace({
   const [previewKind, setPreviewKind] = useState<
     "selected-update" | "selected-mirror" | "update" | "mirror" | null
   >(null);
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [blocks, setBlocks] = useState<Block[] | null>(null);
   const [choices, setChoices] = useState<Record<number, string>>({});
   const [resolutionHistory, setResolutionHistory] = useState<
@@ -743,7 +749,7 @@ export function ComparisonWorkspace({
     discardPreview(tab.id);
     setPreview(null);
     setFolderStale(true);
-    setSelectedFiles([]);
+    setSelectedFiles(new Set());
     setError("");
     setNotice("");
   }
@@ -1521,7 +1527,7 @@ export function ComparisonWorkspace({
     discardPreview(tab.id);
     setPreview(null);
     setFolderStale(true);
-    if (!keepSelection) setSelectedFiles([]);
+    if (!keepSelection) setSelectedFiles(new Set());
     setProgress(0);
     try {
       const roots =
@@ -1545,7 +1551,9 @@ export function ComparisonWorkspace({
       setFolderTruncated(result.truncated);
       if (keepSelection) {
         const keys = new Set(folderSelectionKeys(result.entries));
-        setSelectedFiles((prior) => prior.filter((key) => keys.has(key)));
+        setSelectedFiles(
+          (prior) => new Set([...prior].filter((key) => keys.has(key))),
+        );
       }
       if (filter === "error") {
         selectFilter("all");
@@ -1632,7 +1640,7 @@ export function ComparisonWorkspace({
         if (changed) {
           discardPreview(tab.id);
           setPreview(null);
-          setSelectedFiles([]);
+          setSelectedFiles(new Set());
         }
         setNotice(
           changed
@@ -2780,19 +2788,39 @@ export function ComparisonWorkspace({
       </section>
     );
   }
-  const filteredFolders = folders.filter(
-    (row) =>
-      peek ||
-      (matchesName(row.relative, quickFilter || "*") &&
-        (showMinor || row.importance !== "unimportant") &&
-        !ignored.has(row.relative)),
+  const filteredFolders = useMemo(
+    () =>
+      folders.filter(
+        (row) =>
+          peek ||
+          (matchesName(row.relative, quickFilter || "*") &&
+            (showMinor || row.importance !== "unimportant") &&
+            !ignored.has(row.relative)),
+      ),
+    [folders, peek, quickFilter, showMinor, ignored],
   );
-  const visibleFolderCount = countFolderEntries(
-    filteredFolders,
-    peek ? "all" : filter,
-    peek ? "all" : filesVisible,
-    excludedFiles,
-    excludedDirectories,
+  const visibleIndex = useMemo(
+    () =>
+      visibleFolderIndex(
+        filteredFolders,
+        peek ? "all" : filter,
+        peek ? "all" : filesVisible,
+        excludedFiles,
+        excludedDirectories,
+      ),
+    [
+      filteredFolders,
+      peek,
+      filter,
+      filesVisible,
+      excludedFiles,
+      excludedDirectories,
+    ],
+  );
+  const visibleFolderCount = visibleIndex.size;
+  const selectedVisibleCount = useMemo(
+    () => countVisibleSelection(selectedFiles, visibleIndex),
+    [selectedFiles, visibleIndex],
   );
   async function openPair(row: FolderEntry) {
     if (row.leftKind !== "file" || row.rightKind !== "file")
@@ -2879,8 +2907,9 @@ export function ComparisonWorkspace({
             return;
           if (refreshedRows) {
             const refreshedKeys = new Set(folderSelectionKeys(refreshedRows));
-            setSelectedFiles((prior) =>
-              prior.filter((key) => refreshedKeys.has(key)),
+            setSelectedFiles(
+              (prior) =>
+                new Set([...prior].filter((key) => refreshedKeys.has(key))),
             );
           }
           setNotice(
@@ -3043,11 +3072,9 @@ export function ComparisonWorkspace({
       });
       if (!isCurrentFolderGeneration(folderGeneration.current, generation))
         return;
-      const selectedPaths = entries.map((entry) => entry.relative);
+      const selectedScope = selectionScope(entries);
       const underSelection = (relative: string) =>
-        selectedPaths.some(
-          (path) => relative === path || relative.startsWith(`${path}/`),
-        );
+        isWithinSelection(relative, selectedScope);
       const comparedRows = compared.entries.filter((entry) =>
         underSelection(entry.relative),
       );
@@ -3059,12 +3086,7 @@ export function ComparisonWorkspace({
       );
       setFolderTruncated(compared.truncated);
       const selectedResults = comparedRows.filter((entry) =>
-        entries.some(
-          (selected) =>
-            selected.relative === entry.relative ||
-            (selected.isDirectory &&
-              entry.relative.startsWith(`${selected.relative}/`)),
-        ),
+        isWithinSelection(entry.relative, selectedScope),
       );
       if (showResults) setContentResults(selectedResults);
       setFolderDialog(null);
@@ -3200,15 +3222,9 @@ export function ComparisonWorkspace({
             : [];
         }),
       );
+      const selectedScope = selectionScope(entries);
       for (const [index, entry] of entries.entries()) {
-        if (
-          entries.some(
-            (parent) =>
-              parent !== entry &&
-              parent.isDirectory &&
-              entry.relative.startsWith(`${parent.relative}/`),
-          )
-        ) {
+        if (hasSelectedAncestor(entry.relative, selectedScope)) {
           includedThroughParent += 1;
           continue;
         }
@@ -3647,13 +3663,9 @@ export function ComparisonWorkspace({
             <>
               <div className="selection-totals">
                 {(["left", "right"] as const).map((side) => {
+                  const dialogScope = selectionScope(folderDialog.entries);
                   const items = folders.filter((entry) =>
-                    folderDialog.entries.some(
-                      (selected) =>
-                        selected.relative === entry.relative ||
-                        (selected.isDirectory &&
-                          entry.relative.startsWith(`${selected.relative}/`)),
-                    ),
+                    isWithinSelection(entry.relative, dialogScope),
                   );
                   const available = items.filter(
                     (entry) =>
@@ -4006,7 +4018,7 @@ export function ComparisonWorkspace({
         {mode === "folder" && (
           <span className="folder-status-counts">
             {folderStale ? "Results stale / " : ""}
-            {visibleFolderCount} visible / {selectedFiles.length} selected / L:{" "}
+            {visibleFolderCount} visible / {selectedVisibleCount} selected / L:{" "}
             {formatSize(folderBytes("left"))} / R:{" "}
             {formatSize(folderBytes("right"))}
             {(diskSpace.left || diskSpace.right) && (
@@ -4908,7 +4920,7 @@ export function ComparisonWorkspace({
                 label="Copy"
                 icon="copy"
                 description="Preview selected entries copied from the active side to the opposite side."
-                disabled={busy || !selectedFiles.length}
+                disabled={busy || !selectedVisibleCount}
                 onClick={() => folderCommand("copySide")}
               />
               <CommandMenu
@@ -4992,7 +5004,7 @@ export function ComparisonWorkspace({
             {folderStale
               ? "Files changed on disk. These folder results may be stale; rescan to refresh."
               : hasScanned
-                ? `${visibleFolderCount} matching entries / ${selectedFiles.length} selected.`
+                ? `${visibleFolderCount} matching entries / ${selectedVisibleCount} selected.`
                 : "Scan folders to list their contents. Row arrows preview either copy direction; Update and Mirror run left to right."}
           </p>
           {folders.some((entry) => entry.status === "error") &&
@@ -5046,12 +5058,14 @@ export function ComparisonWorkspace({
             excludedDirectories={excludedDirectories}
             busy={busy}
             selected={selectedFiles}
-            onSelect={(relative, checked) =>
-              setSelectedFiles((prior) =>
-                checked
-                  ? [...prior.filter((name) => name !== relative), relative]
-                  : prior.filter((name) => name !== relative),
-              )
+            onSelect={(keys, checked) =>
+              setSelectedFiles((prior) => {
+                const next = new Set(prior);
+                for (const key of keys)
+                  if (checked) next.add(key);
+                  else next.delete(key);
+                return next;
+              })
             }
             openPair={(row) => void attempt(() => openPair(row))}
             registerCommands={registerFolderCommands}
