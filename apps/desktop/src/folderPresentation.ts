@@ -322,21 +322,6 @@ export function isWithinSelection(relative: string, scope: SelectionScope) {
   return scope.paths.has(relative) || hasSelectedAncestor(relative, scope);
 }
 
-export function countFolderEntries(
-  entries: FolderEntry[],
-  filter: string,
-  kindFilter: "all" | "files" | "folders",
-  excludedFiles: ReadonlySet<string> = new Set(),
-  excludedDirectories: ReadonlySet<string> = new Set(),
-) {
-  return entries.filter(
-    (entry) =>
-      !excludedByKind(entry, excludedFiles, excludedDirectories) &&
-      matchesFilter(entry, filter) &&
-      matchesKindFilter(entry, kindFilter),
-  ).length;
-}
-
 export function matchesFilter(entry: FolderEntry, filter: string) {
   const paired = entry.leftSize !== null && entry.rightSize !== null;
   const different = entry.status !== "same" && entry.status !== "error";
