@@ -9,6 +9,33 @@ established by that history. See [historical evidence](validation-history.md)
 for exact checks, failures, hardware and omissions, and the
 [release guide](release.md) for candidate-specific gates.
 
+## Phase 8 verification (Windows, 2026-10-21)
+
+Executed on Windows x64 with MSVC Rust 1.99.0 and npm 11.7.0. The installed Node.js was v24.22.0; the repository pins v22.17.0, which was not installed. Therefore the frontend and native results below are evidence for the installed runtime, not the pinned Node runtime.
+
+Passed:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `cargo test --workspace --locked` (173 passed, 1 ignored)
+- Desktop-manifest `cargo fmt --check` and strict all-target Clippy
+- `cargo build --workspace --locked` and desktop embedded-assets build using an isolated Cargo target directory
+- `npm run check`, `npm test` (4 files, 44 tests), and `npm run build`
+- Native `test:git`, `test:workflows`, `test:auto-compare`, `test:keyboard`, `test:recovery`, `test:alignment-merge`, `test:folder-copy`, `test:folder-link-copy`, `test:delete`, `test:one-step-actions`, `test:preview-maps`, `test:folder-exclude`, `test:folder-save`, and `editing-regression`
+- `test:sessions` after updating its obsolete assertion from the previous binary-content default to the current no-content default
+
+Failures and omissions:
+
+- `npm run lint` reports two existing React hook diagnostics in `ComparisonWorkspace.tsx` (effect state update at line 306 and ref access at line 5023).
+- `npm run format:check` reports formatting differences in `ComparisonWorkspace.tsx`, `folderPresentation.test.ts`, `folderPresentation.ts`, `FolderView.tsx`, and `folder-copy-regression.mjs`.
+- Native `test:native` fails because Copy leaves focus on “Left text” rather than the expected “Right text”.
+- Native `test:acceptance` fails its cancel-race assertion: the benchmark scan resolves instead of rejecting as cancelled.
+- Native `test:workbench` times out after 30 seconds at its 1024x768 layout check.
+- Native `test:compact` observes 788 px of content in a 758 px viewport.
+- Native `test:interactions` observes `false` where the regression expects `true`.
+
+The default embedded-assets build could not replace the executable while the user's Just Compare window was running. It was not stopped; native checks used an isolated build and `COMPARE_TEST_DESKTOP`. These are Windows-native results only. macOS/Linux CI was not run, and no release or clean-install claim follows.
+
 ## Windows local development
 
 Use the repository-pinned Node/npm and Rust versions, Visual Studio's

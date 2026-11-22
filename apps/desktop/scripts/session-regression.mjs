@@ -115,7 +115,7 @@ try {
   assert.equal(saved[0].name, "Folder fixture");
   assert.ok(saved[0].left.endsWith("\\left"));
   assert.ok(saved[0].right.endsWith("\\right"));
-  assert.equal(saved[0].folderRules.content, "binary");
+  assert.equal(saved[0].folderRules.content, "none");
   assert.equal(
     await page.getByRole("tab", { name: /Folder fixture/ }).count(),
     1,
