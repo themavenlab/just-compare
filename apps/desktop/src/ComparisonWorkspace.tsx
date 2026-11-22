@@ -2753,10 +2753,13 @@ export function ComparisonWorkspace({
                 side={side === "right" ? "right" : "left"}
                 selectedDifference={mode === "text" ? selected : undefined}
                 onCopyDifference={
-                  mode === "text" && side !== "base" && pendingEdit === null
+                  mode === "text" && side !== "base"
                     ? (span, line) =>
                         void attempt(() => copyDifference(side, span, line))
                     : undefined
+                }
+                copyActionsPending={
+                  mode === "text" && side !== "base" && pendingEdit !== null
                 }
                 singleLineCopy={singleLineCopy ?? undefined}
                 gaps={

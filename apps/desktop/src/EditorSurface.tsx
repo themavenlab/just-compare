@@ -1,4 +1,11 @@
-import { Compartment, EditorState, Prec, RangeSet } from "@codemirror/state";
+import {
+  Compartment,
+  EditorState,
+  Prec,
+  RangeSet,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -145,6 +152,27 @@ class CopyArrow extends GutterMarker {
   }
 }
 
+class CopyArrowSpacer extends GutterMarker {
+  toDOM() {
+    const spacer = document.createElement("span");
+    spacer.className = "copy-arrow-spacer";
+    spacer.setAttribute("aria-hidden", "true");
+    return spacer;
+  }
+}
+
+const copyArrowSpacer = new CopyArrowSpacer();
+const setCopyMarkers = StateEffect.define<RangeSet<GutterMarker>>();
+const copyMarkerField = StateField.define<RangeSet<GutterMarker>>({
+  create: () => RangeSet.empty,
+  update: (markers, transaction) => {
+    if (transaction.docChanged) markers = markers.map(transaction.changes);
+    for (const effect of transaction.effects)
+      if (effect.is(setCopyMarkers)) markers = effect.value;
+    return markers;
+  },
+});
+
 export function EditorSurface({
   text,
   onChange,
@@ -161,6 +189,7 @@ export function EditorSurface({
   side = "left",
   selectedDifference,
   onCopyDifference,
+  copyActionsPending = false,
   singleLineCopy,
   displayMode = "all",
   showWhitespace = false,
@@ -187,6 +216,7 @@ export function EditorSurface({
   side?: "left" | "right";
   selectedDifference?: DiffSpan | undefined;
   onCopyDifference?: ((span: DiffSpan, line?: number) => void) | undefined;
+  copyActionsPending?: boolean;
   singleLineCopy?: { side: "left" | "right"; line: number } | undefined;
   displayMode?: "all" | "differences" | "same" | "context";
   showWhitespace?: boolean;
@@ -222,15 +252,26 @@ export function EditorSurface({
   const updating = useRef(false);
   const readonly = useRef(new Compartment());
   const alignment = useRef(new Compartment());
+  const copyGutter = useRef(new Compartment());
+  const copyGutterEnabled = useRef(false);
   const scrollCallback = useRef(onScroll);
   const copyCallback = useRef(onCopyDifference);
+  const copyActionsPendingRef = useRef(copyActionsPending);
   const copyEnabled = onCopyDifference !== undefined;
+  const copyActive = copyEnabled && !copyActionsPending;
   const lastNavigation = useRef(-1);
   const restoringScroll = useRef(false);
   const pairedScroll = useRef(scrollTop);
   useLayoutEffect(() => {
     pairedScroll.current = scrollTop;
   }, [scrollTop]);
+  useLayoutEffect(() => {
+    copyActionsPendingRef.current = copyActionsPending;
+    if (copyActionsPending)
+      view.current?.dispatch({
+        effects: setCopyMarkers.of(RangeSet.empty),
+      });
+  }, [copyActionsPending]);
   const scrollFrame = useRef<number | null>(null);
   useEffect(() => {
     copyCallback.current = onCopyDifference;
@@ -285,6 +326,8 @@ export function EditorSurface({
           ),
           readonly.current.of(EditorState.readOnly.of(disabled)),
           alignment.current.of([]),
+          copyMarkerField,
+          copyGutter.current.of([]),
           EditorView.contentAttributes.of({ "aria-label": label }),
           EditorView.theme({
             "&": { height: "100%" },
@@ -417,38 +460,42 @@ export function EditorSurface({
         return [{ start: start + 3, end: end - 3 }];
       return [];
     });
-    const copyMarkers = differences
-      .filter((span) => span.kind !== "equal")
-      .filter(() => displayMode !== "same")
-      .map((span, index) => {
-        const start = side === "left" ? span.leftStart : span.rightStart;
-        const end = side === "left" ? span.leftEnd : span.rightEnd;
-        const singleLine =
-          singleLineCopy?.side === side &&
-          singleLineCopy.line >= start &&
-          singleLineCopy.line < end;
-        const markerStart = singleLine ? singleLineCopy.line : start;
-        return {
-          start: markerStart,
-          end: singleLine ? markerStart + 1 : end,
-          marker: new CopyArrow(
-            side === "left" ? "right" : "left",
-            index,
-            !singleLine &&
-              (side === "left"
-                ? span.leftStart === span.leftEnd
-                : span.rightStart === span.rightEnd),
-            disabled,
-            span,
-            singleLine,
-            () =>
-              copyCallback.current?.(
+    const copyMarkers = copyActive
+      ? differences
+          .filter((span) => span.kind !== "equal")
+          .filter(() => displayMode !== "same")
+          .map((span, index) => {
+            const start = side === "left" ? span.leftStart : span.rightStart;
+            const end = side === "left" ? span.leftEnd : span.rightEnd;
+            const singleLine =
+              singleLineCopy?.side === side &&
+              singleLineCopy.line >= start &&
+              singleLineCopy.line < end;
+            const markerStart = singleLine ? singleLineCopy.line : start;
+            return {
+              start: markerStart,
+              end: singleLine ? markerStart + 1 : end,
+              marker: new CopyArrow(
+                side === "left" ? "right" : "left",
+                index,
+                !singleLine &&
+                  (side === "left"
+                    ? span.leftStart === span.leftEnd
+                    : span.rightStart === span.rightEnd),
+                disabled,
                 span,
-                singleLine ? markerStart : undefined,
+                singleLine,
+                () => {
+                  if (copyActionsPendingRef.current) return;
+                  copyCallback.current?.(
+                    span,
+                    singleLine ? markerStart : undefined,
+                  );
+                },
               ),
-          ),
-        };
-      });
+            };
+          })
+      : [];
     const displayedGaps =
       displayMode === "same"
         ? differences
@@ -479,7 +526,7 @@ export function EditorSurface({
         return Decoration.widget({
           widget: new Gap(
             count,
-            copyEnabled
+            copyActive
               ? (copyMarkers.find(
                   (entry) => entry.start === line && entry.start === entry.end,
                 )?.marker ?? null)
@@ -626,24 +673,35 @@ export function EditorSurface({
         ),
       true,
     );
-    instance.dispatch({
-      effects: alignment.current.reconfigure([
+    const effects = [
+      alignment.current.reconfigure([
         EditorView.decorations.of(Decoration.set(decorations, true)),
-        ...(copyEnabled
-          ? [
-              Prec.highest(
+      ]),
+      setCopyMarkers.of(markers),
+    ];
+    if (copyEnabled !== copyGutterEnabled.current) {
+      effects.push(
+        copyGutter.current.reconfigure(
+          copyEnabled
+            ? Prec.highest(
                 gutter({
                   class: "cm-copy-gutter",
                   side: "before",
-                  markers: () => markers,
+                  markers: (currentView) =>
+                    currentView.state.field(copyMarkerField),
+                  initialSpacer: () => copyArrowSpacer,
                   widgetMarker: (_view, widget) =>
-                    widget instanceof Gap ? widget.copyMarker : null,
+                    !copyActionsPendingRef.current && widget instanceof Gap
+                      ? widget.copyMarker
+                      : null,
                 }),
-              ),
-            ]
-          : []),
-      ]),
-    });
+              )
+            : [],
+        ),
+      );
+      copyGutterEnabled.current = copyEnabled;
+    }
+    instance.dispatch({ effects });
     instance.requestMeasure({
       key: alignment.current,
       read: () => instance.scrollDOM.querySelectorAll(".cm-gutters"),
@@ -661,7 +719,7 @@ export function EditorSurface({
         // CodeMirror hides gutter containers by default; only copy actions are interactive.
         for (const container of containers) {
           const hasCopyActions =
-            container.querySelector(".cm-copy-gutter") !== null;
+            container.querySelector(".cm-copy-gutter .copy-arrow") !== null;
           container.setAttribute("aria-hidden", String(!hasCopyActions));
           for (const child of container.children) {
             if (!child.classList.contains("cm-copy-gutter"))
@@ -678,6 +736,8 @@ export function EditorSurface({
     selectedDifference,
     disabled,
     copyEnabled,
+    copyActive,
+    copyActionsPending,
     displayMode,
     showWhitespace,
     intralineRegions,

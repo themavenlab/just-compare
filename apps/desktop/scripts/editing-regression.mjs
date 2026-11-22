@@ -32,6 +32,25 @@ try {
         exact: true,
       })
       .waitFor();
+  const editorLayout = (side) =>
+    editor(side).evaluate((content) => {
+      const cmEditor = content.closest(".cm-editor");
+      const copyGutter = cmEditor?.querySelector(".cm-copy-gutter");
+      if (!cmEditor || !copyGutter) return null;
+      return {
+        contentLeft: content.getBoundingClientRect().left,
+        gutterWidth: copyGutter.getBoundingClientRect().width,
+      };
+    });
+  const assertStableEditorLayout = (before, after, context) => {
+    assert.ok(after, `${context}: copy gutter should remain mounted`);
+    assert.ok(before, `${context}: expected an initial copy gutter`);
+    assert.ok(
+      Math.abs(after.contentLeft - before.contentLeft) <= 0.5 &&
+        Math.abs(after.gutterWidth - before.gutterWidth) <= 0.5,
+      `${context}: editor layout should not shift: ${JSON.stringify({ before, after })}`,
+    );
+  };
   await selectWorkspace(page, "text");
   for (const [side, path] of [
     ["left", left],
@@ -47,6 +66,12 @@ try {
   }
   await regions(0);
   await idle();
+  const identicalLayout = await editorLayout("Left");
+  assert.ok(identicalLayout, "identical drafts should retain the copy gutter");
+  assert.ok(
+    identicalLayout.gutterWidth >= 24,
+    `the empty copy gutter should reserve its column: ${JSON.stringify(identicalLayout)}`,
+  );
   await workspace
     .getByRole("button", { name: "Find / Replace", exact: true })
     .click();
@@ -102,6 +127,11 @@ try {
     .getByRole("button", { name: "Redo left", exact: true })
     .click();
   await regions(1);
+  assertStableEditorLayout(
+    identicalLayout,
+    await editorLayout("Left"),
+    "showing copy arrows",
+  );
   await editor("Right").press("Control+y");
   await page.waitForFunction(() =>
     document
@@ -113,6 +143,11 @@ try {
   await regions(1);
   await editor("Right").press("Control+z");
   await regions(0);
+  assertStableEditorLayout(
+    identicalLayout,
+    await editorLayout("Left"),
+    "hiding copy arrows for identical drafts",
+  );
   await workspace
     .getByRole("button", { name: "Close Find and Replace", exact: true })
     .click();
@@ -249,6 +284,7 @@ try {
   await editor("Right").fill(
     original.replace(/\r\n/g, "\n").replace("three", "threeY"),
   );
+  await idle();
   await regions(0);
   await editor("Left").fill(latest.replace("four\n", "inserted\nfour\n"));
   await regions(1);
@@ -266,6 +302,7 @@ try {
       return fetch(input, options);
     };
   });
+  const alignedLayout = await editorLayout("Left");
   await editor("Left").locator(".cm-line").first().click();
   await page.keyboard.press("End");
   await page.keyboard.type("Z");
@@ -281,7 +318,17 @@ try {
     0,
     "Stale ranges must not expose copy actions",
   );
+  assertStableEditorLayout(
+    alignedLayout,
+    await editorLayout("Left"),
+    "hiding copy arrows during refresh",
+  );
   await regions(2);
+  assertStableEditorLayout(
+    alignedLayout,
+    await editorLayout("Left"),
+    "restoring copy arrows after refresh",
+  );
   await workspace
     .getByRole("button", { name: "Undo left", exact: true })
     .click();
