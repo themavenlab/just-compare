@@ -1427,6 +1427,7 @@ body,
 }
 .folder-side.missing {
   color: var(--muted);
+  height: 100%;
 }
 .folder-name-cell {
   display: flex;
