@@ -3703,4 +3703,52 @@ mod tests {
 
     assert_eq!(plain, noisy);
   }
+
+  /// Manual measurement: `cargo test -p compare-fs --release -- --ignored perf --nocapture`.
+  /// "cold" is the first scan after the fixture is written, so it is not a
+  /// dropped-cache run; "warm" repeats the scan immediately afterwards.
+  #[test]
+  #[ignore = "performance measurement; run manually in release mode"]
+  fn perf_default_scan_50k_files_in_2k_folders() {
+    const FOLDERS: usize = 2_000;
+    const FILES_PER_FOLDER: usize = 25;
+    let directory = tempfile::tempdir().unwrap();
+    let left = directory.path().join("left");
+    let right = directory.path().join("right");
+    for root in [&left, &right] {
+      for folder in 0..FOLDERS {
+        let folder_path = root.join(format!("folder-{folder:04}"));
+        fs::create_dir_all(&folder_path).unwrap();
+        for file in 0..FILES_PER_FOLDER {
+          fs::write(
+            folder_path.join(format!("file-{file:02}.txt")),
+            format!("{folder}-{file}"),
+          )
+          .unwrap();
+        }
+      }
+    }
+
+    let options = FolderOptions::default();
+    let rules = FolderRules::default();
+    for run in ["cold", "warm"] {
+      let started = std::time::Instant::now();
+      let scan = scan_pair_with_rules(
+        &left,
+        &right,
+        &options,
+        &rules,
+        &AtomicBool::new(false),
+        |_| {},
+      )
+      .unwrap();
+      let elapsed = started.elapsed();
+      assert_eq!(scan.entries.len(), FOLDERS + FOLDERS * FILES_PER_FOLDER);
+      println!(
+        "perf {run}: {} rows, {FOLDERS} folders x {FILES_PER_FOLDER} files per side, {:.1} ms",
+        scan.entries.len(),
+        elapsed.as_secs_f64() * 1000.0,
+      );
+    }
+  }
 }

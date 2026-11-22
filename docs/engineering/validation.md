@@ -123,6 +123,17 @@ They are single-machine warm/debug observations, not performance guarantees.
 Current enforced limits and filesystem behavior are documented in
 [usage](../product/usage.md) and [data safety](data-safety.md).
 
+## Performance
+
+Reproducible fixture: `cargo test -p compare-fs --release -- --ignored perf --nocapture` (`perf_default_scan_50k_files_in_2k_folders` in `crates/compare-fs/src/folder_rules.rs`). It builds 2,000 folders × 25 files on each side (50,000 matched file pairs plus 2,000 folder rows = 52,000 rows), then runs a default scan twice in one process.
+
+| Run | Elapsed (release) |
+| --- | --- |
+| cold (first scan after fixture writes; OS cache not dropped) | ~700–810 ms |
+| warm (second scan) | ~290–310 ms |
+
+Machine: Windows 11 Pro, AMD Ryzen 5 7600 (6 cores), 31.1 GB RAM, CT1000P3PSSD8 SSD. Single-machine observations, not guarantees. The UI-side (folder view, select-all) check with this fixture is manual and is recorded in the phase handoff.
+
 ## Definition of done
 
 - Observable acceptance criteria and applicable failure paths are verified.
