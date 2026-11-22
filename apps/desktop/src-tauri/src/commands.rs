@@ -1389,7 +1389,10 @@ pub async fn shell_action(
     compare_fs::checked_path(ancestor, false).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&config).map_err(|e| e.to_string())?;
     let result = compare_fs::shell::request(&config, &args).map_err(|e| e.to_string())?;
-    if matches!(result, compare_fs::shell::ShellAction::Selected { .. }) {
+    if matches!(&result, compare_fs::shell::ShellAction::Selected { .. })
+      || (args.first().map(String::as_str) == Some("shell-compare")
+        && matches!(&result, compare_fs::shell::ShellAction::Compare { .. }))
+    {
       let executable = std::env::current_exe().map_err(|e| e.to_string())?;
       compare_fs::shell::refresh_registration(&executable, &config).map_err(|e| e.to_string())?;
     }

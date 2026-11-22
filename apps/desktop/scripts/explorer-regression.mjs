@@ -175,6 +175,7 @@ try {
   assert.equal(await page.getByText(/Selected for Compare:/).count(), 0);
   assert.ok(readMenus()[0].text.includes("Compare to left && café %.txt"));
   await launch(["shell-compare", right]);
+  await page.getByRole("tab").nth(1).waitFor({ state: "visible" });
   await workspace()
     .getByRole("heading", { name: "1 changed regions", exact: true })
     .waitFor();
@@ -189,6 +190,7 @@ try {
   );
   await page.getByRole("tab").first().click();
   assert.match(await draft.innerText(), /unsaved original draft/);
+  await launch(["shell-select", left]);
   await launch(["shell-compare", leftFolder]);
   await page
     .getByRole("alert")
@@ -223,6 +225,14 @@ try {
   await launch(["shell-compare", rightFolder]);
   await workspace().locator('.folder-row[data-relative="file.txt"]').waitFor();
   await idle();
+  assert.deepEqual(
+    readMenus().map((menu) => menu.hidden),
+    [true, true, true],
+    "Comparing clears the saved left path and its Explorer menu entries",
+  );
+  await assert.rejects(readFile(join(config, "shell-selection.json")), {
+    code: "ENOENT",
+  });
   assert.equal(await page.getByRole("tab").count(), 3);
   await launch(["shell-open", left]);
   await workspace()

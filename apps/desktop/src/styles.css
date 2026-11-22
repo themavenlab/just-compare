@@ -383,6 +383,9 @@ textarea.rules {
   background: var(--surface);
   color: var(--text);
 }
+.cm-editor .cm-selectionBackground {
+  background: var(--selection-row) !important;
+}
 .cm-editor .cm-gutters {
   background: var(--surface-alt);
   color: var(--muted);

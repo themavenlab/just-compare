@@ -81,7 +81,7 @@ pub fn request(config: &Path, args: &[String]) -> Result<ShellAction, FileError>
   } else {
     path.clone()
   };
-  Ok(ShellAction::Compare {
+  let result = ShellAction::Compare {
     mode: if directory { "folder" } else { "text" }.into(),
     left: if command == "shell-open" {
       path.clone()
@@ -93,7 +93,11 @@ pub fn request(config: &Path, args: &[String]) -> Result<ShellAction, FileError>
     } else {
       path
     },
-  })
+  };
+  if command == "shell-compare" {
+    clear_selection(&config)?;
+  }
+  Ok(result)
 }
 
 pub fn clear_selection(config: &Path) -> Result<(), FileError> {
@@ -539,6 +543,7 @@ mod tests {
     assert!(
       matches!(request(root.path(), &args("shell-compare", &right)).unwrap(), ShellAction::Compare { mode, .. } if mode == "text")
     );
+    assert!(selected_source(root.path()).unwrap().is_none());
     assert!(request(root.path(), &args("shell-compare", root.path())).is_err());
     assert!(request(root.path(), &args("shell-open", Path::new("relative"))).is_err());
     assert!(request(root.path(), &[]).is_err());

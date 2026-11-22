@@ -3040,7 +3040,14 @@ export function ComparisonWorkspace({
             .slice(0, 16)
         : action === "copyFilename"
           ? "paths"
-          : "",
+          : action === "rename"
+            ? ((side === "left"
+                ? entries[0]?.leftRelative
+                : entries[0]?.rightRelative
+              )
+                ?.split("/")
+                .at(-1) ?? "")
+            : "",
     );
     setFolderDialog({ action, entries, side });
   }

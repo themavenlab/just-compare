@@ -68,7 +68,34 @@ try {
   await editor("Left").fill(left);
   await editor("Right").fill(right);
   await compare();
-
+  await editor("Left").click();
+  await page.keyboard.press("Control+a");
+  await page.waitForFunction(() => {
+    const selection = document.querySelector(
+      '.workspace-slot[aria-hidden="false"] .cm-selectionBackground',
+    );
+    return (
+      selection &&
+      getComputedStyle(selection).backgroundColor !== "rgba(0, 0, 0, 0)"
+    );
+  });
+  const selectionColors = await page.evaluate(() => {
+    const selection = document.querySelector(
+      '.workspace-slot[aria-hidden="false"] .cm-selectionBackground',
+    );
+    const editor = document.querySelector(
+      '.workspace-slot[aria-hidden="false"] .cm-editor',
+    );
+    return {
+      selection: selection ? getComputedStyle(selection).backgroundColor : null,
+      editor: editor ? getComputedStyle(editor).backgroundColor : null,
+    };
+  });
+  assert.ok(
+    selectionColors.selection &&
+      selectionColors.selection !== selectionColors.editor,
+    "Selected editor text has a distinct background color",
+  );
   await editor("Left").click();
   await page.keyboard.press("Control+n");
   await workspace.getByText("2 / 2 differences", { exact: true }).waitFor();

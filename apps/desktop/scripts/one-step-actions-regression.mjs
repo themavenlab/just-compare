@@ -26,6 +26,7 @@ const touchTarget = join(left, "touch-me.txt");
 const touchedAt = new Date(2020, 0, 2, 3, 4);
 
 await Promise.all([mkdir(config), mkdir(left), mkdir(right)]);
+await mkdir(join(left, "group"));
 await Promise.all([
   writeFile(join(left, "keep.txt"), "same\n"),
   writeFile(join(right, "keep.txt"), "same\n"),
@@ -60,6 +61,28 @@ try {
   const rowFor = (relative) =>
     list.locator(`.folder-row[data-relative="${relative}"]`);
 
+  await rowFor("keep.txt").locator(".folder-side").first().click();
+  await page.keyboard.press("Control+a");
+  const visibleRows = list.locator('.folder-row:not([data-status="error"])');
+  assert.equal(
+    await visibleRows.evaluateAll(
+      (rows) =>
+        rows.filter((row) => row.classList.contains("selected-folder-row"))
+          .length,
+    ),
+    await visibleRows.count(),
+    "Ctrl+A selects every visible file and folder",
+  );
+  assert.equal(
+    await page.evaluate(() => window.getSelection()?.toString() ?? ""),
+    "",
+    "Ctrl+A does not select unrelated interface text",
+  );
+  await workspace.getByRole("button", { name: "Select", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "None visible", exact: true })
+    .click();
+
   // Runs a menu action on a left-side row, then the folder dialog's single
   // Start click, and asserts that no second dialog appears.
   async function runOneStep({ relative, menuItem, dialogPrefix, fill }) {
@@ -84,8 +107,11 @@ try {
     relative: "rename-me.txt",
     menuItem: "Rename...",
     dialogPrefix: "rename",
-    fill: (dialog) =>
-      dialog.getByLabel("Action value", { exact: true }).fill("renamed.txt"),
+    fill: async (dialog) => {
+      const input = dialog.getByLabel("Action value", { exact: true });
+      assert.equal(await input.inputValue(), "rename-me.txt");
+      await input.fill("renamed.txt");
+    },
   });
   await rowFor("rename-me.txt").waitFor({ state: "detached", timeout: 10000 });
   await rowFor("renamed.txt").waitFor({ timeout: 10000 });

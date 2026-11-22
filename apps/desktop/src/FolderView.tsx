@@ -301,7 +301,7 @@ export function FolderView({
         className="folder-tree"
         role="region"
         aria-label="Folder comparison entries"
-        aria-description="Click to select; Ctrl or Command-click to toggle; Shift-click to select a range. Arrow keys navigate, Space toggles selection, and Enter opens a pair or expands a folder."
+        aria-description="Click to select; Ctrl or Command-click to toggle; Shift-click to select a range. Ctrl+A or Command+A selects all visible entries. Arrow keys navigate, Space toggles selection, and Enter opens a pair or expands a folder."
       >
         <VirtualList
           count={rows.length}
@@ -323,6 +323,21 @@ export function FolderView({
                 target !== event.currentTarget)
             )
               return;
+            if (
+              (event.ctrlKey || event.metaKey) &&
+              event.key.toLowerCase() === "a"
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!busy)
+                onSelect(
+                  rows
+                    .filter((row) => row.entry && row.entry.status !== "error")
+                    .map((row) => row.key),
+                  true,
+                );
+              return;
+            }
             const index = focusedIndex < 0 ? 0 : focusedIndex;
             const row = rows[index];
             if (
