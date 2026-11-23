@@ -9,6 +9,7 @@ import {
 } from "./folderPresentation";
 import { Icon } from "./icons";
 import { VirtualList } from "./VirtualList";
+import { CommandMenu, type MenuCommand } from "./CommandMenu";
 
 export type FolderSide = "left" | "right";
 export function FolderView({
