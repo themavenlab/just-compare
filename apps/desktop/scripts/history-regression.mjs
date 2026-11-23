@@ -222,8 +222,57 @@ try {
     .getByText("alpha")
     .waitFor();
   assert.equal(await input("left").inputValue(), recentFiles[1]);
+
+  await session.call("write_history", {
+    recentFolders: null,
+    recentComparisons: Array.from({ length: 20 }, (_, index) => ({
+      mode: "text",
+      left: `left-${index}.txt`,
+      right: `right-${index}.txt`,
+      base: "",
+    })),
+  });
+  await page.reload();
+  const recentHeading = page.getByRole("heading", {
+    name: "Recent comparisons",
+    exact: true,
+  });
+  await recentHeading.waitFor();
+  const scrollState = await page.evaluate(() => {
+    const list = document.querySelector(".home-comparison-list");
+    const main = document.querySelector(".home-main");
+    const heroHeading = document.querySelector(".home-hero h2");
+    const recentHeading = document.querySelector("#recent-heading");
+    if (
+      !(list instanceof HTMLElement) ||
+      !(main instanceof HTMLElement) ||
+      !(heroHeading instanceof HTMLElement) ||
+      !(recentHeading instanceof HTMLElement)
+    )
+      throw new Error("The home history layout is missing required elements.");
+    const before = {
+      heroTop: heroHeading.getBoundingClientRect().top,
+      recentTop: recentHeading.getBoundingClientRect().top,
+    };
+    list.scrollTop = list.scrollHeight;
+    return {
+      clientHeight: list.clientHeight,
+      scrollHeight: list.scrollHeight,
+      mainScrollTop: main.scrollTop,
+      heroTop: heroHeading.getBoundingClientRect().top,
+      recentTop: recentHeading.getBoundingClientRect().top,
+      before,
+    };
+  });
+  assert.ok(
+    scrollState.scrollHeight > scrollState.clientHeight,
+    "Recent comparisons should scroll internally when history exceeds the visible list.",
+  );
+  assert.equal(scrollState.mainScrollTop, 0);
+  assert.equal(scrollState.heroTop, scrollState.before.heroTop);
+  assert.equal(scrollState.recentTop, scrollState.before.recentTop);
   console.log(
-    "Native history regression passed: submission, one/two roots, keyboard picker, unclipped popup, recent-file dropdown, retained stale results, bounded persisted tuples, restart and failed persistence.",
+    "Native history regression passed: submission, one/two roots, keyboard picker, unclipped popup, recent-file dropdown, retained stale results, bounded persisted tuples, restart and failed persistence, and contained home-history scrolling.",
   );
 } finally {
   if (session) await session.close();

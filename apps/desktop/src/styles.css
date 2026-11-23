@@ -3353,6 +3353,10 @@ input::placeholder {
   border-radius: 12px;
   background: var(--surface);
 }
+.home-comparison-list {
+  max-height: min(420px, 40vh);
+  overflow-y: auto;
+}
 .home-panel-heading {
   display: flex;
   align-items: center;

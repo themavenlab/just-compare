@@ -122,49 +122,52 @@ export function HomeScreen({
               Clear comparison history
             </button>
           </div>
-          {!recentList.length && (
-            <p className="metadata empty-panel">
-              Completed comparisons appear here.
-            </p>
-          )}
-          {recentList.map(
-            (comparison, index) =>
-              matches(
-                `${comparison.mode} ${comparison.left} ${comparison.right} ${comparison.base}`,
-              ) && (
-                <div className="session-item" key={index}>
-                  <button
-                    className="session-open"
-                    disabled={busy}
-                    title={`${comparison.mode}: ${comparison.left} / ${comparison.right}${comparison.base ? ` / base: ${comparison.base}` : ""}`}
-                    onClick={() => openTab(comparison.mode, comparison)}
-                  >
-                    <span
-                      className="session-kind"
-                      data-kind={comparison.mode}
-                      aria-hidden="true"
+          <div className="home-comparison-list">
+            {!recentList.length && (
+              <p className="metadata empty-panel">
+                Completed comparisons appear here.
+              </p>
+            )}
+            {recentList.map(
+              (comparison, index) =>
+                matches(
+                  `${comparison.mode} ${comparison.left} ${comparison.right} ${comparison.base}`,
+                ) && (
+                  <div className="session-item" key={index}>
+                    <button
+                      className="session-open"
+                      disabled={busy}
+                      title={`${comparison.mode}: ${comparison.left} / ${comparison.right}${comparison.base ? ` / base: ${comparison.base}` : ""}`}
+                      onClick={() => openTab(comparison.mode, comparison)}
                     >
-                      {modeLabel[comparison.mode]}
-                    </span>
-                    <span className="session-names">
-                      {comparison.mode}: {comparison.left.split(/[\\/]/).at(-1)}{" "}
-                      / {comparison.right.split(/[\\/]/).at(-1)}
-                    </span>
-                  </button>
-                  <button
-                    className="icon-button"
-                    disabled={busy}
-                    aria-label={`Remove recent comparison ${index + 1}`}
-                    title="Remove history only; source files are not deleted"
-                    onClick={() =>
-                      saveHistory(recentList.filter((_, i) => i !== index))
-                    }
-                  >
-                    <Icon name="close" />
-                  </button>
-                </div>
-              ),
-          )}
+                      <span
+                        className="session-kind"
+                        data-kind={comparison.mode}
+                        aria-hidden="true"
+                      >
+                        {modeLabel[comparison.mode]}
+                      </span>
+                      <span className="session-names">
+                        {comparison.mode}:{" "}
+                        {comparison.left.split(/[\\/]/).at(-1)} /{" "}
+                        {comparison.right.split(/[\\/]/).at(-1)}
+                      </span>
+                    </button>
+                    <button
+                      className="icon-button"
+                      disabled={busy}
+                      aria-label={`Remove recent comparison ${index + 1}`}
+                      title="Remove history only; source files are not deleted"
+                      onClick={() =>
+                        saveHistory(recentList.filter((_, i) => i !== index))
+                      }
+                    >
+                      <Icon name="close" />
+                    </button>
+                  </div>
+                ),
+            )}
+          </div>
         </section>
       </div>
       <aside className="home-sidebar" aria-label="Sessions and recent paths">
